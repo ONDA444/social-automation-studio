@@ -2,33 +2,85 @@
 Job dispatch with graceful degradation.
 
 If Redis/Celery is reachable, enqueue as a Celery task (production / Railway).
-Otherwise run the pipeline in-process on the API event loop (local dev without
-Docker) — serialized by a semaphore so concurrent jobs don't thrash ffmpeg.
+Otherwise run the pipeline in-process on a SINGLE dedicated background worker
+loop (local dev without Docker) — serialized so concurrent jobs don't thrash
+ffmpeg.
+
+Why a dedicated loop: the previous implementation spawned `asyncio.run()` in an
+ad-hoc thread per job, which creates a brand-new event loop each time while the
+module-level `asyncio.Semaphore` stays bound to the FIRST loop. Every job after
+the first then raised `RuntimeError: Semaphore is bound to a different event
+loop` and got stuck in `queued` forever. Running everything on one long-lived
+loop keeps the semaphore valid and truly serializes the work.
 """
 from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 
 from backend.config import settings
 
 logger = logging.getLogger("studio.dispatch")
 
-# Local-dev concurrency cap for the in-process path.
+# Local-dev concurrency cap for the in-process path (1 render at a time).
 _MAX_INPROC = 1
-_sem = asyncio.Semaphore(_MAX_INPROC)
-_bg_tasks: set[asyncio.Task] = set()
+
+_worker_loop: asyncio.AbstractEventLoop | None = None
+_worker_lock = threading.Lock()
+_sem: asyncio.Semaphore | None = None
+_pending: set = set()
+
+# Cache the Redis probe briefly: each probe costs ~0.4s when Redis is down, and
+# a batch can dispatch hundreds of jobs back-to-back.
+_redis_cache: dict = {"ok": None, "at": 0.0}
+_REDIS_TTL = 5.0
+
+
+def _ensure_worker() -> asyncio.AbstractEventLoop:
+    """Lazily start the dedicated worker loop on a daemon thread."""
+    global _worker_loop, _sem
+    if _worker_loop is not None:
+        return _worker_loop
+    with _worker_lock:
+        if _worker_loop is not None:
+            return _worker_loop
+        loop = asyncio.new_event_loop()
+
+        def _run() -> None:
+            asyncio.set_event_loop(loop)
+            loop.run_forever()
+
+        threading.Thread(target=_run, daemon=True, name="studio-pipeline-worker").start()
+
+        # Create the Semaphore *inside* this loop so `async with _sem` binds to it.
+        async def _mk() -> asyncio.Semaphore:
+            return asyncio.Semaphore(_MAX_INPROC)
+
+        _sem = asyncio.run_coroutine_threadsafe(_mk(), loop).result(timeout=5)
+        _worker_loop = loop
+        logger.info("In-process pipeline worker started (serial, cap=%d).", _MAX_INPROC)
+    return _worker_loop
 
 
 def _redis_ok() -> bool:
+    import time
+
+    now = time.monotonic()
+    if _redis_cache["ok"] is not None and (now - _redis_cache["at"]) < _REDIS_TTL:
+        return _redis_cache["ok"]
+    ok = False
     try:
         import redis
 
         r = redis.from_url(settings.redis_url, socket_connect_timeout=1)
         r.ping()
-        return True
+        ok = True
     except Exception:
-        return False
+        ok = False
+    _redis_cache["ok"] = ok
+    _redis_cache["at"] = now
+    return ok
 
 
 def dispatch_job(job_id: int) -> str:
@@ -59,20 +111,22 @@ def dispatch_publish(job_id: int) -> str:
 
 
 def _run_inprocess(run: str, job_id: int) -> None:
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        # No loop (e.g. called from sync context) — run to completion in a thread.
-        import threading
+    loop = _ensure_worker()
+    fut = asyncio.run_coroutine_threadsafe(_guarded(run, job_id), loop)
+    _pending.add(fut)
 
-        threading.Thread(target=lambda: asyncio.run(_guarded(run, job_id)), daemon=True).start()
-        return
-    task = loop.create_task(_guarded(run, job_id))
-    _bg_tasks.add(task)
-    task.add_done_callback(_bg_tasks.discard)
+    def _done(f) -> None:
+        _pending.discard(f)
+        try:
+            f.result()
+        except Exception:  # noqa: BLE001
+            logger.exception("In-process %s of job %s failed", run, job_id)
+
+    fut.add_done_callback(_done)
 
 
 async def _guarded(run: str, job_id: int) -> None:
+    assert _sem is not None
     async with _sem:
         if run == "pipeline":
             from backend.agents.orchestrator import run_pipeline
