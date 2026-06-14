@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from backend.content_types import CONTENT_TYPE_KEYS, public_list
 from backend.database import get_db
 from backend.models import JobStatus, PlatformAccount, VideoJob
 from backend.pipeline.dispatch import dispatch_job, dispatch_publish
@@ -20,7 +21,9 @@ logger = logging.getLogger("studio")
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
 
-CONTENT_TYPES = {"film_recap_ai_images", "sports_highlights", "quote_viral"}
+# Derived from the canonical catalogue (backend.content_types) so validation,
+# the agents' per-type configs and the frontend select never drift apart.
+CONTENT_TYPES = CONTENT_TYPE_KEYS
 MODES = {"from_title", "from_remix", "from_idea"}
 
 
@@ -173,6 +176,16 @@ def list_jobs(
         stmt = stmt.where(VideoJob.account_id == account_id)
     jobs = db.execute(stmt).scalars().all()
     return {"jobs": [j.to_dict() for j in jobs], "count": len(jobs)}
+
+
+@router.get("/content-types")
+def list_content_types():
+    """Canonical content-type catalogue as [{value, label}] for the frontend select.
+
+    Defined before /{job_id} so the literal path is matched first and not
+    captured by the int path parameter.
+    """
+    return {"content_types": public_list()}
 
 
 @router.get("/approvals")

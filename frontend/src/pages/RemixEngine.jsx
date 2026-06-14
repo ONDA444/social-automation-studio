@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../api'
 import StyleDNACard from '../components/StyleDNACard.jsx'
@@ -9,7 +9,11 @@ export default function RemixEngine() {
   const [title, setTitle] = useState('')
   const [analyzing, setAnalyzing] = useState(false)
   const [creating, setCreating] = useState(false)
+  const [accounts, setAccounts] = useState([])
+  const [accountId, setAccountId] = useState('')
   const nav = useNavigate()
+
+  useEffect(() => { api.get('/accounts').then((d) => setAccounts(d.accounts)).catch(() => {}) }, [])
 
   const analyze = async () => {
     if (!source.trim()) return
@@ -20,8 +24,13 @@ export default function RemixEngine() {
   const create = async () => {
     if (!title.trim()) return alert('Informe o tema do novo vídeo')
     setCreating(true)
-    try { await api.post('/remix/create', { title, style_dna: dna, source }); nav('/queue') }
-    catch (e) { alert(e.message) } finally { setCreating(false) }
+    try {
+      const account_id = accountId ? Number(accountId) : null
+      const acc = accounts.find((a) => a.id === account_id)
+      const target_platforms = acc && acc.platform ? [acc.platform] : []
+      await api.post('/remix/create', { title, style_dna: dna, source, account_id, target_platforms })
+      nav('/queue')
+    } catch (e) { alert(e.message) } finally { setCreating(false) }
   }
 
   return (
@@ -48,6 +57,13 @@ export default function RemixEngine() {
             <div>
               <label className="text-xs text-text-muted">Tema do novo vídeo</label>
               <input className="input mt-1" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Ex: A história do navio fantasma" />
+            </div>
+            <div>
+              <label className="text-xs text-text-muted">Conta de destino — opcional</label>
+              <select className="input mt-1" value={accountId} onChange={(e) => setAccountId(e.target.value)}>
+                <option value="">— nenhuma —</option>
+                {accounts.map((a) => <option key={a.id} value={a.id}>{a.display_name} ({a.platform})</option>)}
+              </select>
             </div>
             <button className="btn-primary w-full" onClick={create} disabled={creating}>{creating ? 'Criando…' : 'Gerar vídeo remixado'}</button>
             <p className="text-[11px] text-text-muted">Será criado um job <code>from_remix</code> com este StyleDNA.</p>

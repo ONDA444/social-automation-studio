@@ -15,11 +15,27 @@ export default function ApprovalCard({ job, onDone }) {
     setBusy(true)
     try {
       if (editing) await api.patch(`/jobs/${job.id}/seo`, { seo_metadata: seo })
-      await api.post(`/jobs/${job.id}/${kind}`)
+      const res = await api.post(`/jobs/${job.id}/${kind}`)
+      // Ao aprovar, o backend pode devolver uma 'note' (ex.: publisher não
+      // configurado). Mostra ao usuário para deixar claro que NÃO publicou.
+      if (kind === 'approve' && res && res.note) alert(res.note)
       onDone?.()
     } catch (e) { alert(e.message) } finally { setBusy(false) }
   }
-  const saveSeo = async () => { await api.patch(`/jobs/${job.id}/seo`, { seo_metadata: seo }); setEditing(false) }
+  const saveSeo = async () => {
+    try {
+      await api.patch(`/jobs/${job.id}/seo`, { seo_metadata: seo })
+      setEditing(false)
+    } catch (e) { alert(e.message) }
+  }
+  const remove = async () => {
+    if (!confirm('Excluir este job e seus arquivos? Esta ação não pode ser desfeita.')) return
+    setBusy(true)
+    try {
+      await api.del(`/jobs/${job.id}`)
+      onDone?.()
+    } catch (e) { alert(e.message) } finally { setBusy(false) }
+  }
 
   const yt = seo.youtube || {}
 
@@ -70,7 +86,7 @@ export default function ApprovalCard({ job, onDone }) {
             <div className="space-y-2">
               <input className="input" value={yt.title || ''} onChange={(e) => setSeo({ ...seo, youtube: { ...yt, title: e.target.value } })} placeholder="Título YouTube" />
               <textarea className="input h-20 resize-none" value={yt.description || ''} onChange={(e) => setSeo({ ...seo, youtube: { ...yt, description: e.target.value } })} placeholder="Descrição" />
-              <input className="input" value={(yt.tags || []).join(', ')} onChange={(e) => setSeo({ ...seo, youtube: { ...yt, tags: e.target.value.split(',').map((t) => t.trim()) } })} placeholder="Tags (vírgula)" />
+              <input className="input" value={(yt.tags || []).join(', ')} onChange={(e) => setSeo({ ...seo, youtube: { ...yt, tags: e.target.value.split(',').map((t) => t.trim()).filter(Boolean) } })} placeholder="Tags (vírgula)" />
               <div className="flex gap-2"><button className="btn-primary text-xs" onClick={saveSeo}>Salvar SEO</button><button className="btn-ghost text-xs" onClick={() => setEditing(false)}>Cancelar</button></div>
             </div>
           ) : (
@@ -84,6 +100,7 @@ export default function ApprovalCard({ job, onDone }) {
             <button disabled={busy} className="btn-success text-xs" onClick={() => act('approve')}>✓ Aprovar</button>
             <button disabled={busy} className="btn-danger text-xs" onClick={() => act('reject')}>✗ Rejeitar</button>
             {!editing && <button className="btn-ghost text-xs" onClick={() => setEditing(true)}>✏ Editar SEO</button>}
+            <button disabled={busy} className="btn-ghost text-xs text-error" onClick={remove}>🗑 Excluir</button>
           </div>
         </div>
       </div>

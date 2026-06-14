@@ -59,5 +59,7 @@ def calendar(db: Session = Depends(get_db)):
     ).scalars().all()
     return {"events": [{"job_id": j.id, "title": j.title, "platforms": j.target_platforms,
                         "scheduled_at": j.scheduled_at.isoformat() if j.scheduled_at else None,
-                        "status": j.status.value if hasattr(j.status, "value") else j.status}
+                        "status": j.status.value if hasattr(j.status, "value") else j.status,
+                        "account_id": j.account_id,
+                        "channel_name": j.account.display_name if j.account else "Sem canal"}
                        for j in rows]}

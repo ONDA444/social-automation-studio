@@ -45,7 +45,16 @@ export default function CalendarView({ events = [] }) {
             <div className="space-y-0.5 mt-0.5">
               {d && (byDay[d.toDateString()] || []).slice(0, 3).map((e) => {
                 const m = PLATFORM_META[(e.platforms || [])[0]] || { color: 'var(--accent)' }
-                return <div key={e.job_id} title={e.title} className="text-[9px] truncate rounded px-1 py-0.5" style={{ background: m.color + '22', color: m.color }}>{e.title}</div>
+                const channel = e.channel_name || 'Sem canal'
+                return (
+                  <div key={e.job_id} title={`${e.title} — ${channel}`} className="text-[9px] rounded px-1 py-0.5" style={{ background: m.color + '22', color: m.color }}>
+                    <div className="truncate">{e.title}</div>
+                    <div className="flex items-center gap-0.5 opacity-80">
+                      <span className="inline-block w-1 h-1 rounded-full shrink-0" style={{ background: m.color }} />
+                      <span className="truncate">{channel}</span>
+                    </div>
+                  </div>
+                )
               })}
             </div>
           </div>

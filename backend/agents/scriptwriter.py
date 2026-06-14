@@ -55,6 +55,59 @@ TEMPLATE_GUIDE = {
         "Duração alvo: 5-15s. 1-3 cenas de fundo com 'visual_query' EM INGLÊS "
         "(ex.: 'dark abstract atmosphere', 'city night rain')."
     ),
+    "top_list_ranking": (
+        "Tipo: ranking 'Top 5' ou 'Top 10' com contagem regressiva, tom empolgado.\n"
+        "Estrutura: GANCHO ('o nº1 vai te chocar') -> ITENS do Nº N ao Nº1 (suspense "
+        "crescente) -> REVELAÇÃO do nº1 -> CTA.\n"
+        "Duração alvo: 60-180s. 7-12 cenas (uma por item + gancho/CTA). Narrações "
+        "curtas e punchy; anuncie sempre o número do item.\n"
+        "Cada cena tem narração e um 'visual_query' (palavras-chave EM INGLÊS para "
+        "buscar stock footage do item, ex.: 'fastest car on track')."
+    ),
+    "explainer_curiosity": (
+        "Tipo: explicação de curiosidade científica/histórica no formato 'por que X?'.\n"
+        "Estrutura: PERGUNTA INTRIGANTE -> CONTEXTO -> EXPLICAÇÃO (passo a passo) -> "
+        "FATO SURPRESA -> CTA.\n"
+        "Duração alvo: 90-240s (350-650 palavras). 7-12 cenas. Tom curioso e didático, "
+        "ritmo médio.\n"
+        "Cada cena tem narração (2-4 frases) e um 'visual_prompt' EM INGLÊS, detalhado, "
+        "para gerar imagem ilustrativa do conceito (sem marcas reais)."
+    ),
+    "true_crime_mystery": (
+        "Tipo: caso real ou mistério não resolvido, tom sombrio/noir e investigativo.\n"
+        "Estrutura: CENA DO CRIME (gancho) -> VÍTIMA/CONTEXTO -> PISTAS -> SUSPEITOS/"
+        "TEORIAS -> O MISTÉRIO QUE PERMANECE -> CTA.\n"
+        "Duração alvo: 180-360s (500-800 palavras). 8-14 cenas. Narração tensa, pausada, "
+        "sussurrada; evite citar nomes reais (use iniciais/fictícios).\n"
+        "Cada cena tem narração e um 'visual_prompt' EM INGLÊS, cinematográfico e "
+        "sombrio (ex.: 'dark rainy alley crime scene, noir lighting, 4k')."
+    ),
+    "reaction_commentary": (
+        "Tipo: comentário/reação a uma tendência ou notícia do momento, dinâmico e opinativo.\n"
+        "Estrutura: 'VOCÊ VIU ISSO?' (gancho) -> O QUE ACONTECEU -> MINHA OPINIÃO/HOT "
+        "TAKE -> CONTRAPONTO -> CTA ('comenta o que você acha').\n"
+        "Duração alvo: 45-120s. 6-10 cenas. Narração coloquial, rápida e com energia.\n"
+        "Cada cena tem narração e um 'visual_query' (palavras-chave EM INGLÊS para "
+        "buscar stock footage do tema, ex.: 'person reacting shocked phone')."
+    ),
+    "reddit_story": (
+        "Tipo: narração de história estilo Reddit ('r/...'), em primeira pessoa, vertical (Shorts).\n"
+        "Estrutura: SETUP ('isso aconteceu comigo') -> DESENVOLVIMENTO (tensão "
+        "crescente) -> REVIRAVOLTA -> DESFECHO -> CTA ('qual seria sua reação?').\n"
+        "Duração alvo: 30-90s. 5-9 cenas. Narração em 1ª pessoa, ritmo de fofoca; "
+        "as LEGENDAS GRANDES são o foco visual.\n"
+        "Cada cena tem narração e um 'visual_query' (palavras-chave EM INGLÊS para "
+        "fundo neutro/satisfatório, ex.: 'satisfying gameplay background vertical')."
+    ),
+    "motivational_speech": (
+        "Tipo: discurso motivacional narrado, com b-roll cinematográfico e música épica.\n"
+        "Estrutura: REALIDADE DURA (gancho) -> VIRADA DE CHAVE -> CHAMADO À AÇÃO "
+        "(crescendo) -> FRASE DE IMPACTO FINAL -> CTA.\n"
+        "Duração alvo: 45-120s (150-350 palavras). 5-10 cenas. Narração intensa, "
+        "imperativa, em 2ª pessoa ('você consegue').\n"
+        "Cada cena tem narração e um 'visual_query' (palavras-chave EM INGLÊS de b-roll "
+        "épico, ex.: 'lone runner sunrise mountain cinematic')."
+    ),
 }
 
 

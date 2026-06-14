@@ -18,6 +18,12 @@ YT_CATEGORY = {
     "film_recap_ai_images": "24",   # Entertainment
     "sports_highlights": "17",      # Sports
     "quote_viral": "22",            # People & Blogs
+    "top_list_ranking": "24",       # Entertainment
+    "explainer_curiosity": "27",    # Education
+    "true_crime_mystery": "24",     # Entertainment
+    "reaction_commentary": "24",    # Entertainment
+    "reddit_story": "24",           # Entertainment
+    "motivational_speech": "22",    # People & Blogs
 }
 
 

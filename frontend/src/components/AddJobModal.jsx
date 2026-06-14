@@ -1,19 +1,27 @@
 import { useEffect, useState } from 'react'
 import { api } from '../api'
 
-const CONTENT_TYPES = [
-  { v: 'film_recap_ai_images', l: 'Recap (imagens IA)' },
-  { v: 'sports_highlights', l: 'Esportes (highlights)' },
-  { v: 'quote_viral', l: 'Frase viral' },
+// Fallback usado quando GET /content-types falhar ou ainda não existir.
+const FALLBACK_CONTENT_TYPES = [
+  { value: 'film_recap_ai_images', label: 'Recap (imagens IA)' },
+  { value: 'sports_highlights', label: 'Esportes (highlights)' },
+  { value: 'quote_viral', label: 'Frase viral' },
 ]
 const PLATFORMS = ['youtube', 'tiktok', 'instagram']
 
 export default function AddJobModal({ open, onClose, onCreated }) {
   const [form, setForm] = useState({ title: '', topic: '', content_type: 'film_recap_ai_images', target_platforms: ['youtube'], account_id: '' })
   const [accounts, setAccounts] = useState([])
+  const [contentTypes, setContentTypes] = useState(FALLBACK_CONTENT_TYPES)
   const [busy, setBusy] = useState(false)
 
-  useEffect(() => { if (open) api.get('/accounts').then((d) => setAccounts(d.accounts)).catch(() => {}) }, [open])
+  useEffect(() => {
+    if (!open) return
+    api.get('/accounts').then((d) => setAccounts(d.accounts)).catch(() => {})
+    api.get('/jobs/content-types')
+      .then((d) => { const list = Array.isArray(d) ? d : d?.content_types; if (Array.isArray(list) && list.length) setContentTypes(list) })
+      .catch(() => setContentTypes(FALLBACK_CONTENT_TYPES))
+  }, [open])
   if (!open) return null
 
   const toggle = (p) => setForm((f) => ({ ...f, target_platforms: f.target_platforms.includes(p) ? f.target_platforms.filter((x) => x !== p) : [...f.target_platforms, p] }))
@@ -51,7 +59,7 @@ export default function AddJobModal({ open, onClose, onCreated }) {
           <div>
             <label className="text-xs text-text-muted">Tipo de conteúdo</label>
             <select className="input mt-1" value={form.content_type} onChange={(e) => setForm({ ...form, content_type: e.target.value })}>
-              {CONTENT_TYPES.map((c) => <option key={c.v} value={c.v}>{c.l}</option>)}
+              {contentTypes.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
             </select>
           </div>
           <div>
