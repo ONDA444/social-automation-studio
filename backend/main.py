@@ -66,9 +66,50 @@ settings.ensure_dirs()
 app.mount("/files", StaticFiles(directory=str(settings.abs_path(settings.output_dir))), name="files")
 
 
+def _recover_orphan_jobs() -> None:
+    """
+    In-process pipeline (no Redis): any job left in PUBLISHING/PROCESSING when
+    the server starts is an ORPHAN — its task died on the restart.
+
+    - PUBLISHING (or approval_status == 'approved') -> APPROVED (ready to republish).
+    - PROCESSING interrupted -> ERROR with an actionable message (use Retry).
+
+    Wrapped in try/except so a recovery failure never blocks boot.
+    """
+    try:
+        from backend.database import SessionLocal
+        from backend.models import JobStatus, VideoJob
+
+        db = SessionLocal()
+        try:
+            orphans = (
+                db.query(VideoJob)
+                .filter(VideoJob.status.in_([JobStatus.PUBLISHING, JobStatus.PROCESSING]))
+                .all()
+            )
+            recovered = 0
+            for job in orphans:
+                if job.status == JobStatus.PUBLISHING or job.approval_status == "approved":
+                    job.status = JobStatus.APPROVED
+                else:
+                    job.status = JobStatus.ERROR
+                    job.error_message = (
+                        "Interrompido por reinicialização do servidor — use Retry"
+                    )
+                recovered += 1
+            if recovered:
+                db.commit()
+            logger.info("Recuperação de órfãos: %d job(s) ajustado(s) ao iniciar.", recovered)
+        finally:
+            db.close()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Recuperação de órfãos falhou (ignorada): %s", exc)
+
+
 @app.on_event("startup")
 async def _on_startup() -> None:
     settings.ensure_dirs()
+    _recover_orphan_jobs()
     events.set_main_loop(asyncio.get_running_loop())
     # Best-effort live-event relay; no-op if Redis is down.
     asyncio.create_task(events.redis_listener())

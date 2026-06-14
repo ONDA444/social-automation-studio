@@ -50,6 +50,8 @@ async def _with_retry(fn, *args, label="upload", **kwargs) -> dict:
 
 async def run_publish(job_id: int) -> dict:
     db = SessionLocal()
+    job = None
+    results: dict = {}
     try:
         job = db.get(VideoJob, job_id)
         if not job:
@@ -64,7 +66,6 @@ async def run_publish(job_id: int) -> dict:
         db.commit()
         _emit(job_id, status="publishing")
 
-        results: dict = {}
         shorts = job.shorts_paths or []
         publish_at = job.scheduled_at.isoformat() + "Z" if job.scheduled_at else None
 
@@ -73,6 +74,16 @@ async def run_publish(job_id: int) -> dict:
             if not acct:
                 results[platform] = {"ok": False, "status": "no_account",
                                      "error": f"Sem conta ativa de {platform}."}
+                _emit(job_id, platform=platform, status="no_account")
+                continue
+            # Guard: never hand an account without connected credentials to the
+            # uploader (otherwise YouTube fails with a cryptic RefreshError).
+            if not svc.has_valid_credentials(acct):
+                results[platform] = {
+                    "ok": False, "status": "auth_error",
+                    "error": "Conta sem credenciais conectadas. Conecte a conta em Contas.",
+                }
+                _emit(job_id, platform=platform, status="auth_error")
                 continue
             if not svc.can_upload(acct.id):
                 svc.pause(acct.id, "quota_exceeded")
@@ -110,6 +121,19 @@ async def run_publish(job_id: int) -> dict:
                 logger.debug("mirror skipped: %s", exc)
 
         return {"status": job.status.value, "results": results}
+    except Exception as exc:  # noqa: BLE001
+        # Never leave the job stuck in PUBLISHING — always land a terminal state.
+        logger.exception("run_publish failed for job %s", job_id)
+        if job is not None:
+            try:
+                job.publish_status = results or None
+                job.status = JobStatus.ERROR
+                job.error_message = f"Falha na publicação: {exc}"[:500]
+                db.commit()
+                _emit(job_id, status=JobStatus.ERROR.value, error=str(exc))
+            except Exception:  # noqa: BLE001
+                logger.exception("could not persist ERROR status for job %s", job_id)
+        return {"status": JobStatus.ERROR.value, "error": str(exc), "results": results}
     finally:
         db.close()
 

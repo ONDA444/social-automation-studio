@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import csv
 import io
+import logging
 from datetime import datetime
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field
@@ -13,6 +15,8 @@ from sqlalchemy.orm import Session
 from backend.database import get_db
 from backend.models import JobStatus, VideoJob
 from backend.pipeline.dispatch import dispatch_job, dispatch_publish
+
+logger = logging.getLogger("studio")
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
 
@@ -29,6 +33,13 @@ class JobCreate(BaseModel):
     reference_url: str | None = None
     target_platforms: list[str] = Field(default_factory=lambda: ["youtube"])
     scheduled_at: datetime | None = None
+
+
+class JobBatchCreate(BaseModel):
+    themes: list[str] = Field(default_factory=list)
+    content_type: str = "film_recap_ai_images"
+    target_platforms: list[str] = Field(default_factory=lambda: ["youtube"])
+    account_id: int | None = None
 
 
 class SEOUpdate(BaseModel):
@@ -61,6 +72,34 @@ def create_job(payload: JobCreate, db: Session = Depends(get_db)):
     db.refresh(job)
     transport = dispatch_job(job.id)
     return {"job": job.to_dict(), "dispatch": transport}
+
+
+@router.post("/batch")
+def create_jobs_batch(payload: JobBatchCreate, db: Session = Depends(get_db)):
+    """Bulk-create one job per theme (max 200). Each is dispatched in-process;
+    the in-process semaphore serializes them automatically."""
+    if payload.content_type not in CONTENT_TYPES:
+        raise HTTPException(400, f"content_type inválido: {payload.content_type}")
+
+    themes = [t.strip() for t in payload.themes if t and t.strip()][:200]
+
+    job_ids: list[int] = []
+    for theme in themes:
+        job = VideoJob(
+            title=theme,
+            topic=theme,
+            content_type=payload.content_type,
+            account_id=payload.account_id,
+            target_platforms=payload.target_platforms,
+            status=JobStatus.QUEUED,
+        )
+        db.add(job)
+        db.commit()
+        db.refresh(job)
+        dispatch_job(job.id)
+        job_ids.append(job.id)
+
+    return {"created": len(job_ids), "job_ids": job_ids}
 
 
 @router.get("")
@@ -102,6 +141,25 @@ def delete_job(job_id: int, db: Session = Depends(get_db)):
     job = db.get(VideoJob, job_id)
     if not job:
         raise HTTPException(404, "job não encontrado")
+
+    # Best-effort cleanup of generated artifacts before dropping the row.
+    paths: list[str] = []
+    if job.main_video_path:
+        paths.append(job.main_video_path)
+    if job.thumbnail_path:
+        paths.append(job.thumbnail_path)
+    for sp in (job.shorts_paths or []):
+        if sp:
+            paths.append(sp)
+
+    for p in paths:
+        try:
+            Path(p).unlink()
+        except FileNotFoundError:
+            pass
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Falha ao apagar arquivo %s do job %s: %s", p, job_id, exc)
+
     db.delete(job)
     db.commit()
     return {"deleted": job_id}

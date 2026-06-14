@@ -2,34 +2,44 @@ import { useEffect, useRef, useState } from 'react'
 import { DndContext, closestCenter, PointerSensor, useSensor, useSensors } from '@dnd-kit/core'
 import { SortableContext, useSortable, verticalListSortingStrategy, arrayMove } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
-import { api } from '../api'
+import { api, mediaUrl } from '../api'
 import { useWs } from '../App.jsx'
 import AddJobModal from '../components/AddJobModal.jsx'
 import { statusMeta, PLATFORM_META, fmtDate } from '../lib'
 
 function Row({ job, onRetry, onDelete }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: job.id })
+  const [showPlayer, setShowPlayer] = useState(false)
   const s = statusMeta(job.status)
   return (
     <div ref={setNodeRef} style={{ transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.5 : 1 }}
-      className="card p-3 flex items-center gap-3">
-      <span {...attributes} {...listeners} className="cursor-grab text-text-muted px-1 select-none">⠿</span>
-      <div className="flex-1 min-w-0">
-        <p className="font-medium truncate">{job.title}</p>
-        <div className="flex items-center gap-2 mt-0.5">
-          {(job.target_platforms || []).map((p) => { const m = PLATFORM_META[p]; return m ? <span key={p} className="text-[10px]" style={{ color: m.color }}>{m.icon}</span> : null })}
-          <span className="text-[11px] text-text-muted">{job.content_type} · {fmtDate(job.created_at)}</span>
+      className="card p-3">
+      <div className="flex items-center gap-3">
+        <span {...attributes} {...listeners} className="cursor-grab text-text-muted px-1 select-none">⠿</span>
+        <div className="flex-1 min-w-0">
+          <p className="font-medium truncate">{job.title}</p>
+          <div className="flex items-center gap-2 mt-0.5">
+            {(job.target_platforms || []).map((p) => { const m = PLATFORM_META[p]; return m ? <span key={p} className="text-[10px]" style={{ color: m.color }}>{m.icon}</span> : null })}
+            <span className="text-[11px] text-text-muted">{job.content_type} · {fmtDate(job.created_at)}</span>
+          </div>
+          {job.status === 'error' && job.error_message && (
+            <p className="text-[11px] mt-0.5 truncate" style={{ color: 'var(--error)' }} title={job.error_message}>{job.error_message}</p>
+          )}
         </div>
+        {job.status === 'processing' && (
+          <div className="w-28">
+            <div className="h-1.5 rounded-full bg-elevated overflow-hidden"><div className="h-full bg-accent" style={{ width: `${job.progress}%` }} /></div>
+            <p className="text-[10px] text-text-muted mt-0.5 truncate">{job.current_agent}</p>
+          </div>
+        )}
+        <span className="badge shrink-0" style={{ background: s.color + '22', color: s.color }}>{s.label}</span>
+        {job.main_video_path && <button className="btn-ghost text-xs" onClick={() => setShowPlayer((v) => !v)}>{showPlayer ? 'Ocultar' : '▶ Ver'}</button>}
+        {job.status === 'error' && <button className="btn-ghost text-xs" onClick={() => onRetry(job.id)}>↻</button>}
+        <button className="btn-ghost text-xs" onClick={() => onDelete(job.id)}>🗑</button>
       </div>
-      {job.status === 'processing' && (
-        <div className="w-28">
-          <div className="h-1.5 rounded-full bg-elevated overflow-hidden"><div className="h-full bg-accent" style={{ width: `${job.progress}%` }} /></div>
-          <p className="text-[10px] text-text-muted mt-0.5 truncate">{job.current_agent}</p>
-        </div>
+      {showPlayer && job.main_video_path && (
+        <video src={mediaUrl(job.main_video_path)} controls className="w-full rounded mt-2" />
       )}
-      <span className="badge shrink-0" style={{ background: s.color + '22', color: s.color }}>{s.label}</span>
-      {job.status === 'error' && <button className="btn-ghost text-xs" onClick={() => onRetry(job.id)}>↻</button>}
-      <button className="btn-ghost text-xs" onClick={() => onDelete(job.id)}>🗑</button>
     </div>
   )
 }

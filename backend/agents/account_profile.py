@@ -55,13 +55,35 @@ class AccountProfileService:
         acct = self.get(account_id)
         return decrypt_credentials(acct.credentials_encrypted) if acct else {}
 
+    def has_valid_credentials(self, account: PlatformAccount) -> bool:
+        """True if the account has usable connected credentials.
+
+        For YouTube a refresh_token is required (without it google-auth cannot
+        refresh and the upload fails with a generic RefreshError); for the other
+        platforms a non-empty credentials dict is enough.
+        """
+        creds = decrypt_credentials(account.credentials_encrypted)
+        if not creds:
+            return False
+        if account.platform == "youtube":
+            return bool(creds.get("refresh_token"))
+        return True
+
     # ---- selection / quota ----
     def get_active_account(self, platform: str) -> PlatformAccount | None:
-        """Active account on a platform with the most remaining quota."""
-        accts = [a for a in self.list(platform) if a.status == "active"]
+        """Active account on a platform with the most remaining quota.
+
+        Accounts without valid connected credentials are ignored so we never
+        pick an empty profile over one that can actually upload.
+        """
+        accts = [
+            a for a in self.list(platform)
+            if a.status == "active" and self.has_valid_credentials(a)
+        ]
         if not accts:
             return None
         return max(accts, key=lambda a: (a.quota_limit - a.quota_used_today))
+
     def can_upload(self, account_id: int) -> bool:
         acct = self.get(account_id)
         if not acct or acct.status != "active":

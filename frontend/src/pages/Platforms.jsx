@@ -46,7 +46,7 @@ export default function Platforms() {
           <div key={plat}>
             <h3 className="heading font-semibold capitalize mb-2">{plat}</h3>
             <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {list.map((a) => <PlatformCard key={a.id} account={a} onChange={load} />)}
+              {list.map((a) => <PlatformCard key={a.id} account={a} onChange={load} onChanged={load} />)}
             </div>
           </div>
         )

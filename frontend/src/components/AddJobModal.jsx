@@ -18,12 +18,20 @@ export default function AddJobModal({ open, onClose, onCreated }) {
 
   const toggle = (p) => setForm((f) => ({ ...f, target_platforms: f.target_platforms.includes(p) ? f.target_platforms.filter((x) => x !== p) : [...f.target_platforms, p] }))
 
+  // Split por quebra-de-linha E por vírgula, trim, remove vazios.
+  const parseThemes = (raw) => (raw || '').split(/[\n,]+/).map((t) => t.trim()).filter(Boolean)
+  const themes = parseThemes(form.title)
+
   const submit = async () => {
-    if (!form.title.trim()) return alert('Informe um título/tema')
+    if (themes.length === 0) return alert('Informe ao menos um título/tema')
     setBusy(true)
     try {
-      const payload = { ...form, account_id: form.account_id ? Number(form.account_id) : null }
-      await api.post('/jobs', payload)
+      const account_id = form.account_id ? Number(form.account_id) : null
+      if (themes.length === 1) {
+        await api.post('/jobs', { title: themes[0], topic: form.topic, content_type: form.content_type, target_platforms: form.target_platforms, account_id })
+      } else {
+        await api.post('/jobs/batch', { themes, content_type: form.content_type, target_platforms: form.target_platforms, account_id })
+      }
       onCreated?.()
       onClose()
       setForm({ title: '', topic: '', content_type: 'film_recap_ai_images', target_platforms: ['youtube'], account_id: '' })
@@ -36,8 +44,9 @@ export default function AddJobModal({ open, onClose, onCreated }) {
         <h3 className="heading text-lg font-semibold mb-4">Novo vídeo</h3>
         <div className="space-y-3">
           <div>
-            <label className="text-xs text-text-muted">Título / Tema</label>
-            <input className="input mt-1" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="Ex: O mistério do farol abandonado" autoFocus />
+            <label className="text-xs text-text-muted">Título / Temas</label>
+            <textarea className="input mt-1 min-h-[88px] resize-y" rows={4} value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="Um tema por linha (ou separados por vírgula). Ex: Copa 1958, Copa 1970, ..." autoFocus />
+            <p className="text-[11px] text-text-muted mt-1">{themes.length} {themes.length === 1 ? 'tema detectado' : 'temas detectados'}</p>
           </div>
           <div>
             <label className="text-xs text-text-muted">Tipo de conteúdo</label>
@@ -63,7 +72,7 @@ export default function AddJobModal({ open, onClose, onCreated }) {
         </div>
         <div className="flex gap-2 justify-end mt-5">
           <button className="btn-ghost" onClick={onClose}>Cancelar</button>
-          <button className="btn-primary" disabled={busy} onClick={submit}>{busy ? 'Criando...' : 'Criar e gerar'}</button>
+          <button className="btn-primary" disabled={busy} onClick={submit}>{busy ? 'Criando...' : (themes.length > 1 ? `Criar ${themes.length} vídeos` : 'Criar e gerar')}</button>
         </div>
       </div>
     </div>

@@ -5,7 +5,7 @@ const NAV = [
   { to: '/queue', icon: '📋', label: 'Fila' },
   { to: '/approvals', icon: '✅', label: 'Aprovações' },
   { to: '/remix', icon: '🔀', label: 'Remix' },
-  { to: '/platforms', icon: '📱', label: 'Plataformas' },
+  { to: '/platforms', icon: '📱', label: 'Contas' },
   { to: '/schedule', icon: '🕐', label: 'Agenda' },
   { to: '/analytics', icon: '📈', label: 'Analytics' },
   { to: '/settings', icon: '⚙️', label: 'Config' },

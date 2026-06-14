@@ -11,8 +11,18 @@ async function req(method, path, body) {
   const res = await fetch(`${BASE}${path}`, opts)
   if (!res.ok) {
     let detail
-    try { detail = (await res.json()).detail } catch { detail = res.statusText }
-    throw new Error(detail || `HTTP ${res.status}`)
+    try { detail = (await res.json()).detail } catch { detail = undefined }
+    let message
+    if (typeof detail === 'string') {
+      message = detail
+    } else if (Array.isArray(detail)) {
+      message = detail.map((item) => (item && item.msg) ? item.msg : JSON.stringify(item)).join('; ')
+    } else if (detail && typeof detail === 'object') {
+      message = JSON.stringify(detail)
+    } else {
+      message = res.statusText || `HTTP ${res.status}`
+    }
+    throw new Error(message || res.statusText || `HTTP ${res.status}`)
   }
   const ct = res.headers.get('content-type') || ''
   return ct.includes('application/json') ? res.json() : res.text()

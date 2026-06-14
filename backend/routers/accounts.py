@@ -106,6 +106,22 @@ def resume_account(account_id: int, db: Session = Depends(get_db)):
     return {"ok": True}
 
 
+@router.post("/accounts/{account_id}/disconnect")
+def disconnect_account(account_id: int, db: Session = Depends(get_db)):
+    """Clear credentials without deleting the account — keeps the profile
+    (niche, name, etc.) so it can be reconnected later."""
+    svc = AccountProfileService(db)
+    acct = svc.get(account_id)
+    if not acct:
+        raise HTTPException(404, "conta não encontrada")
+    acct.credentials_encrypted = None
+    acct.channel_id = None
+    acct.status = "disconnected"
+    db.commit()
+    db.refresh(acct)
+    return acct.to_dict()
+
+
 @router.post("/accounts/{account_id}/link")
 def link_account(account_id: int, payload: LinkRequest, db: Session = Depends(get_db)):
     svc = AccountProfileService(db)

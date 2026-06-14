@@ -86,6 +86,8 @@ def _client_config() -> dict:
 def _credentials(creds: dict):
     from google.oauth2.credentials import Credentials
 
+    if not creds.get("refresh_token"):
+        raise RuntimeError("Conta YouTube sem refresh_token — reconecte a conta")
     return Credentials(
         token=creds.get("token"),
         refresh_token=creds.get("refresh_token"),
