@@ -1,0 +1,22 @@
+:root {
+  --bg-base:       #0A0A0F;
+  --bg-surface:    #12121A;
+  --bg-elevated:   #1A1A26;
+  --border:        #2A2A3A;
+  --accent:        #6C5CE7;
+  --accent-yt:     #FF0000;
+  --accent-tk:     #FF0050;
+  --accent-ig:     #E1306C;
+  --text-primary:  #F0F0FF;
+  --text-muted:    #8888AA;
+  --success:       #00D68F;
+  --warning:       #FFB627;
+  --error:         #FF4757;
+  --radius-card:   12px;
+  --radius-btn:    8px;
+  --radius-badge:  20px;
+  --shadow-card:   0 4px 24px rgba(108, 92, 231, 0.08);
+  --font-display:  'Space Grotesk', sans-serif;
+  --font-ui:       'Inter', sans-serif;
+  --font-mono:     'JetBrains Mono', monospace;
+}

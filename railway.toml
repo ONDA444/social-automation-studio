@@ -1,0 +1,13 @@
+[build]
+builder = "nixpacks"
+
+[deploy]
+startCommand = "uvicorn backend.main:app --host 0.0.0.0 --port $PORT"
+healthcheckPath = "/health"
+healthcheckTimeout = 30
+restartPolicyType = "on_failure"
+
+# Add the worker + beat as separate services in the Railway dashboard, using:
+#   worker: celery -A backend.pipeline.celery_app worker --loglevel=info --concurrency=2
+#   beat:   celery -A backend.pipeline.celery_app beat --loglevel=info
+# and attach the Redis + PostgreSQL plugins (they inject REDIS_URL / DATABASE_URL).

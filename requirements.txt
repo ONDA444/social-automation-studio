@@ -1,0 +1,2 @@
+# Root requirements (Railway/Nixpacks auto-detects this). Delegates to backend.
+-r backend/requirements.txt

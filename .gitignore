@@ -1,0 +1,43 @@
+# ===== Secrets (NUNCA commitar) =====
+.env
+.env.local
+*.key
+credentials*.json
+token*.json
+
+# ===== Python =====
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+
+# ===== Banco de dados local =====
+*.db
+*.sqlite
+*.sqlite3
+studio.db
+
+# ===== Node / frontend =====
+node_modules/
+frontend/dist/
+frontend/.vite/
+npm-debug.log*
+
+# ===== Artefatos gerados =====
+output/
+tmp/
+cache/
+logs/
+*.log
+flux_test.jpg
+flux2.jpg
+
+# ===== OS / editor =====
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp

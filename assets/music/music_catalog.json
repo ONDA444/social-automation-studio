@@ -1,0 +1,223 @@
+[
+  {
+    "file": "dramatic_1.mp3",
+    "mood": "dramatic",
+    "bpm": 95,
+    "energy": 0.6,
+    "duration": 40,
+    "best_for": [
+      "film_recap_ai_images"
+    ],
+    "license": "CC0 (synthesized original)"
+  },
+  {
+    "file": "dramatic_2.mp3",
+    "mood": "dramatic",
+    "bpm": 90,
+    "energy": 0.6,
+    "duration": 40,
+    "best_for": [
+      "film_recap_ai_images"
+    ],
+    "license": "CC0 (synthesized original)"
+  },
+  {
+    "file": "epic_1.mp3",
+    "mood": "epic",
+    "bpm": 100,
+    "energy": 0.75,
+    "duration": 40,
+    "best_for": [
+      "film_recap_ai_images"
+    ],
+    "license": "CC0 (synthesized original)"
+  },
+  {
+    "file": "epic_2.mp3",
+    "mood": "epic",
+    "bpm": 110,
+    "energy": 0.8,
+    "duration": 40,
+    "best_for": [
+      "film_recap_ai_images"
+    ],
+    "license": "CC0 (synthesized original)"
+  },
+  {
+    "file": "suspense_1.mp3",
+    "mood": "suspense",
+    "bpm": 80,
+    "energy": 0.5,
+    "duration": 40,
+    "best_for": [
+      "film_recap_ai_images"
+    ],
+    "license": "CC0 (synthesized original)"
+  },
+  {
+    "file": "suspense_2.mp3",
+    "mood": "suspense",
+    "bpm": 75,
+    "energy": 0.45,
+    "duration": 40,
+    "best_for": [
+      "film_recap_ai_images"
+    ],
+    "license": "CC0 (synthesized original)"
+  },
+  {
+    "file": "melancholic_1.mp3",
+    "mood": "melancholic",
+    "bpm": 70,
+    "energy": 0.35,
+    "duration": 40,
+    "best_for": [
+      "quote_viral"
+    ],
+    "license": "CC0 (synthesized original)"
+  },
+  {
+    "file": "melancholic_2.mp3",
+    "mood": "melancholic",
+    "bpm": 65,
+    "energy": 0.35,
+    "duration": 40,
+    "best_for": [
+      "quote_viral"
+    ],
+    "license": "CC0 (synthesized original)"
+  },
+  {
+    "file": "ambient_1.mp3",
+    "mood": "ambient",
+    "bpm": 70,
+    "energy": 0.3,
+    "duration": 40,
+    "best_for": [
+      "quote_viral"
+    ],
+    "license": "CC0 (synthesized original)"
+  },
+  {
+    "file": "ambient_2.mp3",
+    "mood": "ambient",
+    "bpm": 68,
+    "energy": 0.3,
+    "duration": 40,
+    "best_for": [
+      "quote_viral"
+    ],
+    "license": "CC0 (synthesized original)"
+  },
+  {
+    "file": "lofi_1.mp3",
+    "mood": "lofi",
+    "bpm": 85,
+    "energy": 0.4,
+    "duration": 40,
+    "best_for": [
+      "quote_viral"
+    ],
+    "license": "CC0 (synthesized original)"
+  },
+  {
+    "file": "lofi_2.mp3",
+    "mood": "lofi",
+    "bpm": 82,
+    "energy": 0.4,
+    "duration": 40,
+    "best_for": [
+      "quote_viral"
+    ],
+    "license": "CC0 (synthesized original)"
+  },
+  {
+    "file": "upbeat_1.mp3",
+    "mood": "upbeat",
+    "bpm": 120,
+    "energy": 0.7,
+    "duration": 40,
+    "best_for": [
+      "sports_highlights"
+    ],
+    "license": "CC0 (synthesized original)"
+  },
+  {
+    "file": "upbeat_2.mp3",
+    "mood": "upbeat",
+    "bpm": 124,
+    "energy": 0.7,
+    "duration": 40,
+    "best_for": [
+      "sports_highlights"
+    ],
+    "license": "CC0 (synthesized original)"
+  },
+  {
+    "file": "energetic_1.mp3",
+    "mood": "energetic",
+    "bpm": 128,
+    "energy": 0.85,
+    "duration": 40,
+    "best_for": [
+      "sports_highlights"
+    ],
+    "license": "CC0 (synthesized original)"
+  },
+  {
+    "file": "energetic_2.mp3",
+    "mood": "energetic",
+    "bpm": 132,
+    "energy": 0.85,
+    "duration": 40,
+    "best_for": [
+      "sports_highlights"
+    ],
+    "license": "CC0 (synthesized original)"
+  },
+  {
+    "file": "action_1.mp3",
+    "mood": "action",
+    "bpm": 140,
+    "energy": 0.9,
+    "duration": 40,
+    "best_for": [
+      "sports_highlights"
+    ],
+    "license": "CC0 (synthesized original)"
+  },
+  {
+    "file": "action_2.mp3",
+    "mood": "action",
+    "bpm": 145,
+    "energy": 0.95,
+    "duration": 40,
+    "best_for": [
+      "sports_highlights"
+    ],
+    "license": "CC0 (synthesized original)"
+  },
+  {
+    "file": "uplifting_1.mp3",
+    "mood": "upbeat",
+    "bpm": 115,
+    "energy": 0.65,
+    "duration": 40,
+    "best_for": [
+      "sports_highlights",
+      "quote_viral"
+    ],
+    "license": "CC0 (synthesized original)"
+  },
+  {
+    "file": "calm_1.mp3",
+    "mood": "ambient",
+    "bpm": 60,
+    "energy": 0.25,
+    "duration": 40,
+    "best_for": [
+      "quote_viral"
+    ],
+    "license": "CC0 (synthesized original)"
+  }
+]

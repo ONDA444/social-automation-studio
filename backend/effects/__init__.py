@@ -1,0 +1,1 @@
+"""FFmpeg effect-string library."""

@@ -1,0 +1,42 @@
+@import './styles/tokens.css';
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html, body, #root { height: 100%; }
+body {
+  margin: 0;
+  background: var(--bg-base);
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+  -webkit-font-smoothing: antialiased;
+}
+* { box-sizing: border-box; }
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: var(--bg-surface); }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 6px; }
+::-webkit-scrollbar-thumb:hover { background: #3a3a4e; }
+
+@layer components {
+  .card {
+    @apply bg-surface border border-border rounded-card shadow-card;
+  }
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 px-4 py-2 rounded-btn font-medium
+           text-sm transition-colors duration-150 cursor-pointer select-none;
+  }
+  .btn-primary { @apply btn bg-accent text-white hover:opacity-90; }
+  .btn-ghost   { @apply btn bg-elevated text-text-primary hover:bg-border; }
+  .btn-success { @apply btn bg-success text-black hover:opacity-90; }
+  .btn-danger  { @apply btn text-white hover:opacity-90; background: var(--error); }
+  .input {
+    @apply bg-elevated border border-border rounded-btn px-3 py-2 text-sm text-text-primary
+           outline-none focus:border-accent w-full placeholder:text-text-muted;
+  }
+  .badge {
+    @apply inline-flex items-center gap-1 px-2.5 py-0.5 rounded-badge text-xs font-medium;
+  }
+  .heading { font-family: var(--font-display); }
+}
