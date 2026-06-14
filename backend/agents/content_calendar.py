@@ -11,7 +11,8 @@ Avoids cross-account collisions (15-min spacing) and respects daily quota.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, time, timedelta
+from datetime import datetime, time, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -20,6 +21,21 @@ from backend.models import PlatformAccount, ScheduleConfig, VideoAnalytics, Vide
 
 logger = logging.getLogger("studio.calendar")
 SPACING = timedelta(minutes=15)
+DEFAULT_TZ = "America/Sao_Paulo"
+
+
+def _utcnow() -> datetime:
+    """Timezone-aware 'now' in UTC (replaces the old naive datetime.utcnow())."""
+    return datetime.now(timezone.utc)
+
+
+def _resolve_tz(name: str | None) -> ZoneInfo:
+    """ZoneInfo for the account's local timezone, falling back to the default."""
+    try:
+        return ZoneInfo(name or DEFAULT_TZ)
+    except Exception:  # noqa: BLE001 — unknown/invalid tz name
+        logger.warning("Unknown timezone %r; falling back to %s.", name, DEFAULT_TZ)
+        return ZoneInfo(DEFAULT_TZ)
 
 
 class ContentCalendarAgent:
@@ -36,23 +52,36 @@ class ContentCalendarAgent:
         mode = mode or (cfg.mode if cfg else "fixed")
         per_day = (cfg.videos_per_day if cfg else None) or (acct.schedule or {}).get("videos_per_day", 1)
         post_times = (cfg.post_times if cfg else None) or (acct.schedule or {}).get("post_times", ["19:00"])
+        tz = _resolve_tz(cfg.timezone if cfg else None)
 
         if mode == "smart":
             post_times = self._smart_times(account_id) or post_times
         if mode == "trending_aware":
             return self._asap_slots(count)
 
-        return self._fixed_slots(post_times, per_day, count)
+        return self._fixed_slots(post_times, per_day, count, tz)
 
-    def _fixed_slots(self, post_times: list[str], per_day: int, count: int) -> list[datetime]:
+    def _fixed_slots(
+        self, post_times: list[str], per_day: int, count: int, tz: ZoneInfo
+    ) -> list[datetime]:
+        """
+        Interpret each HH:MM in the account's LOCAL timezone, then convert to UTC.
+
+        '19:00' with tz=America/Sao_Paulo means 19:00 local — we build the local
+        datetime, attach the local tzinfo, then `.astimezone(utc)`. So the stored
+        scheduled_at is the correct UTC instant (22:00Z in BRT), fixing the old
+        3h drift where naive HH:MM was treated as if it were already UTC.
+        """
         times = sorted(self._parse(t) for t in post_times)[: max(1, per_day)]
+        now = _utcnow()
         slots: list[datetime] = []
-        day = datetime.utcnow().date()
+        day = now.astimezone(tz).date()  # 'today' as seen in the account's timezone
         guard = 0
         while len(slots) < count and guard < 60:
             for t in times:
-                dt = datetime.combine(day, t)
-                if dt > datetime.utcnow():
+                local_dt = datetime.combine(day, t, tzinfo=tz)
+                dt = local_dt.astimezone(timezone.utc)
+                if dt > now:
                     slots.append(self._avoid_collision(dt))
                     if len(slots) >= count:
                         break
@@ -61,7 +90,7 @@ class ContentCalendarAgent:
         return slots
 
     def _asap_slots(self, count: int) -> list[datetime]:
-        base = datetime.utcnow() + timedelta(minutes=5)
+        base = _utcnow() + timedelta(minutes=5)
         return [self._avoid_collision(base + i * timedelta(hours=2)) for i in range(count)]
 
     def _smart_times(self, account_id: int) -> list[str]:
@@ -81,13 +110,22 @@ class ContentCalendarAgent:
         return [f"{h:02d}:00" for h, _ in ranked[:3]]
 
     def _avoid_collision(self, dt: datetime) -> datetime:
-        """Nudge later if another job is scheduled within SPACING."""
+        """
+        Nudge later if another job is scheduled within SPACING.
+
+        Returns a tz-aware UTC datetime. The query bounds are made NAIVE-UTC
+        because VideoJob.scheduled_at is a naive DateTime column persisting UTC
+        wall-clock — comparing a naive column against tz-aware bounds raises in
+        most drivers, so we strip tzinfo for the comparison only.
+        """
         for _ in range(20):
+            lo = (dt - SPACING).astimezone(timezone.utc).replace(tzinfo=None)
+            hi = (dt + SPACING).astimezone(timezone.utc).replace(tzinfo=None)
             clash = self.db.execute(
                 select(VideoJob.id).where(
                     VideoJob.scheduled_at.isnot(None),
-                    VideoJob.scheduled_at >= dt - SPACING,
-                    VideoJob.scheduled_at <= dt + SPACING,
+                    VideoJob.scheduled_at >= lo,
+                    VideoJob.scheduled_at <= hi,
                 )
             ).first()
             if not clash:

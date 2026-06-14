@@ -44,6 +44,7 @@ _ROUTER_MODULES = [
     "backend.routers.schedule",
     "backend.routers.dashboard",
     "backend.routers.analytics",
+    "backend.routers.themes",
 ]
 
 
