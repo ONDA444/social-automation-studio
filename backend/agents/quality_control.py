@@ -1,13 +1,21 @@
 """
 QualityControlAgent — technical + content checks BEFORE the approval queue.
 
-A hard failure (resolution/duration/audio/corrupt/black) sends the job back to
-the responsible stage. Low-bitrate or minor issues are warnings, not failures
-(simple content legitimately compresses below 3 Mbps).
+Only *fatal* defects fail the job (status qc_failed_*, which aborts the pipeline
+in the orchestrator): the video file is missing, the file is corrupt/unreadable
+by ffprobe, there is no video stream, or the duration is zero/invalid. Those make
+the artifact unusable, so there is nothing for a human to approve.
 
-Status: qc_passed | qc_warning | qc_failed_resolution | qc_failed_duration
-        | qc_failed_audio | qc_failed_blackframes | qc_failed_corrupt
-        | qc_failed_thumbnail
+Everything else is a *quality* concern, not a fatal one. Black frames (legit for
+dark content like quote_viral), low bitrate, low audio, off-resolution,
+off-duration, missing/blank thumbnail, off-spec shorts — these accumulate in
+warnings[] and the status becomes qc_warning. The orchestrator treats qc_warning
+like qc_passed and lets the job proceed to compliance -> AWAITING_APPROVAL, so a
+human decides on the approval card (which shows meta + warnings).
+
+Status: qc_passed | qc_warning | qc_failed_corrupt | qc_failed_duration
+        (qc_failed_* are the only statuses that abort; qc_failed_duration is
+         reserved for a zero/invalid duration, i.e. a broken file)
 """
 from __future__ import annotations
 
@@ -48,35 +56,51 @@ class QualityControlAgent(BaseAgent):
     def _check(self, path, visuals, shorts, script, narration=None) -> dict:
         warnings: list[str] = []
         narration = narration or {}
-        if not path or not Path(path).exists():
-            return {"status": "qc_failed_corrupt", "warnings": ["arquivo ausente"]}
 
+        # ---- FATAL checks: the artifact is unusable, nothing to approve. ----
+        # These keep a qc_failed_* status, which the orchestrator treats as an
+        # abort (job -> ERROR). Limited to genuinely broken outputs.
+        if not path or not Path(path).exists():
+            return {"status": "qc_failed_corrupt", "warnings": ["arquivo de vídeo ausente"]}
+
+        # _probe returns None when ffprobe cannot read the file OR when there is
+        # no video stream — both are fatal.
         meta = self._probe(path)
         if not meta:
-            return {"status": "qc_failed_corrupt", "warnings": ["ffprobe não conseguiu ler o arquivo"]}
+            return {"status": "qc_failed_corrupt",
+                    "warnings": ["arquivo corrompido / sem stream de vídeo / ilegível pelo ffprobe"]}
 
+        # Zero/invalid duration means there is effectively no video to review.
+        dur = meta["duration"]
+        if not dur or dur <= 0:
+            return {"status": "qc_failed_duration",
+                    "warnings": [f"duração inválida ({dur:.1f}s)"], "meta": meta}
+
+        # ---- QUALITY checks: accumulate as warnings, let the human decide. ----
+        # Status becomes qc_warning (not qc_failed_*), so the orchestrator lets
+        # the job continue to compliance -> AWAITING_APPROVAL.
         w, h = meta["width"], meta["height"]
         if not ((w >= 1920 and h >= 1080) or (w == 1080 and h == 1080)):
-            return {"status": "qc_failed_resolution", "warnings": [f"resolução {w}x{h}"], "meta": meta}
+            warnings.append(f"resolução fora do padrão ({w}x{h})")
 
         # The video is built to the narration length, so that's the authoritative
         # "planned" baseline. Fall back to the script's estimate only if silent.
         planned = float(narration.get("total_duration") or script.get("estimated_duration") or 0)
-        dur = meta["duration"]
         if planned:
-            ratio = dur / planned if planned else 1
+            ratio = dur / planned
             if ratio < 0.5 or ratio > 1.6:
-                return {"status": "qc_failed_duration",
-                        "warnings": [f"duração {dur:.1f}s vs planejado {planned:.0f}s"], "meta": meta}
-            if not (0.8 <= ratio <= 1.2):
+                warnings.append(f"duração {dur:.1f}s muito fora do plano ({planned:.0f}s)")
+            elif not (0.8 <= ratio <= 1.2):
                 warnings.append(f"duração {dur:.1f}s fora de 80-120% do plano ({planned:.0f}s)")
 
         mean_db = self._mean_volume(path)
         if mean_db is not None and mean_db < -30:
-            return {"status": "qc_failed_audio", "warnings": [f"áudio baixo ({mean_db:.1f} dB)"], "meta": meta}
+            warnings.append(f"áudio baixo ({mean_db:.1f} dB)")
 
+        # Black frames are EXPECTED for dark content (quote_viral, dark
+        # intros/outros). Flag for review, never abort.
         if self._has_long_blackframes(path):
-            return {"status": "qc_failed_blackframes", "warnings": ["frames pretos > 3s"], "meta": meta}
+            warnings.append("frames pretos > 3s (pode ser intencional em conteúdo escuro)")
 
         if meta["bitrate"] and meta["bitrate"] < 3_000_000:
             warnings.append(f"bitrate baixo ({meta['bitrate'] / 1e6:.1f} Mbps)")
@@ -85,8 +109,8 @@ class QualityControlAgent(BaseAgent):
         thumbs = (visuals or {}).get("thumbnails", {})
         thumb_a = thumbs.get("A", {}).get("landscape")
         if not thumb_a or not Path(thumb_a).exists():
-            return {"status": "qc_failed_thumbnail", "warnings": ["thumbnail ausente"], "meta": meta}
-        if self._is_blank(thumb_a):
+            warnings.append("thumbnail ausente")
+        elif self._is_blank(thumb_a):
             warnings.append("thumbnail com baixa variação visual")
 
         # Shorts vertical resolution.

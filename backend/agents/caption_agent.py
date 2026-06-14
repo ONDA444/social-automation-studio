@@ -26,6 +26,24 @@ STYLE_PRESETS = {
 HIGHLIGHT_COLOR = "&H0000F0FF"  # yellow (BGR)
 
 
+def sanitize_ass_text(s: str) -> str:
+    """Escape user/LLM text so it can't break the ASS Dialogue Text field.
+
+    In ASS, '{...}' delimits an override block — raw braces in the content
+    make ffmpeg drop or corrupt the line. Escape braces and turn real line
+    breaks into the ASS hard-break token. Apply ONLY to content text, never
+    to the style override tags the code injects itself.
+    """
+    return (
+        str(s)
+        .replace("{", "\\{")
+        .replace("}", "\\}")
+        .replace("\r\n", "\\N")
+        .replace("\n", "\\N")
+        .replace("\r", "\\N")
+    )
+
+
 class CaptionAgent(BaseAgent):
     name = "caption_agent"
 
@@ -85,7 +103,7 @@ class CaptionAgent(BaseAgent):
     def _dialogue_lines(self, blocks: list[dict], style: str) -> str:
         lines = []
         for b in blocks:
-            text = " ".join(b["words"])
+            text = " ".join(sanitize_ass_text(w) for w in b["words"])
             if style == "highlight_words":
                 text = self._highlight(b["words"])
             elif style == "karaoke":
@@ -99,11 +117,12 @@ class CaptionAgent(BaseAgent):
     def _highlight(words: list[str]) -> str:
         out = []
         for w in words:
+            sw = sanitize_ass_text(w)
             # Highlight longer (content) words.
             if len(w.strip(".,!?")) >= 6:
-                out.append(f"{{\\c{HIGHLIGHT_COLOR}}}{w}{{\\c&H00FFFFFF&}}")
+                out.append(f"{{\\c{HIGHLIGHT_COLOR}}}{sw}{{\\c&H00FFFFFF&}}")
             else:
-                out.append(w)
+                out.append(sw)
         return " ".join(out)
 
     @staticmethod
@@ -112,9 +131,10 @@ class CaptionAgent(BaseAgent):
         n = len(block["words"])
         total_cs = max(1, int((block["end"] - block["start"]) * 100))
         per = max(1, total_cs // n)
-        return "".join(f"{{\\k{per}}}{w} " for w in block["words"]).strip()
+        return "".join(f"{{\\k{per}}}{sanitize_ass_text(w)} " for w in block["words"]).strip()
 
     def _quote_lines(self, text: str, duration: float, style: str) -> str:
+        text = sanitize_ass_text(text)
         return f"Dialogue: 0,{self._ts(0)},{self._ts(duration)},Default,,0,0,0,,{text}\n"
 
     # ---- formats ----

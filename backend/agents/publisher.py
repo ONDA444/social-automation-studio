@@ -68,9 +68,17 @@ async def run_publish(job_id: int) -> dict:
 
         shorts = job.shorts_paths or []
         publish_at = job.scheduled_at.isoformat() + "Z" if job.scheduled_at else None
+        # Privacy chosen for the job (default 'private' = nothing goes public
+        # until the user explicitly opts in). STUDIO_TEST_MODE forces private.
+        privacy = _resolve_privacy(job)
+
+        # The job may be pinned to a specific account (job.account_id). Resolve it
+        # up front so we publish on the RIGHT channel instead of the highest-quota
+        # one — critical when the user has 2+ YouTube channels connected.
+        pinned = svc.get(job.account_id) if job.account_id else None
 
         for platform in platforms:
-            acct = svc.get_active_account(platform)
+            acct = _resolve_account(svc, platform, pinned)
             if not acct:
                 results[platform] = {"ok": False, "status": "no_account",
                                      "error": f"Sem conta ativa de {platform}."}
@@ -94,7 +102,7 @@ async def run_publish(job_id: int) -> dict:
             creds = svc.get_credentials(acct.id)
 
             if platform == "youtube":
-                results["youtube"] = await self_publish_youtube(job, seo, creds, publish_at, shorts)
+                results["youtube"] = await self_publish_youtube(job, seo, creds, publish_at, shorts, privacy)
             elif platform == "tiktok":
                 results["tiktok"] = await self_publish_tiktok(seo, creds, shorts)
             elif platform == "instagram":
@@ -138,12 +146,12 @@ async def run_publish(job_id: int) -> dict:
         db.close()
 
 
-async def self_publish_youtube(job, seo, creds, publish_at, shorts) -> dict:
+async def self_publish_youtube(job, seo, creds, publish_at, shorts, privacy="private") -> dict:
     y = seo.get("youtube", {})
     main = await _with_retry(
         yt.upload_video, job.main_video_path, y.get("title", job.title),
         y.get("description", ""), y.get("tags", []), creds,
-        category_id=y.get("category_id", "22"), publish_at=publish_at,
+        category_id=y.get("category_id", "22"), privacy=privacy, publish_at=publish_at,
         thumbnail_path=job.thumbnail_path, label="yt-main",
     )
     short_results = []
@@ -152,7 +160,7 @@ async def self_publish_youtube(job, seo, creds, publish_at, shorts) -> dict:
             short_results.append(await _with_retry(
                 yt.upload_video, sp, (y.get("title", job.title) + " #shorts")[:100],
                 y.get("description", ""), y.get("tags", []), creds,
-                category_id=y.get("category_id", "22"), label="yt-short",
+                category_id=y.get("category_id", "22"), privacy=privacy, label="yt-short",
             ))
     return {**main, "shorts": short_results}
 
@@ -173,6 +181,37 @@ async def self_publish_instagram(seo, creds, shorts) -> dict:
     if not target:
         return {"ok": False, "platform": "instagram", "status": "no_short", "error": "Sem Short para IG."}
     return await _with_retry(ig.upload_reel, target, f"{caption}\n\n{hashtags}".strip(), creds, label="ig")
+
+
+def _resolve_account(svc, platform, pinned):
+    """Resolve the account to publish on for a given platform.
+
+    If the job is pinned to a specific account (job.account_id) and that account
+    is for THIS platform and has valid connected credentials, use it — this makes
+    us publish on the channel the user chose instead of whichever active account
+    happens to have the most quota. Otherwise fall back to get_active_account so
+    extra target platforms (or an empty/invalid pin) still resolve sensibly.
+    """
+    if pinned and pinned.platform == platform and svc.has_valid_credentials(pinned):
+        return pinned
+    return svc.get_active_account(platform)
+
+
+def _resolve_privacy(job) -> str:
+    """Privacy for this publish — safe by default.
+
+    Default is 'private': nothing goes public until the user explicitly opts in
+    (via job.privacy). STUDIO_TEST_MODE=1 hard-forces 'private' regardless of the
+    job's choice so test runs never leak public uploads.
+    """
+    import os
+
+    if os.getenv("STUDIO_TEST_MODE") == "1":
+        return "private"
+    choice = getattr(job, "privacy", None)
+    if choice in {"public", "unlisted", "private"}:
+        return choice
+    return "private"
 
 
 def _pick_short(shorts: list[str], prefer: int) -> str | None:

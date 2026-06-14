@@ -13,7 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from backend.database import get_db
-from backend.models import JobStatus, VideoJob
+from backend.models import JobStatus, PlatformAccount, VideoJob
 from backend.pipeline.dispatch import dispatch_job, dispatch_publish
 
 logger = logging.getLogger("studio")
@@ -46,6 +46,33 @@ class SEOUpdate(BaseModel):
     seo_metadata: dict
 
 
+class JobPatch(BaseModel):
+    account_id: int | None = None
+    target_platforms: list[str] | None = None
+    scheduled_at: datetime | None = None
+    title: str | None = Field(default=None, min_length=1, max_length=300)
+
+
+class BulkDelete(BaseModel):
+    ids: list[int] | None = None
+    status: str | None = None
+
+
+# Per-platform publish states that count as "already done" — never re-sent.
+_PUBLISHED_STATES = {"ok", "published"}
+
+# Statuses for which a job may still be edited (channel/platforms/schedule/title).
+_EDITABLE_STATES = {
+    JobStatus.QUEUED,
+    JobStatus.AWAITING_APPROVAL,
+    JobStatus.APPROVED,
+    JobStatus.ERROR,
+}
+
+# Statuses that block destructive / re-dispatch actions (job is running).
+_RUNNING_STATES = {JobStatus.PROCESSING, JobStatus.PUBLISHING}
+
+
 def _validate(payload: JobCreate) -> None:
     if payload.content_type not in CONTENT_TYPES:
         raise HTTPException(400, f"content_type inválido: {payload.content_type}")
@@ -53,9 +80,38 @@ def _validate(payload: JobCreate) -> None:
         raise HTTPException(400, f"mode inválido: {payload.mode}")
 
 
+def _require_account(db: Session, account_id: int | None) -> None:
+    """Raise 400 if account_id is given but not present in platform_accounts."""
+    if account_id is None:
+        return
+    if db.get(PlatformAccount, account_id) is None:
+        raise HTTPException(400, f"account_id inválido: {account_id} não existe")
+
+
+def _cleanup_job_files(job: VideoJob) -> None:
+    """Best-effort removal of a job's generated artifacts (video/thumb/shorts)."""
+    paths: list[str] = []
+    if job.main_video_path:
+        paths.append(job.main_video_path)
+    if job.thumbnail_path:
+        paths.append(job.thumbnail_path)
+    for sp in (job.shorts_paths or []):
+        if sp:
+            paths.append(sp)
+
+    for p in paths:
+        try:
+            Path(p).unlink()
+        except FileNotFoundError:
+            pass
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Falha ao apagar arquivo %s do job %s: %s", p, job.id, exc)
+
+
 @router.post("")
 def create_job(payload: JobCreate, db: Session = Depends(get_db)):
     _validate(payload)
+    _require_account(db, payload.account_id)
     job = VideoJob(
         title=payload.title,
         topic=payload.topic,
@@ -80,6 +136,7 @@ def create_jobs_batch(payload: JobBatchCreate, db: Session = Depends(get_db)):
     the in-process semaphore serializes them automatically."""
     if payload.content_type not in CONTENT_TYPES:
         raise HTTPException(400, f"content_type inválido: {payload.content_type}")
+    _require_account(db, payload.account_id)
 
     themes = [t.strip() for t in payload.themes if t and t.strip()][:200]
 
@@ -141,24 +198,11 @@ def delete_job(job_id: int, db: Session = Depends(get_db)):
     job = db.get(VideoJob, job_id)
     if not job:
         raise HTTPException(404, "job não encontrado")
+    if job.status in _RUNNING_STATES:
+        raise HTTPException(409, f"job em execução não pode ser deletado (status={job.status.value})")
 
     # Best-effort cleanup of generated artifacts before dropping the row.
-    paths: list[str] = []
-    if job.main_video_path:
-        paths.append(job.main_video_path)
-    if job.thumbnail_path:
-        paths.append(job.thumbnail_path)
-    for sp in (job.shorts_paths or []):
-        if sp:
-            paths.append(sp)
-
-    for p in paths:
-        try:
-            Path(p).unlink()
-        except FileNotFoundError:
-            pass
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("Falha ao apagar arquivo %s do job %s: %s", p, job_id, exc)
+    _cleanup_job_files(job)
 
     db.delete(job)
     db.commit()
@@ -170,6 +214,8 @@ def retry_job(job_id: int, db: Session = Depends(get_db)):
     job = db.get(VideoJob, job_id)
     if not job:
         raise HTTPException(404, "job não encontrado")
+    if job.status in _RUNNING_STATES:
+        raise HTTPException(409, f"job em execução não pode ser reprocessado (status={job.status.value})")
     job.status = JobStatus.QUEUED
     job.error_message = None
     job.progress = 0
@@ -195,7 +241,7 @@ def approve_job(job_id: int, db: Session = Depends(get_db)):
     if not job:
         raise HTTPException(404, "job não encontrado")
     if job.status != JobStatus.AWAITING_APPROVAL:
-        raise HTTPException(409, f"job não está aguardando aprovação (status={job.status})")
+        raise HTTPException(409, f"job não está aguardando aprovação (status={job.status.value})")
     job.approval_status = "approved"
     job.status = JobStatus.APPROVED
     db.commit()
@@ -217,6 +263,8 @@ def reject_job(job_id: int, db: Session = Depends(get_db)):
     job = db.get(VideoJob, job_id)
     if not job:
         raise HTTPException(404, "job não encontrado")
+    if job.status not in (JobStatus.AWAITING_APPROVAL, JobStatus.TIKTOK_PENDING_APPROVAL):
+        raise HTTPException(409, f"job não está aguardando aprovação (status={job.status.value})")
     job.approval_status = "rejected"
     job.status = JobStatus.REJECTED
     db.commit()
@@ -240,13 +288,15 @@ async def import_csv(file: UploadFile = File(...), db: Session = Depends(get_db)
         mode = (row.get("mode") or "from_title").strip()
         platforms = [p.strip() for p in (row.get("target_platforms") or "youtube").split("|") if p.strip()]
         acct = row.get("account_id")
+        account_id = int(acct) if acct and acct.strip().isdigit() else None
+        _require_account(db, account_id)
         job = VideoJob(
             title=title,
             topic=(row.get("topic") or None),
             content_type=ct if ct in CONTENT_TYPES else "film_recap_ai_images",
             mode=mode if mode in MODES else "from_title",
             target_platforms=platforms,
-            account_id=int(acct) if acct and acct.strip().isdigit() else None,
+            account_id=account_id,
             status=JobStatus.QUEUED,
         )
         db.add(job)
@@ -255,3 +305,95 @@ async def import_csv(file: UploadFile = File(...), db: Session = Depends(get_db)
         dispatch_job(job.id)
         created.append(job.id)
     return {"created": created, "count": len(created)}
+
+
+@router.post("/{job_id}/publish")
+def publish_job(job_id: int, db: Session = Depends(get_db)):
+    """Republish an already-produced job WITHOUT regenerating the video.
+
+    Accepts jobs in APPROVED, ERROR or PUBLISHING (anything else -> 409).
+    Promotes the job to APPROVED if needed, then dispatches the publisher.
+    Idempotent: platforms already marked 'ok'/'published' in publish_status are
+    not re-sent. This rescues orphaned APPROVED jobs recovered at boot that
+    otherwise had no way to be published.
+    """
+    job = db.get(VideoJob, job_id)
+    if not job:
+        raise HTTPException(404, "job não encontrado")
+    if job.status not in (JobStatus.APPROVED, JobStatus.ERROR, JobStatus.PUBLISHING):
+        raise HTTPException(409, f"job não pode ser republicado (status={job.status.value})")
+
+    pub = job.publish_status or {}
+    targets = job.target_platforms or []
+    pending = [p for p in targets if str(pub.get(p)) not in _PUBLISHED_STATES]
+
+    # Everything already published — nothing to do (idempotent no-op).
+    if targets and not pending:
+        if job.status != JobStatus.PUBLISHED:
+            job.status = JobStatus.PUBLISHED
+            db.commit()
+        return {"job": job.to_dict(), "publish_dispatch": None, "pending_platforms": [],
+                "note": "Todas as plataformas já publicadas — nada a reenviar."}
+
+    if job.status != JobStatus.APPROVED:
+        job.status = JobStatus.APPROVED
+    job.approval_status = "approved"
+    db.commit()
+
+    transport = dispatch_publish(job.id)
+    return {"job": job.to_dict(), "publish_dispatch": transport, "pending_platforms": pending}
+
+
+@router.patch("/{job_id}")
+def patch_job(job_id: int, payload: JobPatch, db: Session = Depends(get_db)):
+    """Edit a queued/pending job's channel, target platforms, schedule or title.
+
+    Only allowed while status in (QUEUED, AWAITING_APPROVAL, APPROVED, ERROR);
+    rejected with 409 for PROCESSING/PUBLISHING. account_id (when sent non-null)
+    must exist in platform_accounts.
+    """
+    job = db.get(VideoJob, job_id)
+    if not job:
+        raise HTTPException(404, "job não encontrado")
+    if job.status not in _EDITABLE_STATES:
+        raise HTTPException(409, f"job não pode ser editado (status={job.status.value})")
+
+    fields = payload.model_fields_set
+
+    if "account_id" in fields:
+        _require_account(db, payload.account_id)
+        job.account_id = payload.account_id
+    if "target_platforms" in fields and payload.target_platforms is not None:
+        job.target_platforms = payload.target_platforms
+    if "scheduled_at" in fields:
+        job.scheduled_at = payload.scheduled_at
+    if "title" in fields and payload.title is not None:
+        job.title = payload.title
+
+    db.commit()
+    db.refresh(job)
+    return {"job": job.to_dict()}
+
+
+@router.post("/bulk-delete")
+def bulk_delete_jobs(payload: BulkDelete, db: Session = Depends(get_db)):
+    """Delete many jobs at once — by explicit ids or by status (e.g. clear all
+    'error'). Reuses the per-job file cleanup of delete_job. Running jobs
+    (PROCESSING/PUBLISHING) are skipped to avoid yanking work in progress."""
+    if payload.ids:
+        stmt = select(VideoJob).where(VideoJob.id.in_(payload.ids))
+    elif payload.status:
+        stmt = select(VideoJob).where(VideoJob.status == payload.status)
+    else:
+        raise HTTPException(400, "informe 'ids' ou 'status'")
+
+    jobs = db.execute(stmt).scalars().all()
+    deleted: list[int] = []
+    for job in jobs:
+        if job.status in _RUNNING_STATES:
+            continue
+        _cleanup_job_files(job)
+        deleted.append(job.id)
+        db.delete(job)
+    db.commit()
+    return {"deleted": deleted}

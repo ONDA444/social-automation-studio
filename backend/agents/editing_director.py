@@ -6,6 +6,7 @@ heuristic plan when no LLM is available.
 from __future__ import annotations
 
 import asyncio
+import copy
 
 from backend.agents.base_agent import BaseAgent
 from backend import llm
@@ -78,7 +79,7 @@ class EditingDirectorAgent(BaseAgent):
             plan = self._sanitize(plan, content_type)
             self.emit("progress", "EditingPlan via LLM", progress=70)
         except llm.LLMUnavailable:
-            plan = dict(HEURISTICS.get(content_type, HEURISTICS["film_recap_ai_images"]))
+            plan = copy.deepcopy(HEURISTICS.get(content_type, HEURISTICS["film_recap_ai_images"]))
             self.emit("progress", "EditingPlan heurístico (sem LLM)", progress=70)
 
         self.ctx_set("editing_plan", plan)
@@ -112,7 +113,7 @@ Formato EXATO:
     @staticmethod
     def _sanitize(plan: dict, content_type: str) -> dict:
         """Clamp LLM output to known-executable values, filling gaps from heuristics."""
-        base = dict(HEURISTICS.get(content_type, HEURISTICS["film_recap_ai_images"]))
+        base = copy.deepcopy(HEURISTICS.get(content_type, HEURISTICS["film_recap_ai_images"]))
         if plan.get("color_grade") in COLOR_GRADES:
             base["color_grade"] = plan["color_grade"]
         tr = plan.get("transitions", {})

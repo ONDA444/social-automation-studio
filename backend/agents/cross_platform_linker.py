@@ -46,14 +46,16 @@ def mirror_after_publish(db: Session, source_job: VideoJob) -> list[int]:
         created.append(mirror.id)
         logger.info("Mirror job %s created for %s (source %s)", mirror.id, platform, source_job.id)
 
-        # Auto-approve mirrors if the target account opts in (schedule.auto_approve_mirrors).
+        # Mirrors NEVER auto-publish: a mirror would push a public post to
+        # TikTok/IG with no human review, violating the approval gate. We leave
+        # every mirror in AWAITING_APPROVAL so a person reviews it first, even
+        # when the target account opted into auto_approve_mirrors — that flag no
+        # longer triggers an immediate dispatch_publish.
         if (target.schedule or {}).get("auto_approve_mirrors"):
-            mirror.approval_status = "approved"
-            mirror.status = JobStatus.APPROVED
-            db.commit()
-            from backend.pipeline.dispatch import dispatch_publish
-
-            dispatch_publish(mirror.id)
+            logger.info(
+                "Mirror job %s held in AWAITING_APPROVAL (auto_approve_mirrors no "
+                "longer auto-publishes; awaiting human review).", mirror.id,
+            )
     return created
 
 

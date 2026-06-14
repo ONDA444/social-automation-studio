@@ -123,7 +123,7 @@ def upload_video(
     tags: list[str],
     credentials: dict,
     category_id: str = "22",
-    privacy: str = "public",
+    privacy: str = "private",
     publish_at: str | None = None,
     thumbnail_path: str | None = None,
 ) -> dict:
@@ -134,6 +134,12 @@ def upload_video(
         from googleapiclient.http import MediaFileUpload
 
         yt = _service(credentials)
+        # Safe default: private. STUDIO_TEST_MODE forces private so test runs
+        # never publish a real public video by accident.
+        import os
+
+        if os.getenv("STUDIO_TEST_MODE") == "1":
+            privacy = "private"
         status = {"privacyStatus": privacy}
         if publish_at:  # schedule -> must be private until publish_at
             status = {"privacyStatus": "private", "publishAt": publish_at}
