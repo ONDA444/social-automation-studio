@@ -108,6 +108,12 @@ async def run_pipeline(job_id: int) -> dict:
                 script=script, target_platforms=ctx.get("target_platforms"))
             job.script = script
             job.content_type = script.get("content_type", job.content_type)
+
+            # Remix style-match: if the reference video has NO voice-over, the remix
+            # is music-driven too (no narration) — follow the reference's style.
+            ref_dna = ctx.get("style_dna") or {}
+            if job.mode == "from_remix" and (ref_dna.get("audio") or {}).get("has_narration") is False:
+                ctx["narrate"] = False
             upd(progress=40, agent="narrator")
 
             await NarratorAgent(job_id, ctx).execute(voice=voice)

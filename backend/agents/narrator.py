@@ -59,15 +59,23 @@ class NarratorAgent(BaseAgent):
 
         narration_text = (script.get("narration_text") or "").strip()
 
-        # quote_viral has no narration — emit a silent placeholder track.
-        if content_type == "quote_viral" or not narration_text:
-            duration = float(script.get("estimated_duration", 10))
+        # No voice-over when: quote_viral, empty text, OR a remix whose reference
+        # had no narration (narrate=False) — the remix follows that music-driven
+        # style. Emit a silent track sized to the planned video length.
+        narrate = self.ctx_get("narrate")
+        if narrate is False or content_type == "quote_viral" or not narration_text:
+            if narrate is False:
+                duration = self._silent_duration(script)
+                msg = "Narração desligada — remix sem voz (segue o estilo da referência)"
+            else:
+                duration = float(script.get("estimated_duration", 10))
+                msg = "Narração silenciosa (sem voz)"
             self._write_silence(audio_path, duration)
             payload = {"total_duration": duration, "words": [], "markers": [],
                        "audio_path": str(audio_path), "silent": True}
             ts_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
             self.ctx_set("narration", payload)
-            self.emit("progress", "Narração silenciosa (quote_viral)", progress=55)
+            self.emit("progress", msg, progress=55)
             return payload
 
         self.emit("progress", f"Sintetizando voz ({voice}, rate={rate})", progress=45)
@@ -189,6 +197,16 @@ class NarratorAgent(BaseAgent):
                     markers.append({"marker": "DESTAQUE", "timestamp": ts, "scene": sc.get("index")})
             cursor += n
         return markers
+
+    def _silent_duration(self, script: dict) -> float:
+        """Length for a no-voice remix: scene count x the reference's avg clip
+        duration, so the music-driven video keeps the reference's pacing."""
+        dna = self.ctx_get("style_dna") or {}
+        avg = (dna.get("pacing") or {}).get("avg_clip_duration")
+        n = len(script.get("scenes") or [])
+        if avg and n:
+            return round(max(8.0, min(90.0, n * float(avg))), 1)
+        return float(script.get("estimated_duration", 30))
 
     @staticmethod
     def _write_silence(path: Path, seconds: float) -> None:

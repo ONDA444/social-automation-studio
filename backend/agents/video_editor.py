@@ -239,8 +239,11 @@ class VideoEditorAgent(BaseAgent):
             return True
 
         if music_path:
+            # No narration -> music is the LEAD. Don't apply the duck level; just
+            # normalize so the track plays at full foreground loudness (the remix
+            # follows a music-driven reference with no voice-over).
             cmd = ["ffmpeg", "-y", "-stream_loop", "-1", "-i", music_path,
-                   "-filter_complex", f"[0:a]volume={vol_db}dB,{loud}[a]",
+                   "-filter_complex", f"[0:a]{loud}[a]",
                    "-map", "[a]", "-t", f"{video_len:.3f}", "-c:a", "aac", "-b:a", "192k", dst.name]
             _run(cmd, cwd=str(work))
             return True
