@@ -84,8 +84,15 @@ def _redis_ok() -> bool:
 
 
 def dispatch_job(job_id: int) -> str:
-    """Enqueue production of a job. Returns the transport used."""
-    if _redis_ok():
+    """Enqueue production of a job. Returns the transport used.
+
+    Celery is used ONLY when explicitly enabled (USE_CELERY=1) AND Redis is up —
+    otherwise a deploy with Redis but no worker (e.g. single-service Railway)
+    would push tasks to a queue nobody consumes, leaving jobs stuck in QUEUED.
+    In-process is the safe default: it runs the pipeline on a dedicated worker
+    loop inside this process.
+    """
+    if settings.use_celery and _redis_ok():
         try:
             from backend.pipeline.video_pipeline import process_job
 
@@ -98,7 +105,7 @@ def dispatch_job(job_id: int) -> str:
 
 
 def dispatch_publish(job_id: int) -> str:
-    if _redis_ok():
+    if settings.use_celery and _redis_ok():
         try:
             from backend.pipeline.video_pipeline import publish_job
 

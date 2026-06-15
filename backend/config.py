@@ -80,6 +80,11 @@ class Settings(BaseSettings):
     cache_dir: str = "./cache"
     assets_dir: str = "./assets"
     max_queue_size: int = 500
+    # Only enqueue to Celery when a real worker is deployed. Default False so a
+    # single-service deploy (Railway: just uvicorn, Redis up for events) runs the
+    # pipeline IN-PROCESS instead of pushing tasks to a queue nobody consumes.
+    # Set USE_CELERY=1 only if you also run `celery ... worker`.
+    use_celery: bool = False
     default_tts_voice: str = "pt-BR-AntonioNeural"
     default_language: str = "pt-BR"
     log_level: str = "INFO"

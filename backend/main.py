@@ -139,6 +139,42 @@ def _recover_orphan_jobs() -> None:
         logger.warning("Recuperação de órfãos falhou (ignorada): %s", exc)
 
 
+def _redispatch_queued_jobs() -> None:
+    """
+    In-process mode only: re-dispatch jobs left in QUEUED.
+
+    A QUEUED job that isn't running means its dispatch never completed (e.g. it was
+    enqueued to a Celery queue with no worker before USE_CELERY was disabled, or the
+    process restarted before pickup). Celery mode is skipped — a real worker owns the
+    queue there. Bounded to avoid a thundering herd on boot.
+    """
+    if settings.use_celery:
+        return
+    try:
+        from backend.database import SessionLocal
+        from backend.models import JobStatus, VideoJob
+        from backend.pipeline.dispatch import dispatch_job
+
+        db = SessionLocal()
+        try:
+            stuck = (
+                db.query(VideoJob)
+                .filter(VideoJob.status == JobStatus.QUEUED)
+                .order_by(VideoJob.created_at.asc())
+                .limit(200)
+                .all()
+            )
+            ids = [j.id for j in stuck]
+        finally:
+            db.close()
+        for jid in ids:
+            dispatch_job(jid)
+        if ids:
+            logger.info("Re-disparados %d job(s) presos em QUEUED (modo in-process).", len(ids))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Re-dispatch de QUEUED falhou (ignorado): %s", exc)
+
+
 @app.on_event("startup")
 async def _on_startup() -> None:
     settings.ensure_dirs()
@@ -155,6 +191,7 @@ async def _on_startup() -> None:
     except Exception as exc:  # noqa: BLE001
         logger.warning("ensure_columns falhou: %s", exc)
     _recover_orphan_jobs()
+    _redispatch_queued_jobs()
     events.set_main_loop(asyncio.get_running_loop())
     # Best-effort live-event relay; no-op if Redis is down.
     asyncio.create_task(events.redis_listener())

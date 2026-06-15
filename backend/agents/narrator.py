@@ -122,13 +122,29 @@ class NarratorAgent(BaseAgent):
             "language": (settings.default_language or "pt-BR").split("-")[0],
             "speed": speed,
         }
+        # LMNT 5xx are frequently transient — retry a few times before letting the
+        # caller fall back to edge-tts, so a single hiccup doesn't silently swap
+        # the user's cloned voice for the default one.
+        last_exc: Exception | None = None
         async with httpx.AsyncClient(timeout=180) as client:
-            r = await client.post(LMNT_BYTES_URL, json=payload,
-                                  headers={"X-API-Key": settings.lmnt_api_key})
-            r.raise_for_status()
-            if not r.content or len(r.content) < 1000:
-                raise RuntimeError("áudio LMNT vazio")
-            audio_path.write_bytes(r.content)
+            for attempt in range(4):
+                try:
+                    r = await client.post(LMNT_BYTES_URL, json=payload,
+                                          headers={"X-API-Key": settings.lmnt_api_key})
+                    if r.status_code >= 500:
+                        raise RuntimeError(f"LMNT {r.status_code} (transitório)")
+                    r.raise_for_status()
+                    if not r.content or len(r.content) < 1000:
+                        raise RuntimeError("áudio LMNT vazio")
+                    audio_path.write_bytes(r.content)
+                    last_exc = None
+                    break
+                except Exception as exc:  # noqa: BLE001
+                    last_exc = exc
+                    if attempt < 3:
+                        await asyncio.sleep(1.5 * (attempt + 1))
+        if last_exc is not None:
+            raise last_exc
         total = self._probe_duration(audio_path)
         if total <= 0:
             # Bytes were written OK but the probe failed (ffmpeg/pydub quirk). Estimate
