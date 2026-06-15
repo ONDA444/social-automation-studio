@@ -212,20 +212,24 @@ def _resolve_account(svc, platform, pinned):
 
 
 def _resolve_privacy(job) -> str:
-    """Privacy for this publish — safe by default.
+    """Privacy for this publish.
 
-    Default is 'private': nothing goes public until the user explicitly opts in
-    (via job.privacy). STUDIO_TEST_MODE=1 hard-forces 'private' regardless of the
-    job's choice so test runs never leak public uploads.
+    Per-job `job.privacy` wins if set; otherwise the account-wide DEFAULT_PRIVACY
+    (settings.default_privacy) decides — set it to 'public' to actually reach the
+    audience. STUDIO_TEST_MODE=1 still hard-forces 'private' so test runs never
+    leak public uploads.
     """
     import os
+
+    from backend.config import settings
 
     if os.getenv("STUDIO_TEST_MODE") == "1":
         return "private"
     choice = getattr(job, "privacy", None)
     if choice in {"public", "unlisted", "private"}:
         return choice
-    return "private"
+    default = (settings.default_privacy or "private").lower()
+    return default if default in {"public", "unlisted", "private"} else "private"
 
 
 def _pick_short(shorts: list[str], prefer: int) -> str | None:

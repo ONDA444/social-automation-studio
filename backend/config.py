@@ -103,6 +103,10 @@ class Settings(BaseSettings):
     # default: hard cuts look clean and stream one clip at a time. Enable only on a
     # box with comfortable RAM.
     video_transitions: bool = False
+    # Visibility for auto-published videos when the job itself doesn't specify one.
+    # "private" is the safe default; set DEFAULT_PRIVACY=public to post publicly so
+    # the videos actually reach the audience. (public|unlisted|private)
+    default_privacy: str = "private"
     default_tts_voice: str = "pt-BR-AntonioNeural"
     default_language: str = "pt-BR"
     log_level: str = "INFO"
