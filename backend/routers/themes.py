@@ -95,6 +95,45 @@ def delete_theme(theme_id: int, db: Session = Depends(get_db)):
     return {"deleted": theme_id}
 
 
+@router.post("/restore")
+def restore_consumed(account_id: int | None = Query(None), db: Session = Depends(get_db)):
+    """
+    Undo premature generation: themes marked 'consumed' whose video has NOT gone
+    out yet are returned to 'pending' (and their not-yet-published job deleted), so
+    the slot-gated scheduler regenerates them AT their proper publish time.
+
+    Jobs already PUBLISHED/PUBLISHING are kept; a job still PROCESSING is left to
+    finish (its theme stays consumed) to avoid yanking an in-flight render.
+    """
+    from backend.models import JobStatus, VideoJob
+
+    cancellable = {
+        JobStatus.QUEUED,
+        JobStatus.ERROR,
+        JobStatus.AWAITING_APPROVAL,
+        JobStatus.APPROVED,
+        JobStatus.REJECTED,
+    }
+    q = db.query(ThemeQueue).filter(ThemeQueue.status == "consumed")
+    if account_id is not None:
+        q = q.filter(ThemeQueue.account_id == account_id)
+
+    restored: list[int] = []
+    deleted_jobs: list[int] = []
+    for th in q.all():
+        job = db.get(VideoJob, th.consumed_job_id) if th.consumed_job_id else None
+        if job is not None and job.status not in cancellable:
+            continue  # processing/publishing/published -> leave it
+        th.status = "pending"
+        th.consumed_job_id = None
+        restored.append(th.id)
+        if job is not None:
+            deleted_jobs.append(job.id)
+            db.delete(job)
+    db.commit()
+    return {"restored_themes": restored, "deleted_jobs": deleted_jobs}
+
+
 @router.post("/bulk-delete")
 def bulk_delete_themes(payload: BulkDelete, db: Session = Depends(get_db)):
     """Delete by explicit ids and/or by status; returns the deleted ids."""
