@@ -237,6 +237,7 @@ class AnalyzerAgent(BaseAgent):
 
     # ---- audio ----
     def _audio(self, path: str) -> dict:
+        bpm = self._tempo(path)  # reference TEMPO only — its audio is never reused
         try:
             from pydub import AudioSegment, silence
 
@@ -251,13 +252,30 @@ class AnalyzerAgent(BaseAgent):
             return {
                 "has_narration": has_narration,
                 "has_music": True,
-                "bpm_estimate": None,
+                "bpm_estimate": bpm,
                 "music_mood": "dramatic" if loud < -20 else "energetic",
                 "energy": round(min(1.0, max(0.0, (loud + 40) / 40)), 2),
             }
         except Exception:
-            return {"has_narration": True, "has_music": True, "bpm_estimate": None,
+            return {"has_narration": True, "has_music": True, "bpm_estimate": bpm,
                     "music_mood": "dramatic", "energy": 0.5}
+
+    @staticmethod
+    def _tempo(path: str) -> int | None:
+        """Reference BPM via librosa beat tracking (first 60s). Captures ONLY the
+        tempo so the new video can beat-sync its OWN music to the same pace — no
+        audio sample from the reference is reused. Returns None if unavailable."""
+        try:
+            import librosa  # heavy import; only loaded during analysis
+
+            y, sr = librosa.load(path, sr=22050, mono=True, duration=60)
+            if y is None or len(y) < sr:  # need >=1s of audio
+                return None
+            tempo, _ = librosa.beat.beat_track(y=y, sr=sr)
+            bpm = int(round(float(tempo if not hasattr(tempo, "item") else tempo.item())))
+            return bpm if 50 <= bpm <= 200 else None
+        except Exception:
+            return None
 
     # ---- assemble ----
     def _build_dna(self, meta: dict, visual: dict, audio: dict, measured_clip: float | None = None) -> dict:

@@ -164,17 +164,49 @@ class EditingDirectorAgent(BaseAgent):
 
     @staticmethod
     def _apply_dna(plan: dict, dna: dict | None) -> dict:
+        """Make the plan WEAR the reference's analyzed style — grade, pacing,
+        transitions, camera energy, tempo, look. Style only; never its footage."""
         if not dna:
             return plan
-        grade = (dna.get("visual_style") or {}).get("grading_style")
+        vs = dna.get("visual_style") or {}
+        grade = vs.get("grading_style")
         if grade in COLOR_GRADES:
             plan["color_grade"] = grade
-        acd = (dna.get("pacing") or {}).get("avg_clip_duration")
+
+        pacing = dna.get("pacing") or {}
+        acd = pacing.get("avg_clip_duration")
         if isinstance(acd, (int, float)) and acd > 0:
             plan["avg_clip_duration"] = float(acd)
-        mood = (dna.get("audio") or {}).get("music_mood")
-        if mood:
-            plan.setdefault("music", {})["mood"] = mood
+
+        # Map the reference's cut ENERGY onto transitions + camera so the remix
+        # MOVES like it: snappy cuts for fast refs, gentle dissolves for slow ones.
+        style = pacing.get("style")
+        if style == "fast":
+            plan.setdefault("transitions", {}).update({"default": "flash_cut", "on_highlight": "whip_pan"})
+            plan.setdefault("camera_effects", {}).update({"default": "static", "alt": "ken_burns_zoom_in"})
+            plan["beat_sync"] = True
+        elif style == "slow":
+            plan.setdefault("transitions", {}).update({"default": "crossfade", "on_highlight": "dissolve"})
+            plan.setdefault("camera_effects", {}).update({"default": "ken_burns_zoom_in", "alt": "ken_burns_zoom_out"})
+
+        audio = dna.get("audio") or {}
+        if audio.get("music_mood"):
+            plan.setdefault("music", {})["mood"] = audio["music_mood"]
+        bpm = audio.get("bpm_estimate")
+        if isinstance(bpm, (int, float)) and bpm > 0:
+            # Beat-sync the new video's OWN music to the reference's tempo.
+            plan.setdefault("music", {})["bpm_target"] = int(bpm)
+            plan["beat_sync"] = True
+
+        # Carry the reference's LOOK (vignette / high saturation) into effects.
+        fx = set(plan.get("special_effects") or [])
+        if vs.get("has_vignette"):
+            fx.add("vignette")
+        sat = vs.get("saturation")
+        if isinstance(sat, (int, float)) and sat > 0.6:
+            fx.add("high_contrast")
+        if fx:
+            plan["special_effects"] = sorted(fx)
         return plan
 
     async def _via_llm(self, script, style_dna, content_type) -> dict:
