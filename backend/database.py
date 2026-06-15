@@ -8,12 +8,15 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import logging
 from collections.abc import Iterator
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from backend.config import settings
+
+logger = logging.getLogger("studio.db")
 
 # SQLite needs check_same_thread=False for FastAPI's threadpool; Postgres ignores it.
 _connect_args = {"check_same_thread": False} if settings.sqlalchemy_url.startswith("sqlite") else {}
@@ -48,6 +51,37 @@ def init_db() -> None:
 
     Base.metadata.create_all(bind=engine)
     print(f"[OK] Database ready at: {settings.sqlalchemy_url}")
+
+
+def _existing_columns(conn, table: str) -> set[str]:
+    if settings.sqlalchemy_url.startswith("sqlite"):
+        rows = conn.execute(text(f"PRAGMA table_info({table})")).fetchall()
+        return {r[1] for r in rows}
+    rows = conn.execute(
+        text("SELECT column_name FROM information_schema.columns WHERE table_name = :t"),
+        {"t": table},
+    ).fetchall()
+    return {r[0] for r in rows}
+
+
+def ensure_columns() -> None:
+    """Idempotent lightweight migration: add columns introduced after a table was
+    first created (SQLite can't add them via create_all). Safe to call on boot."""
+    additions = [
+        ("video_jobs", "video_format", "VARCHAR(20) DEFAULT 'long'"),
+        ("theme_queue", "video_format", "VARCHAR(20) DEFAULT 'long'"),
+    ]
+    try:
+        with engine.begin() as conn:
+            for table, col, decl in additions:
+                try:
+                    if col not in _existing_columns(conn, table):
+                        conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {col} {decl}"))
+                        logger.info("Migração: coluna %s.%s adicionada.", table, col)
+                except Exception as exc:  # noqa: BLE001  (e.g. table not created yet)
+                    logger.debug("ensure_columns skip %s.%s: %s", table, col, exc)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("ensure_columns falhou (ignorada): %s", exc)
 
 
 def reset_db() -> None:

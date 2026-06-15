@@ -3,22 +3,42 @@ import { useNavigate } from 'react-router-dom'
 import { api } from '../api'
 import StyleDNACard from '../components/StyleDNACard.jsx'
 
+const FALLBACK_CONTENT_TYPES = [
+  { value: 'film_recap_ai_images', label: 'Recap (narrado)' },
+  { value: 'sports_highlights', label: 'Esportes (highlights)' },
+  { value: 'top_list_ranking', label: 'Top / Ranking' },
+  { value: 'explainer_curiosity', label: 'Curiosidade / Explicação' },
+]
+
 export default function RemixEngine() {
   const [source, setSource] = useState('')
   const [dna, setDna] = useState(null)
   const [title, setTitle] = useState('')
+  const [contentType, setContentType] = useState('film_recap_ai_images')
+  const [contentTypes, setContentTypes] = useState(FALLBACK_CONTENT_TYPES)
+  const [format, setFormat] = useState('long')
   const [analyzing, setAnalyzing] = useState(false)
   const [creating, setCreating] = useState(false)
   const [accounts, setAccounts] = useState([])
   const [accountId, setAccountId] = useState('')
   const nav = useNavigate()
 
-  useEffect(() => { api.get('/accounts').then((d) => setAccounts(d.accounts)).catch(() => {}) }, [])
+  useEffect(() => {
+    api.get('/accounts').then((d) => setAccounts(d.accounts)).catch(() => {})
+    api.get('/jobs/content-types')
+      .then((d) => { const list = Array.isArray(d) ? d : d?.content_types; if (Array.isArray(list) && list.length) setContentTypes(list) })
+      .catch(() => setContentTypes(FALLBACK_CONTENT_TYPES))
+  }, [])
 
   const analyze = async () => {
     if (!source.trim()) return
     setAnalyzing(true); setDna(null)
-    try { const d = await api.post('/remix/analyze', { source }); setDna(d.style_dna) }
+    try {
+      const d = await api.post('/remix/analyze', { source })
+      setDna(d.style_dna)
+      if (d.style_dna?.suggested_theme) setTitle(d.style_dna.suggested_theme)  // auto-detected topic
+      if (d.style_dna?.suggested_format) setFormat(d.style_dna.suggested_format)  // 9:16/1:1 -> short
+    }
     catch (e) { alert('Falha ao analisar: ' + e.message) } finally { setAnalyzing(false) }
   }
   const create = async () => {
@@ -28,7 +48,7 @@ export default function RemixEngine() {
       const account_id = accountId ? Number(accountId) : null
       const acc = accounts.find((a) => a.id === account_id)
       const target_platforms = acc && acc.platform ? [acc.platform] : []
-      await api.post('/remix/create', { title, style_dna: dna, source, account_id, target_platforms })
+      await api.post('/remix/create', { title, content_type: contentType, format, style_dna: dna, source, account_id, target_platforms })
       nav('/queue')
     } catch (e) { alert(e.message) } finally { setCreating(false) }
   }
@@ -57,6 +77,29 @@ export default function RemixEngine() {
             <div>
               <label className="text-xs text-text-muted">Tema do novo vídeo</label>
               <input className="input mt-1" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Ex: A história do navio fantasma" />
+              {dna?.suggested_theme && <p className="text-[11px] text-accent mt-1">✨ Tema detectado automaticamente do vídeo — edite se quiser</p>}
+            </div>
+            <div>
+              <label className="text-xs text-text-muted">Tipo de conteúdo</label>
+              <select className="input mt-1" value={contentType} onChange={(e) => setContentType(e.target.value)}>
+                {contentTypes.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
+              </select>
+              <p className="text-[11px] text-text-muted mt-1">O vídeo será SOBRE este tema/tipo. O estilo da referência (cor, ritmo, música) é aplicado por cima.</p>
+            </div>
+            <div>
+              <label className="text-xs text-text-muted">Formato</label>
+              <div className="flex gap-2 mt-1">
+                {[
+                  { v: 'long', label: '🖥️ Longo', hint: '16:9' },
+                  { v: 'short', label: '📱 Shorts', hint: '9:16' },
+                ].map((f) => (
+                  <button key={f.v} type="button" onClick={() => setFormat(f.v)}
+                    className={`flex-1 rounded-card border p-2 text-left text-xs transition-colors ${format === f.v ? 'border-accent bg-accent/15 text-text-primary' : 'border-border text-text-muted hover:bg-elevated'}`}>
+                    <div className="font-semibold">{f.label}</div>
+                    <div className="text-[10px] opacity-70">{f.hint}</div>
+                  </button>
+                ))}
+              </div>
             </div>
             <div>
               <label className="text-xs text-text-muted">Conta de destino — opcional</label>

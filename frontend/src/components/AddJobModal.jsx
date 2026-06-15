@@ -10,7 +10,7 @@ const FALLBACK_CONTENT_TYPES = [
 const PLATFORMS = ['youtube', 'tiktok', 'instagram']
 
 export default function AddJobModal({ open, onClose, onCreated }) {
-  const [form, setForm] = useState({ title: '', topic: '', content_type: 'film_recap_ai_images', target_platforms: ['youtube'], account_id: '' })
+  const [form, setForm] = useState({ title: '', topic: '', content_type: 'film_recap_ai_images', format: 'long', target_platforms: ['youtube'], account_id: '' })
   const [accounts, setAccounts] = useState([])
   const [contentTypes, setContentTypes] = useState(FALLBACK_CONTENT_TYPES)
   const [busy, setBusy] = useState(false)
@@ -36,13 +36,13 @@ export default function AddJobModal({ open, onClose, onCreated }) {
     try {
       const account_id = form.account_id ? Number(form.account_id) : null
       if (themes.length === 1) {
-        await api.post('/jobs', { title: themes[0], topic: form.topic, content_type: form.content_type, target_platforms: form.target_platforms, account_id })
+        await api.post('/jobs', { title: themes[0], topic: form.topic, content_type: form.content_type, format: form.format, target_platforms: form.target_platforms, account_id })
       } else {
-        await api.post('/jobs/batch', { themes, content_type: form.content_type, target_platforms: form.target_platforms, account_id })
+        await api.post('/jobs/batch', { themes, content_type: form.content_type, format: form.format, target_platforms: form.target_platforms, account_id })
       }
       onCreated?.()
       onClose()
-      setForm({ title: '', topic: '', content_type: 'film_recap_ai_images', target_platforms: ['youtube'], account_id: '' })
+      setForm({ title: '', topic: '', content_type: 'film_recap_ai_images', format: 'long', target_platforms: ['youtube'], account_id: '' })
     } catch (e) { alert(e.message) } finally { setBusy(false) }
   }
 
@@ -61,6 +61,21 @@ export default function AddJobModal({ open, onClose, onCreated }) {
             <select className="input mt-1" value={form.content_type} onChange={(e) => setForm({ ...form, content_type: e.target.value })}>
               {contentTypes.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
             </select>
+          </div>
+          <div>
+            <label className="text-xs text-text-muted">Formato</label>
+            <div className="flex gap-2 mt-1">
+              {[
+                { v: 'long', label: '🖥️ Vídeo longo', hint: '16:9 • YouTube' },
+                { v: 'short', label: '📱 Shorts', hint: '9:16 • TikTok/Reels/Shorts' },
+              ].map((f) => (
+                <button key={f.v} type="button" onClick={() => setForm({ ...form, format: f.v })}
+                  className={`flex-1 rounded-card border p-2 text-left text-xs transition-colors ${form.format === f.v ? 'border-accent bg-accent/15 text-text-primary' : 'border-border text-text-muted hover:bg-elevated'}`}>
+                  <div className="font-semibold">{f.label}</div>
+                  <div className="text-[10px] opacity-70">{f.hint}</div>
+                </button>
+              ))}
+            </div>
           </div>
           <div>
             <label className="text-xs text-text-muted">Plataformas</label>

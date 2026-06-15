@@ -20,7 +20,15 @@ from backend.database import SessionLocal
 from backend.events import publish_event
 from backend.models import JobStatus, PlatformAccount, VideoJob
 
+from backend.agents.research import ResearchAgent
 from backend.agents.scriptwriter import ScriptwriterAgent
+from backend.agents.growth import (
+    HookOptimizerAgent,
+    RetentionEngineerAgent,
+    PackagingStrategistAgent,
+    ShortsHookAgent,
+    ShortsStrategistAgent,
+)
 from backend.agents.narrator import NarratorAgent
 from backend.agents.visuals import VisualsAgent
 from backend.agents.editing_director import EditingDirectorAgent
@@ -54,6 +62,9 @@ async def run_pipeline(job_id: int) -> dict:
                 voice = acct.preferred_voice or voice
                 language = acct.content_language or language
         ctx["target_platforms"] = job.target_platforms or ["youtube", "tiktok", "instagram"]
+        ctx["format"] = getattr(job, "video_format", "long") or "long"  # long(16:9) | short(9:16)
+        if job.style_dna:
+            ctx["style_dna"] = job.style_dna  # remix: editing_director wears its style
 
         def upd(status=None, progress=None, agent=None, **extra):
             if status is not None:
@@ -69,12 +80,32 @@ async def run_pipeline(job_id: int) -> dict:
                       progress=job.progress, current_agent=job.current_agent)
 
         try:
-            upd(status=JobStatus.PROCESSING, progress=3, agent="scriptwriter")
+            upd(status=JobStatus.PROCESSING, progress=3, agent="research")
+
+            # Ground factual topics in real sources BEFORE writing, so narration
+            # states true facts instead of hallucinating (e.g. a fake match result).
+            research = await ResearchAgent(job_id, ctx).execute(
+                title=job.title, topic=job.topic, content_type=job.content_type,
+            )
+            upd(progress=10, agent="scriptwriter")
 
             script = await ScriptwriterAgent(job_id, ctx).execute(
                 title=job.title, topic=job.topic, mode=job.mode,
                 content_type=job.content_type, style_dna=job.style_dna, language=language,
+                research=research, video_format=ctx["format"],
             )
+            job.script = script
+            job.content_type = script.get("content_type", job.content_type)
+
+            # Growth agents — engineer the video to win the algorithm BEFORE it's
+            # narrated (so the hook/CTA are actually spoken) and packaged.
+            upd(progress=30, agent="hook_optimizer")
+            script = await HookOptimizerAgent(job_id, ctx).execute(script=script)
+            upd(progress=33, agent="retention_engineer")
+            script = await RetentionEngineerAgent(job_id, ctx).execute(script=script)
+            upd(progress=36, agent="packaging_strategist")
+            await PackagingStrategistAgent(job_id, ctx).execute(
+                script=script, target_platforms=ctx.get("target_platforms"))
             job.script = script
             job.content_type = script.get("content_type", job.content_type)
             upd(progress=40, agent="narrator")
@@ -101,8 +132,22 @@ async def run_pipeline(job_id: int) -> dict:
             job.main_video_path = main.get("main_video_path")
             upd(progress=82, agent="shorts_factory")
 
-            await ShortsFactoryAgent(job_id, ctx).execute()
-            job.shorts_paths = [s["path"] for s in ctx.get("shorts", [])]
+            if ctx["format"] == "short":
+                # Native vertical short: the rendered main video IS the short. Skip
+                # the long->short factory; register it so the shorts agents annotate it.
+                main_path = main.get("main_video_path")
+                ctx["shorts"] = [{"num": 1, "name": "native", "path": main_path,
+                                  "length": main.get("duration"), "from_start": True}]
+                job.shorts_paths = [main_path] if main_path else []
+            else:
+                await ShortsFactoryAgent(job_id, ctx).execute()
+                job.shorts_paths = [s["path"] for s in ctx.get("shorts", [])]
+
+            # Shorts specialists — hook overlay + per-platform publish package.
+            upd(progress=83, agent="shorts_hook")
+            await ShortsHookAgent(job_id, ctx).execute()
+            upd(progress=84, agent="shorts_strategist")
+            await ShortsStrategistAgent(job_id, ctx).execute()
             upd(progress=86, agent="seo_agent")
 
             seo = await SEOAgent(job_id, ctx).execute(language=language)
@@ -127,6 +172,7 @@ async def run_pipeline(job_id: int) -> dict:
             job.thumbnail_path = thumbs.get("A", {}).get("landscape")
 
             # Keep stored context lean (heavy arrays live in their JSON files on disk).
+            research = ctx.get("research", {}) or {}
             job.video_context = {
                 "qc": qc,
                 "compliance": comp,
@@ -134,6 +180,16 @@ async def run_pipeline(job_id: int) -> dict:
                 "caption_style": cap_style,
                 "narration_duration": ctx.get("narration", {}).get("total_duration"),
                 "scene_sources": [a.get("source") for a in ctx.get("visuals", {}).get("scene_assets", [])],
+                "research_grounded": research.get("grounded", False),
+                "research_sources": research.get("sources", [])[:6],
+                "packaging": ctx.get("packaging", {}),
+                "shorts_meta": [
+                    {"num": s.get("num"), "name": s.get("name"), "path": s.get("path"),
+                     "length": s.get("length"), "hook_overlay": s.get("hook_overlay"),
+                     "recommended": s.get("recommended"), "captions": s.get("captions"),
+                     "hashtags": s.get("hashtags")}
+                    for s in ctx.get("shorts", [])
+                ],
             }
             upd(status=JobStatus.AWAITING_APPROVAL, progress=100, agent=None, approval_status="pending")
             _emit_job(job_id, status="awaiting_approval", qc=qc, compliance=comp)

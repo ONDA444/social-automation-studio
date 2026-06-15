@@ -14,12 +14,16 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from pathlib import Path
 
 import edge_tts
+import httpx
 
 from backend.agents.base_agent import BaseAgent
 from backend.config import settings
+
+LMNT_BYTES_URL = "https://api.lmnt.com/v1/ai/speech/bytes"
 
 # rate per template family
 RATE_BY_CONTENT = {
@@ -87,6 +91,68 @@ class NarratorAgent(BaseAgent):
         return payload
 
     async def _synthesize(self, text: str, voice: str, rate: str, audio_path: Path):
+        """Provider chain: LMNT (your cloned voice) -> edge-tts fallback."""
+        use_lmnt = (settings.lmnt_api_key and settings.lmnt_voice
+                    and (settings.tts_provider or "auto").lower() in ("auto", "lmnt"))
+        if use_lmnt:
+            try:
+                self.emit("progress", f"Sintetizando voz LMNT ({settings.lmnt_voice})", progress=45)
+                return await self._synthesize_lmnt(text, rate, audio_path)
+            except Exception as exc:  # noqa: BLE001
+                self.emit("progress", f"LMNT falhou ({exc}); usando edge-tts", progress=45)
+        return await self._synthesize_edge(text, voice, rate, audio_path)
+
+    async def _synthesize_lmnt(self, text: str, rate: str, audio_path: Path):
+        """LMNT official API. Word timings are distributed proportionally over the
+        real audio length (good enough for caption sync; no source voice cloned)."""
+        speed = self._rate_to_speed(rate)
+        payload = {
+            "voice": settings.lmnt_voice,
+            "text": text,
+            "format": "mp3",
+            "sample_rate": 24000,
+            "language": (settings.default_language or "pt-BR").split("-")[0],
+            "speed": speed,
+        }
+        async with httpx.AsyncClient(timeout=180) as client:
+            r = await client.post(LMNT_BYTES_URL, json=payload,
+                                  headers={"X-API-Key": settings.lmnt_api_key})
+            r.raise_for_status()
+            if not r.content or len(r.content) < 1000:
+                raise RuntimeError("áudio LMNT vazio")
+            audio_path.write_bytes(r.content)
+        total = self._probe_duration(audio_path)
+        if total <= 0:
+            # Bytes were written OK but the probe failed (ffmpeg/pydub quirk). Estimate
+            # from word count (~2.5 wps) instead of throwing away the premium render.
+            total = max(1.0, len(text.split()) / 2.5)
+            self.emit("progress", "LMNT: duração estimada (probe indisponível)", progress=45)
+        return self._proportional_words(text, total), round(total, 3)
+
+    @staticmethod
+    def _rate_to_speed(rate: str) -> float:
+        """'+15%' -> 1.15, '-10%' -> 0.9, '+0%' -> 1.0 (LMNT accepts 0.25–2.0)."""
+        try:
+            pct = int(rate.replace("%", "").replace("+", ""))
+        except (ValueError, AttributeError):
+            pct = 0
+        return max(0.25, min(2.0, 1.0 + pct / 100.0))
+
+    @staticmethod
+    def _proportional_words(text: str, total: float) -> list[dict]:
+        raw = text.split()
+        if not raw:
+            return []
+        weights = [max(1, len(w)) for w in raw]
+        tot = sum(weights)
+        words, t = [], 0.0
+        for w, wt in zip(raw, weights):
+            d = total * wt / tot
+            words.append({"word": w, "start": round(t, 3), "end": round(t + d, 3)})
+            t += d
+        return words
+
+    async def _synthesize_edge(self, text: str, voice: str, rate: str, audio_path: Path):
         # edge-tts >=7 defaults to SentenceBoundary; we need word-level for captions.
         communicate = edge_tts.Communicate(text, voice, rate=rate, boundary="WordBoundary")
         words: list[dict] = []
@@ -136,7 +202,8 @@ class NarratorAgent(BaseAgent):
             from pydub import AudioSegment
 
             return len(AudioSegment.from_file(path)) / 1000.0
-        except Exception:
+        except Exception as exc:  # noqa: BLE001
+            logging.getLogger("studio.narrator").debug("probe_duration failed for %s: %s", path, exc)
             return 0.0
 
 

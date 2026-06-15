@@ -13,6 +13,8 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -28,20 +30,71 @@ class AnalyzerAgent(BaseAgent):
             raise ValueError("source (URL ou caminho) é obrigatório")
         self.emit("progress", "Analisando referência (apenas estilo)", progress=10)
         dna = await asyncio.to_thread(self._analyze, source)
+        # Auto-detect the reference's TOPIC (legal: from public metadata only) so the
+        # Remix UI can pre-fill the theme — no frame/audio/clip is reused.
+        dna["suggested_theme"] = await self._suggest_theme()
+        dna["suggested_format"] = "short" if dna.get("aspect_ratio") in ("9:16", "1:1") else "long"
         self.ctx_set("style_dna", dna)
         self.emit("progress", f"StyleDNA pronto: {dna['content_type']}", progress=100)
         return dna
 
+    async def _suggest_theme(self) -> str:
+        """Turn the reference's title/description (yt-dlp metadata) into a clean PT
+        theme for a NEW, original video on the same subject. Metadata only."""
+        meta = getattr(self, "_ref_meta", {}) or {}
+        title = (meta.get("title") or "").strip()
+        desc = (meta.get("description") or "").strip()
+        if not title and not desc:
+            return ""
+        try:
+            from backend import llm
+
+            prompt = (
+                "Com base no título/descrição de um vídeo de referência abaixo, escreva em "
+                "PORTUGUÊS um TEMA curto (máx. 12 palavras) para um NOVO vídeo original sobre o "
+                "MESMO assunto. Responda só o tema, sem aspas.\n\n"
+                f"Título: {title}\nDescrição: {desc[:500]}"
+            )
+            theme = await llm.complete(prompt, system="Responda apenas o tema, curto.", max_tokens=60)
+            return (theme or "").strip().strip('"').splitlines()[0][:120]
+        except Exception:
+            return title[:120]
+
     def _analyze(self, source: str) -> dict:
+        self._ref_meta = {}
         ref = self._resolve(source)
         if not ref or not Path(ref).exists():
             return self._heuristic_dna(reason="download_failed")
 
         meta = self._probe(ref)
-        frames = self._extract_frames(ref, meta.get("duration", 0))
-        visual = self._visual(frames)
+        frames, frames_dir = self._extract_frames(ref, meta.get("duration", 0))
+        try:
+            visual = self._visual(frames)
+        finally:
+            shutil.rmtree(frames_dir, ignore_errors=True)  # isolate + clean per analysis
         audio = self._audio(ref)
-        return self._build_dna(meta, visual, audio)
+        shot_rate = self._shot_rate(ref, meta.get("duration", 0))
+        return self._build_dna(meta, visual, audio, measured_clip=shot_rate)
+
+    @staticmethod
+    def _shot_rate(path: str, duration: float) -> float | None:
+        """Average shot length (s) via ffmpeg scene-cut detection on the first 90s.
+        Captures the reference's CUTTING RHYTHM only — no frame is reused."""
+        try:
+            # -t before nothing-seek + downscale + -an keeps this cheap; timeout guards
+            # pathological/streaming inputs. 60s of cuts is plenty to estimate rhythm.
+            out = subprocess.run(
+                ["ffmpeg", "-i", path, "-t", "60", "-an",
+                 "-vf", "scale=480:-2,select='gt(scene,0.3)',showinfo", "-f", "null", "-"],
+                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120,
+            )
+            cuts = (out.stderr or "").count("pts_time:")
+            window = min(60.0, duration or 60.0)
+            if cuts >= 2 and window > 0:
+                return round(max(1.2, min(8.0, window / cuts)), 2)
+        except Exception:
+            pass
+        return None
 
     # ---- acquire ----
     def _resolve(self, source: str) -> str | None:
@@ -54,8 +107,14 @@ class AnalyzerAgent(BaseAgent):
         cache.mkdir(parents=True, exist_ok=True)
         key = hashlib.md5(url.encode()).hexdigest()[:12]
         out_tmpl = str(cache / f"{key}.%(ext)s")
-        existing = list(cache.glob(f"{key}.*"))
+        meta_path = cache / f"{key}.meta.json"
+        existing = [p for p in cache.glob(f"{key}.*") if p.suffix != ".json"]
         if existing:
+            if meta_path.exists():
+                try:
+                    self._ref_meta = json.loads(meta_path.read_text(encoding="utf-8"))
+                except Exception:
+                    pass
             return str(existing[0])
         try:
             import yt_dlp  # type: ignore
@@ -63,8 +122,15 @@ class AnalyzerAgent(BaseAgent):
             opts = {"format": "best[height<=480]/best", "outtmpl": out_tmpl,
                     "quiet": True, "no_warnings": True, "noplaylist": True}
             with yt_dlp.YoutubeDL(opts) as ydl:
-                ydl.download([url])
-            found = list(cache.glob(f"{key}.*"))
+                info = ydl.extract_info(url, download=True) or {}
+            # Public metadata only (title/description) — used to suggest a theme.
+            self._ref_meta = {"title": info.get("title", "") or "",
+                              "description": (info.get("description") or "")[:1000]}
+            try:
+                meta_path.write_text(json.dumps(self._ref_meta, ensure_ascii=False), encoding="utf-8")
+            except Exception:
+                pass
+            found = [p for p in cache.glob(f"{key}.*") if p.suffix != ".json"]
             return str(found[0]) if found else None
         except Exception as exc:  # noqa: BLE001
             self.emit("progress", f"yt-dlp indisponível/falhou: {exc}", progress=10)
@@ -102,8 +168,11 @@ class AnalyzerAgent(BaseAgent):
         return "16:9"
 
     # ---- frames + colour ----
-    def _extract_frames(self, path: str, duration: float) -> list[Path]:
-        tmp = settings.abs_path(settings.temp_dir) / "remix_frames"
+    def _extract_frames(self, path: str, duration: float) -> tuple[list[Path], Path]:
+        # Unique per-call dir (md5(source)+pid) so concurrent /remix analyses can't
+        # read each other's frames into one StyleDNA. Cleaned by the caller.
+        key = hashlib.md5(f"{path}:{os.getpid()}".encode()).hexdigest()[:12]
+        tmp = settings.abs_path(settings.temp_dir) / "remix_frames" / key
         tmp.mkdir(parents=True, exist_ok=True)
         frames = []
         n = 12
@@ -114,12 +183,12 @@ class AnalyzerAgent(BaseAgent):
             try:
                 subprocess.run(["ffmpeg", "-y", "-ss", f"{ts:.2f}", "-i", path,
                                 "-frames:v", "1", "-q:v", "3", str(dst)],
-                               capture_output=True)
+                               capture_output=True, timeout=30)
                 if dst.exists():
                     frames.append(dst)
             except Exception:
                 continue
-        return frames
+        return frames, tmp
 
     def _visual(self, frames: list[Path]) -> dict:
         from PIL import Image, ImageStat
@@ -191,9 +260,11 @@ class AnalyzerAgent(BaseAgent):
                     "music_mood": "dramatic", "energy": 0.5}
 
     # ---- assemble ----
-    def _build_dna(self, meta: dict, visual: dict, audio: dict) -> dict:
+    def _build_dna(self, meta: dict, visual: dict, audio: dict, measured_clip: float | None = None) -> dict:
         content_type = self._infer_type(meta, audio)
-        avg_clip = 2.5 if content_type == "sports_highlights" else (4.5 if content_type == "film_recap_ai_images" else 5.0)
+        avg_clip = measured_clip or (
+            2.5 if content_type == "sports_highlights"
+            else (4.5 if content_type == "film_recap_ai_images" else 5.0))
         return {
             "content_type": content_type,
             "aspect_ratio": meta["aspect_ratio"],
@@ -210,7 +281,8 @@ class AnalyzerAgent(BaseAgent):
             "text_overlay": {"present": True, "position": "bottom", "font_size_estimate": "large"},
             "pacing": {"avg_clip_duration": avg_clip,
                        "style": "fast" if avg_clip < 3 else ("medium" if avg_clip < 5 else "slow"),
-                       "beat_sync": content_type != "quote_viral"},
+                       "beat_sync": content_type != "quote_viral",
+                       "shots_measured": bool(measured_clip)},
             "audio": {"has_narration": audio["has_narration"], "has_music": audio["has_music"],
                       "bpm_estimate": audio.get("bpm_estimate"), "music_mood": audio["music_mood"]},
             "effects": [visual["grading_style"]] + (["vignette"] if visual["has_vignette"] else []),

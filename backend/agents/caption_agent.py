@@ -150,17 +150,24 @@ class CaptionAgent(BaseAgent):
 
     def _header(self, style: str) -> str:
         p = STYLE_PRESETS.get(style, STYLE_PRESETS["bold_impact"])
-        # Alignment 2 = bottom-center. MarginV lifts captions off the edge.
+        # Match the render frame so captions aren't stretched/mis-placed: vertical
+        # 9:16 for Shorts, else 16:9. Vertical lifts captions higher (MarginV) so
+        # they clear the bottom platform UI, and enlarges the font a touch.
+        vertical = (self.ctx_get("format") or "long") == "short"
+        rw, rh = (1080, 1920) if vertical else (1920, 1080)
+        margin_v = 420 if vertical else 90
+        size = int(p["size"] * (1.25 if vertical else 1.0))
+        # Alignment 2 = bottom-center.
         return (
             "[Script Info]\n"
             "ScriptType: v4.00+\n"
-            "PlayResX: 1920\nPlayResY: 1080\nWrapStyle: 0\n\n"
+            f"PlayResX: {rw}\nPlayResY: {rh}\nWrapStyle: 0\n\n"
             "[V4+ Styles]\n"
             "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, "
             "BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, "
             "BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n"
-            f"Style: Default,{p['font']},{p['size']},{p['primary']},&H000000FF,&H00000000,"
-            f"{p['back']},{p['bold']},0,0,0,100,100,0,0,{p['border']},{p['outline']},1,2,80,80,90,1\n\n"
+            f"Style: Default,{p['font']},{size},{p['primary']},&H000000FF,&H00000000,"
+            f"{p['back']},{p['bold']},0,0,0,100,100,0,0,{p['border']},{p['outline']},1,2,80,80,{margin_v},1\n\n"
             "[Events]\n"
             "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
         )

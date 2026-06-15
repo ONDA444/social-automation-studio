@@ -31,6 +31,10 @@ class Settings(BaseSettings):
     groq_api_key: str = ""
     gemini_api_key: str = ""
     ollama_host: str = "http://localhost:11434"
+    # Ground factual topics (sports/news/events) in real web sources via Gemini +
+    # Google Search before scripting, so narration states TRUE facts (real score,
+    # date, names) instead of hallucinating. Needs GEMINI_API_KEY.
+    research_enabled: bool = True
 
     # ---- Visual / B-roll ----
     pexels_api_key: str = ""
@@ -39,6 +43,18 @@ class Settings(BaseSettings):
     # Pollinations now gates anonymous access (x402). A free token from
     # https://enter.pollinations.ai re-enables it; blank = skip Pollinations.
     pollinations_token: str = ""
+    # Prefer REAL licensed stock VIDEO (Pexels/Pixabay) over AI stills so the
+    # output looks like motion footage, not "still image + narration". When no
+    # clip matches a scene, the agent falls back to an AI image (Ken Burns).
+    broll_enabled: bool = True
+    broll_max_width: int = 1920          # cap download resolution (avoid huge 4k files)
+
+    # ---- Premium TTS (LMNT voice clone) ----
+    # Your own/licensed LMNT voice, used through LMNT's official API. Set BOTH
+    # keys to switch narration from edge-tts to LMNT; blank = keep edge-tts.
+    lmnt_api_key: str = ""
+    lmnt_voice: str = ""                 # LMNT voice id (Voices tab in app.lmnt.com)
+    tts_provider: str = "auto"           # auto = LMNT when configured, else edge-tts
 
     # ---- YouTube ----
     google_client_id: str = ""

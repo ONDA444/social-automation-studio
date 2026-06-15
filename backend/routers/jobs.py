@@ -25,6 +25,7 @@ router = APIRouter(prefix="/jobs", tags=["jobs"])
 # the agents' per-type configs and the frontend select never drift apart.
 CONTENT_TYPES = CONTENT_TYPE_KEYS
 MODES = {"from_title", "from_remix", "from_idea"}
+VIDEO_FORMATS = {"long", "short"}
 
 
 class JobCreate(BaseModel):
@@ -32,6 +33,7 @@ class JobCreate(BaseModel):
     topic: str | None = None
     mode: str = "from_title"
     content_type: str = "film_recap_ai_images"
+    format: str = "long"  # long (16:9) | short (9:16 vertical nativo)
     account_id: int | None = None
     reference_url: str | None = None
     target_platforms: list[str] = Field(default_factory=lambda: ["youtube"])
@@ -41,6 +43,7 @@ class JobCreate(BaseModel):
 class JobBatchCreate(BaseModel):
     themes: list[str] = Field(default_factory=list)
     content_type: str = "film_recap_ai_images"
+    format: str = "long"
     target_platforms: list[str] = Field(default_factory=lambda: ["youtube"])
     account_id: int | None = None
 
@@ -81,6 +84,8 @@ def _validate(payload: JobCreate) -> None:
         raise HTTPException(400, f"content_type inválido: {payload.content_type}")
     if payload.mode not in MODES:
         raise HTTPException(400, f"mode inválido: {payload.mode}")
+    if payload.format not in VIDEO_FORMATS:
+        raise HTTPException(400, f"format inválido: {payload.format}")
 
 
 def _require_account(db: Session, account_id: int | None) -> None:
@@ -120,6 +125,7 @@ def create_job(payload: JobCreate, db: Session = Depends(get_db)):
         topic=payload.topic,
         mode=payload.mode,
         content_type=payload.content_type,
+        video_format=payload.format,
         account_id=payload.account_id,
         reference_url=payload.reference_url,
         target_platforms=payload.target_platforms,
@@ -139,6 +145,8 @@ def create_jobs_batch(payload: JobBatchCreate, db: Session = Depends(get_db)):
     the in-process semaphore serializes them automatically."""
     if payload.content_type not in CONTENT_TYPES:
         raise HTTPException(400, f"content_type inválido: {payload.content_type}")
+    if payload.format not in VIDEO_FORMATS:
+        raise HTTPException(400, f"format inválido: {payload.format}")
     _require_account(db, payload.account_id)
 
     themes = [t.strip() for t in payload.themes if t and t.strip()][:200]
@@ -149,6 +157,7 @@ def create_jobs_batch(payload: JobBatchCreate, db: Session = Depends(get_db)):
             title=theme,
             topic=theme,
             content_type=payload.content_type,
+            video_format=payload.format,
             account_id=payload.account_id,
             target_platforms=payload.target_platforms,
             status=JobStatus.QUEUED,

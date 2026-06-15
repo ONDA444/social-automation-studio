@@ -110,6 +110,12 @@ def _recover_orphan_jobs() -> None:
 @app.on_event("startup")
 async def _on_startup() -> None:
     settings.ensure_dirs()
+    try:
+        from backend.database import ensure_columns
+
+        ensure_columns()  # idempotent: adds new columns (e.g. video_format) to old DBs
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("ensure_columns falhou: %s", exc)
     _recover_orphan_jobs()
     events.set_main_loop(asyncio.get_running_loop())
     # Best-effort live-event relay; no-op if Redis is down.

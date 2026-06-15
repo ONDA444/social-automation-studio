@@ -220,6 +220,7 @@ def _job_consume_themes() -> None:
                         title=theme.theme,
                         topic=theme.theme,
                         content_type=theme.content_type or "film_recap_ai_images",
+                        video_format=getattr(theme, "video_format", "long") or "long",
                         target_platforms=theme.target_platforms or ["youtube"],
                         account_id=acct.id,
                         status=JobStatus.QUEUED,

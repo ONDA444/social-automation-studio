@@ -122,18 +122,30 @@ class ScriptwriterAgent(BaseAgent):
         content_type: str = "film_recap_ai_images",
         style_dna: dict | None = None,
         language: str | None = None,
+        research: dict | None = None,
+        video_format: str = "long",
         **_,
     ) -> dict:
         language = language or settings.default_language
         content_type = content_type if content_type in TEMPLATE_GUIDE else "film_recap_ai_images"
         theme = topic or title
+        research = research or self.ctx_get("research") or {}
+        video_format = video_format or self.ctx_get("format") or "long"
 
-        self.emit("progress", f"Gerando roteiro ({content_type}, modo={mode})", progress=20)
+        self.emit("progress", f"Gerando roteiro ({content_type}, {video_format}, modo={mode})", progress=20)
 
         try:
-            script = await self._via_llm(theme, title, mode, content_type, style_dna, language)
+            script = await self._via_llm(theme, title, mode, content_type, style_dna, language, research, video_format)
         except llm.LLMUnavailable:
             self.emit("progress", "Sem LLM disponível — usando roteiro offline (placeholder)", progress=30)
+            script = self._offline(theme, title, content_type, language)
+
+        # Harden the most failure-prone seam: a syntactically-valid LLM JSON whose
+        # "scenes" is the wrong shape (null / list of strings / dict) would crash the
+        # normalization loop below. Coerce to the offline template instead of aborting.
+        sc_list = script.get("scenes") if isinstance(script, dict) else None
+        if not (isinstance(sc_list, list) and sc_list and all(isinstance(s, dict) for s in sc_list)):
+            self.emit("progress", "Roteiro LLM com 'scenes' inválido — usando offline", progress=30)
             script = self._offline(theme, title, content_type, language)
 
         # Normalise / derive fields.
@@ -157,11 +169,21 @@ class ScriptwriterAgent(BaseAgent):
         script.setdefault("estimated_duration", self._estimate_duration(script, content_type))
         script.setdefault("seo_keywords", script.get("seo_keywords", []))
 
+        # Native short: keep it tight (vertical <60s). Cap scenes and recompute.
+        script["format"] = video_format
+        if video_format == "short" and len(scenes) > 6:
+            scenes = scenes[:6]
+            script["scenes"] = scenes
+            if content_type != "quote_viral":
+                script["narration_text"] = " ".join(
+                    s.get("narration", "") for s in scenes if s.get("narration")).strip()
+            script["estimated_duration"] = self._estimate_duration(script, content_type)
+
         self.ctx_set("script", script)
-        self.emit("progress", f"Roteiro pronto: {len(scenes)} cena(s)", progress=40)
+        self.emit("progress", f"Roteiro pronto: {len(scenes)} cena(s) [{video_format}]", progress=40)
         return script
 
-    async def _via_llm(self, theme, title, mode, content_type, style_dna, language) -> dict:
+    async def _via_llm(self, theme, title, mode, content_type, style_dna, language, research=None, video_format="long") -> dict:
         guide = TEMPLATE_GUIDE[content_type]
         style_hint = ""
         if mode == "from_remix" and style_dna:
@@ -171,10 +193,41 @@ class ScriptwriterAgent(BaseAgent):
                 f"mood={style_dna.get('audio', {}).get('music_mood')}, "
                 f"content_type={style_dna.get('content_type')}."
             )
+
+        facts = (research or {}).get("facts", "").strip()
+        if (research or {}).get("grounded") and facts:
+            facts_block = (
+                "\n\n=== FATOS VERIFICADOS (FONTE DA VERDADE) ===\n"
+                "Baseie TODA a narração SOMENTE nestes fatos reais. É TERMINANTEMENTE "
+                "PROIBIDO inventar placares, datas, nomes, números ou resultados. Se "
+                "uma informação não estiver aqui, NÃO a afirme.\n" + facts + "\n"
+                "=== FIM DOS FATOS ===\n"
+            )
+        else:
+            facts_block = (
+                "\n\n[ATENÇÃO] SEM FATOS VERIFICADOS para este tema. É PROIBIDO inventar "
+                "resultados, placares, datas, nomes, números ou dizer que algo 'aconteceu "
+                "hoje/ontem'. Se o tema pede um resultado/evento recente que você NÃO pode "
+                "confirmar, não finja saber: fale da expectativa, do contexto e da importância "
+                "de forma geral e atemporal, deixando claro que o desfecho não é afirmado.\n"
+            )
+
+        if video_format == "short":
+            length_block = (
+                "FORMATO: SHORT VERTICAL 9:16. Seja MUITO conciso: 4 a 6 cenas, 25 a 45 "
+                "SEGUNDOS no total. Gancho imediato no 1º segundo, ritmo rápido, frases "
+                "curtas e punchy. Corte tudo que não prende. (Ignore a duração-alvo longa acima.)"
+            )
+        else:
+            length_block = (
+                "IMPORTANTE (duração): gere o roteiro COMPLETO atingindo a contagem de "
+                "palavras/cenas alvo do tipo acima — vídeos curtos demais são rejeitados. Não resuma."
+            )
         prompt = f"""Tema: "{theme}"
 Modo: {mode}
 
-{guide}{style_hint}
+{guide}{style_hint}{facts_block}
+{length_block}
 
 Responda com JSON neste formato EXATO:
 {{
@@ -187,10 +240,16 @@ Responda com JSON neste formato EXATO:
   "on_screen_text": ["..."],
   "seo_keywords": ["...", "..."]
 }}
-Para film_recap_ai_images preencha visual_prompt; para sports_highlights e quote_viral
-preencha visual_query; quote_viral deixa narration vazio e usa on_screen_text."""
+REGRA DOS VISUAIS (importante — o sistema usa VÍDEO real de stock):
+- Em TODA cena preencha "visual_query": 2-5 palavras-chave CONCRETAS em inglês de
+  algo REAL e filmável (lugares, objetos, ações, natureza), ex.: "soccer stadium
+  night crowd", "rain city street neon", "old book candle close up". Evite nomes
+  próprios/marcas e conceitos abstratos (eles não retornam stock footage).
+- Preencha também "visual_prompt" (descrição cinematográfica em inglês) — é o
+  fallback de imagem IA quando não houver clipe de vídeo para a cena.
+- quote_viral deixa "narration" vazio e usa "on_screen_text"."""
         system = SYSTEM.format(lang=language)
-        return await llm.complete_json(prompt, system=system, max_tokens=3000)
+        return await llm.complete_json(prompt, system=system, max_tokens=4000)
 
     # ---- Offline deterministic fallback (no API keys needed) ----
     def _offline(self, theme: str, title: str, content_type: str, language: str) -> dict:
@@ -213,6 +272,20 @@ preencha visual_query; quote_viral deixa narration vazio e usa on_screen_text.""
 
         is_sport = content_type == "sports_highlights"
         n = 6 if is_sport else 9
+        # Concrete, filmable b-roll terms so the offline path still pulls real
+        # stock video (rotated per scene); paired with the theme for relevance.
+        broll_terms = [
+            "city skyline aerial", "slow motion crowd", "dramatic clouds time lapse",
+            "ocean waves close up", "person walking street", "forest light rays",
+            "old documents close up", "stadium lights night", "rain window night",
+        ]
+        # English-only sports terms (the user's title/theme is usually Portuguese and
+        # may carry proper nouns that zero-out English-indexed stock engines).
+        sport_terms = [
+            "soccer stadium crowd night", "slow motion goal celebration",
+            "football players running pitch", "stadium floodlights fans",
+            "soccer ball net close up", "fans cheering stadium",
+        ]
         scenes = []
         beats = [
             ("Você não vai acreditar no que aconteceu com {t}.", True),
@@ -232,14 +305,14 @@ preencha visual_query; quote_viral deixa narration vazio e usa on_screen_text.""
                 scenes.append({
                     "narration": narration,
                     "visual_prompt": "",
-                    "visual_query": f"{theme} sports action stadium",
+                    "visual_query": sport_terms[i % len(sport_terms)],
                     "is_highlight": hi,
                 })
             else:
                 scenes.append({
                     "narration": narration,
                     "visual_prompt": f"cinematic dramatic scene about {theme}, photorealistic, 4k, moody lighting",
-                    "visual_query": "",
+                    "visual_query": broll_terms[i % len(broll_terms)],
                     "is_highlight": hi,
                 })
         return {

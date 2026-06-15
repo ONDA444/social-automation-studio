@@ -19,6 +19,7 @@ class ThemeCreate(BaseModel):
     account_id: int | None = None
     themes: list[str] = Field(default_factory=list)
     content_type: str = "film_recap_ai_images"
+    format: str = "long"  # long (16:9) | short (9:16 vertical nativo)
     target_platforms: list[str] = Field(default_factory=lambda: ["youtube"])
 
 
@@ -32,6 +33,8 @@ def create_themes(payload: ThemeCreate, db: Session = Depends(get_db)):
     """Create one ThemeQueue row per (trimmed, non-empty) theme, FIFO-ordered."""
     if payload.content_type not in CONTENT_TYPE_KEYS:
         raise HTTPException(400, f"content_type inválido: {payload.content_type}")
+    if payload.format not in {"long", "short"}:
+        raise HTTPException(400, f"format inválido: {payload.format}")
 
     if payload.account_id is not None:
         acct = db.get(PlatformAccount, payload.account_id)
@@ -53,6 +56,7 @@ def create_themes(payload: ThemeCreate, db: Session = Depends(get_db)):
                 account_id=payload.account_id,
                 theme=theme,
                 content_type=payload.content_type,
+                video_format=payload.format,
                 target_platforms=payload.target_platforms or ["youtube"],
                 status="pending",
                 position=base + offset,

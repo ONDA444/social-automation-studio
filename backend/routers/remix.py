@@ -22,6 +22,7 @@ class RemixCreate(BaseModel):
     source: str | None = None
     style_dna: dict | None = None
     content_type: str | None = None
+    format: str = "long"
     account_id: int | None = None
     target_platforms: list[str] = Field(default_factory=lambda: ["youtube"])
 
@@ -44,11 +45,16 @@ async def create_remix(payload: RemixCreate, db: Session = Depends(get_db)):
     if dna is None:
         raise HTTPException(400, "forneça 'source' ou 'style_dna'")
 
-    content_type = payload.content_type or dna.get("content_type", "film_recap_ai_images")
+    # The user's chosen content_type drives the CONTENT (what the video is about).
+    # The StyleDNA only drives STYLE (grade/pacing/music) — we must NOT force the
+    # reference's type onto an unrelated theme (a football reference was turning
+    # "Animated Heroes" into a soccer video). Default to a neutral narrative type.
+    content_type = payload.content_type or "film_recap_ai_images"
     job = VideoJob(
         title=payload.title,
         mode="from_remix",
         content_type=content_type,
+        video_format=payload.format if payload.format in ("long", "short") else "long",
         style_dna=dna,
         reference_url=payload.source,
         account_id=payload.account_id,

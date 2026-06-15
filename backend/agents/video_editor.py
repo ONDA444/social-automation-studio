@@ -67,6 +67,10 @@ class VideoEditorAgent(BaseAgent):
         if not scene_assets:
             raise FFmpegError("Nenhum asset de cena para editar.")
 
+        # Target frame: native vertical (9:16) for Shorts, else landscape (16:9).
+        fmt = (self.ctx_get("format") or script.get("format") or "long")
+        self.W, self.H = (1080, 1920) if fmt == "short" else (W, H)
+
         out_dir = self.job_dir(self.job_id, settings.abs_path(settings.output_dir))
         work = self.job_dir(self.job_id, settings.abs_path(settings.temp_dir)) / "edit"
         if work.exists():
@@ -83,7 +87,7 @@ class VideoEditorAgent(BaseAgent):
         )
 
         result = {"main_video_path": str(final_path), "duration": round(sum(durations), 2),
-                  "resolution": f"{W}x{H}", "fps": FPS}
+                  "resolution": f"{self.W}x{self.H}", "fps": FPS, "format": fmt}
         self.ctx_set("main_video", result)
         self.emit("progress", f"Vídeo principal pronto ({result['duration']}s)", progress=82)
         return result
@@ -151,7 +155,7 @@ class VideoEditorAgent(BaseAgent):
         _run(cmd, cwd=str(work))
 
     def _render_image_scene(self, src: str, dst: Path, dur: float, cam: str, color: str, atmos):
-        vf = fx.build_scene_filter(color, cam, dur, FPS, W, H, atmos)
+        vf = fx.build_scene_filter(color, cam, dur, FPS, self.W, self.H, atmos)
         cmd = ["ffmpeg", "-y", "-loop", "1", "-i", src, "-t", f"{dur:.3f}",
                "-vf", vf, "-r", str(FPS), *VENC, str(dst)]
         _run(cmd)
@@ -159,7 +163,7 @@ class VideoEditorAgent(BaseAgent):
     def _render_video_scene(self, src: str, dst: Path, dur: float, color: str, atmos):
         grade = fx.color_grade(color)
         atmos_frags = ",".join(filter(None, (fx.atmosphere(a) for a in atmos)))
-        chain = f"scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},{grade}"
+        chain = f"scale={self.W}:{self.H}:force_original_aspect_ratio=increase,crop={self.W}:{self.H},{grade}"
         if atmos_frags:
             chain += f",{atmos_frags}"
         chain += ",format=yuv420p,setsar=1"

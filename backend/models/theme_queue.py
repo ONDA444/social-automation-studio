@@ -25,6 +25,8 @@ class ThemeQueue(Base):
     content_type: Mapped[str] = mapped_column(
         String(60), default="film_recap_ai_images"
     )
+    # "long" | "short" — lets a channel be Shorts-only on autopilot.
+    video_format: Mapped[str] = mapped_column(String(20), default="long")
     target_platforms: Mapped[list] = mapped_column(
         JSON, default=lambda: ["youtube"]
     )
@@ -43,6 +45,7 @@ class ThemeQueue(Base):
             "account_id": self.account_id,
             "theme": self.theme,
             "content_type": self.content_type,
+            "format": self.video_format,
             "target_platforms": self.target_platforms or [],
             "status": self.status,
             "position": self.position,

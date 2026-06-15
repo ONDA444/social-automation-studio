@@ -6,6 +6,7 @@ import { useWebSocket } from './useWebSocket.js'
 
 import Dashboard from './pages/Dashboard.jsx'
 import Queue from './pages/Queue.jsx'
+import Shorts from './pages/Shorts.jsx'
 import Approvals from './pages/Approvals.jsx'
 import RemixEngine from './pages/RemixEngine.jsx'
 import Platforms from './pages/Platforms.jsx'
@@ -28,6 +29,7 @@ export default function App() {
             <Routes>
               <Route path="/" element={<Dashboard />} />
               <Route path="/queue" element={<Queue />} />
+              <Route path="/shorts" element={<Shorts />} />
               <Route path="/approvals" element={<Approvals />} />
               <Route path="/remix" element={<RemixEngine />} />
               <Route path="/platforms" element={<Platforms />} />

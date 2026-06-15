@@ -146,6 +146,7 @@ class EditingDirectorAgent(BaseAgent):
         content_type = script.get("content_type", content_type)
         self.emit("progress", "Definindo EditingPlan", progress=68)
 
+        style_dna = style_dna or self.ctx_get("style_dna")
         try:
             plan = await self._via_llm(script, style_dna, content_type)
             plan = self._sanitize(plan, content_type)
@@ -154,7 +155,26 @@ class EditingDirectorAgent(BaseAgent):
             plan = copy.deepcopy(HEURISTICS.get(content_type, HEURISTICS["film_recap_ai_images"]))
             self.emit("progress", "EditingPlan heurístico (sem LLM)", progress=70)
 
+        # On a remix, make the plan actually WEAR the reference's style (grade,
+        # pacing, music mood) — extracted style only, never its footage/audio.
+        plan = self._apply_dna(plan, style_dna)
+
         self.ctx_set("editing_plan", plan)
+        return plan
+
+    @staticmethod
+    def _apply_dna(plan: dict, dna: dict | None) -> dict:
+        if not dna:
+            return plan
+        grade = (dna.get("visual_style") or {}).get("grading_style")
+        if grade in COLOR_GRADES:
+            plan["color_grade"] = grade
+        acd = (dna.get("pacing") or {}).get("avg_clip_duration")
+        if isinstance(acd, (int, float)) and acd > 0:
+            plan["avg_clip_duration"] = float(acd)
+        mood = (dna.get("audio") or {}).get("music_mood")
+        if mood:
+            plan.setdefault("music", {})["mood"] = mood
         return plan
 
     async def _via_llm(self, script, style_dna, content_type) -> dict:

@@ -1,19 +1,23 @@
 """
 VisualsAgent — generate/obtain every visual asset.
 
-  MODE 1 (film_recap_ai_images): Pollinations FLUX image per [CENA_IA] scene.
-  MODE 2 (sports_highlights):     Pexels stock video per [LANCE]; Pollinations fallback.
-  MODE 3 (quote_viral):           one dark background clip/image (blurred later).
-  THUMBNAIL (all):                Pollinations base + Pillow text, A/B variants,
-                                  landscape (1792x1024) + vertical (1080x1920).
+Per scene, the agent prefers REAL motion footage so the video looks shot, not
+slideshow'd:
+  1. STOCK VIDEO (default, all content types): search Pexels -> Pixabay video by
+     the scene's concrete keywords and download a clip (type="video").
+  2. AI IMAGE (fallback): when no clip matches / no key, generate a still via the
+     provider chain (Pollinations -> HF FLUX -> stock photo -> placeholder); the
+     editor animates it with Ken Burns so even the fallback has movement.
+  THUMBNAIL (all): AI base + Pillow text, A/B variants, landscape + vertical.
 
-Pollinations needs no API key. Every network fetch has a deterministic Pillow
-placeholder fallback so the pipeline never hard-stops offline.
+Set BROLL_ENABLED=false to force the old still-image behaviour. Every network
+fetch degrades gracefully so the pipeline never hard-stops offline.
 """
 from __future__ import annotations
 
 import asyncio
 import hashlib
+import subprocess
 import urllib.parse
 from pathlib import Path
 
@@ -48,21 +52,31 @@ class VisualsAgent(BaseAgent):
         scenes = script.get("scenes", [])
         scene_assets: list[dict] = []
 
+        # Prefer REAL motion footage (licensed stock video) for every scene; the
+        # AI still is only a fallback when no clip matches. This is what makes the
+        # output look like video instead of "still image + narration".
+        use_broll = settings.broll_enabled and bool(settings.pexels_api_key or settings.pixabay_api_key)
+
         self.emit("progress", f"Obtendo {len(scenes)} asset(s) visual(is)", progress=58)
         for sc in scenes:
             idx = sc.get("index", len(scene_assets))
-            dst = assets_dir / f"scene_{idx:03d}.jpg"
-            if content_type == "sports_highlights" and settings.pexels_api_key and sc.get("visual_query"):
-                ok = await self._pexels_video(sc["visual_query"], assets_dir, idx)
-                if ok:
-                    scene_assets.append({"index": idx, "path": str(ok), "type": "video", "source": "pexels"})
+            query = self._search_terms(sc)
+
+            if use_broll and query:
+                clip = await self._broll_clip(query, assets_dir, idx)
+                if clip:
+                    scene_assets.append({"index": idx, "path": str(clip), "type": "video",
+                                         "source": "stock_video", "query": query})
+                    self.emit("progress", f"Cena {idx}: vídeo real ({query[:32]})", progress=58)
                     continue
-            # Default: AI image via the configured provider chain.
-            prompt = sc.get("visual_prompt") or sc.get("visual_query") or "cinematic abstract atmosphere"
+
+            # Fallback: AI image via the provider chain (animated with Ken Burns by the editor).
+            dst = assets_dir / f"scene_{idx:03d}.jpg"
+            prompt = sc.get("visual_prompt") or query or "cinematic abstract atmosphere"
             src = await self._generate_image(self._enhance(prompt), dst, SCENE_W, SCENE_H,
                                              label=sc.get("narration", ""))
             scene_assets.append({"index": idx, "path": str(dst), "type": "image", "source": src})
-            self.emit("progress", f"Asset cena {idx} pronto ({src})", progress=58)
+            self.emit("progress", f"Cena {idx}: imagem IA ({src})", progress=58)
 
         # Thumbnails.
         self.emit("progress", "Gerando thumbnails A/B", progress=64)
@@ -165,30 +179,124 @@ class VisualsAgent(BaseAgent):
         img = VisualsAgent._cover(img, w, h)
         img.save(dst, "JPEG", quality=88)
 
-    # ---- Pexels stock video ----
-    async def _pexels_video(self, query: str, assets_dir: Path, idx: int) -> Path | None:
+    # ---- Real motion footage (licensed stock video) ----
+    # Generic style tokens stripped when deriving a stock-search query from an
+    # AI image prompt (stock engines match concrete nouns, not these adjectives).
+    _STYLE_STOP = {
+        "cinematic", "photorealistic", "dramatic", "atmosphere", "atmospheric",
+        "lighting", "high", "detail", "4k", "8k", "hd", "moody", "epic", "shot",
+        "scene", "background", "abstract", "realistic", "render", "rendered",
+        "style", "color", "grade", "vibrant", "ultra", "detailed", "footage",
+    }
+
+    def _search_terms(self, sc: dict) -> str:
+        """Concrete English keywords used to search stock video for a scene."""
+        q = (sc.get("visual_query") or "").strip()
+        if q:
+            return q
+        return self._keywords_from_prompt(sc.get("visual_prompt") or "")
+
+    def _keywords_from_prompt(self, prompt: str) -> str:
+        def keep(s: str) -> list[str]:
+            return [w for w in s.split() if w.lower().strip(".,") not in self._STYLE_STOP]
+        first = (prompt or "").split(",")[0]
+        words = keep(first)
+        if not words:                                  # first phrase was all style words
+            words = keep((prompt or "").replace(",", " "))
+        if not words:                                  # still nothing -> raw leading words
+            words = (prompt or "").replace(",", " ").split()
+        return " ".join(words[:6]).strip()
+
+    async def _broll_clip(self, query: str, assets_dir: Path, idx: int) -> Path | None:
+        """Try each configured stock-video provider; return a SAVED, VALID .mp4 or None."""
+        providers = []
+        if settings.pexels_api_key:
+            providers.append(self._pexels_video)
+        if settings.pixabay_api_key:
+            providers.append(self._pixabay_video)
+        for fn in providers:
+            try:
+                p = await fn(query, assets_dir, idx)
+                if p and p.exists() and p.stat().st_size > 50_000 and self._valid_video(p):
+                    return p
+                if p and p.exists():
+                    p.unlink(missing_ok=True)          # truncated/corrupt -> don't feed ffmpeg
+            except Exception as exc:  # noqa: BLE001
+                self.emit("progress", f"B-roll {fn.__name__} falhou: {exc}", progress=58)
+        return None
+
+    @staticmethod
+    def _valid_video(path: Path) -> bool:
+        """ffprobe gate: a real video stream with positive duration (rejects truncated downloads)."""
         try:
-            async with httpx.AsyncClient(timeout=30) as client:
-                r = await client.get(
-                    PEXELS_VIDEO,
-                    headers={"Authorization": settings.pexels_api_key},
-                    params={"query": query, "per_page": 3, "min_width": 1080},
-                )
-                r.raise_for_status()
-                vids = r.json().get("videos", [])
-                if not vids:
-                    return None
-                files = sorted(vids[0]["video_files"], key=lambda f: f.get("width", 0), reverse=True)
-                link = files[0]["link"]
-                dst = assets_dir / f"scene_{idx:03d}.mp4"
-                async with client.stream("GET", link) as resp:
-                    resp.raise_for_status()
-                    with open(dst, "wb") as f:
-                        async for chunk in resp.aiter_bytes():
-                            f.write(chunk)
-                return dst
+            out = subprocess.run(
+                ["ffprobe", "-v", "error", "-select_streams", "v:0",
+                 "-show_entries", "stream=codec_name", "-show_entries", "format=duration",
+                 "-of", "default=nw=1:nk=1", str(path)],
+                capture_output=True, text=True, timeout=25,
+            )
+            dur = 0.0
+            for tok in (out.stdout or "").split():
+                try:
+                    dur = max(dur, float(tok))
+                except ValueError:
+                    pass
+            return out.returncode == 0 and dur > 0.3
         except Exception:
+            return False
+
+    @staticmethod
+    def _pick_video_file(files: list[dict], url_key: str = "link") -> str | None:
+        """Largest clip whose width <= broll_max_width (else smallest). None/missing width -> 0."""
+        cap = settings.broll_max_width
+        width = lambda f: f.get("width") or 0  # noqa: E731  (treats None and absent alike)
+        usable = [f for f in files if f.get(url_key)]
+        if not usable:
             return None
+        under = [f for f in usable if width(f) <= cap]
+        chosen = max(under, key=width) if under else min(usable, key=width)
+        return chosen.get(url_key)
+
+    async def _download(self, client: httpx.AsyncClient, link: str, dst: Path) -> Path | None:
+        async with client.stream("GET", link) as resp:
+            resp.raise_for_status()
+            with open(dst, "wb") as f:
+                async for chunk in resp.aiter_bytes():
+                    f.write(chunk)
+        return dst
+
+    async def _pexels_video(self, query: str, assets_dir: Path, idx: int) -> Path | None:
+        async with httpx.AsyncClient(timeout=45, follow_redirects=True) as client:
+            r = await client.get(
+                PEXELS_VIDEO,
+                headers={"Authorization": settings.pexels_api_key},
+                params={"query": query, "per_page": 5, "orientation": "landscape", "min_width": 1080},
+            )
+            r.raise_for_status()
+            vids = r.json().get("videos", [])
+            if not vids:
+                return None
+            link = self._pick_video_file(vids[0].get("video_files", []), "link")
+            if not link:
+                return None
+            return await self._download(client, link, assets_dir / f"scene_{idx:03d}.mp4")
+
+    async def _pixabay_video(self, query: str, assets_dir: Path, idx: int) -> Path | None:
+        async with httpx.AsyncClient(timeout=45, follow_redirects=True) as client:
+            r = await client.get(
+                "https://pixabay.com/api/videos/",
+                params={"key": settings.pixabay_api_key, "q": query, "per_page": 5},
+            )
+            r.raise_for_status()
+            hits = r.json().get("hits", [])
+            if not hits:
+                return None
+            # Pixabay nests sizes: hits[i]["videos"] = {large,medium,small,tiny:{url,width}}
+            sizes = list((hits[0].get("videos") or {}).values())
+            link = self._pick_video_file(sizes, "url")
+            if not link:
+                return None
+            return await self._download(client, link, assets_dir / f"scene_{idx:03d}.mp4")
 
     # ---- Thumbnails ----
     async def _thumbnails(self, title: str, script: dict, assets_dir: Path) -> dict:

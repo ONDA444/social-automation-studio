@@ -35,6 +35,9 @@ class VideoJob(Base):
     mode: Mapped[str] = mapped_column(String(40), default="from_title")
     # content_type: film_recap_ai_images | sports_highlights | quote_viral
     content_type: Mapped[str] = mapped_column(String(60), default="film_recap_ai_images")
+    # video_format: "long" (16:9 YouTube, ~minutos) | "short" (9:16 vertical <60s,
+    # nativo p/ TikTok/Reels/Shorts — NÃO derivado de um vídeo longo).
+    video_format: Mapped[str] = mapped_column(String(20), default="long")
     reference_url: Mapped[str | None] = mapped_column(Text, default=None)
 
     account_id: Mapped[int | None] = mapped_column(
@@ -95,6 +98,7 @@ class VideoJob(Base):
             "topic": self.topic,
             "mode": self.mode,
             "content_type": self.content_type,
+            "format": self.video_format,
             "reference_url": self.reference_url,
             "account_id": self.account_id,
             "status": self.status.value if isinstance(self.status, JobStatus) else self.status,

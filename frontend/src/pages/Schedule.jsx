@@ -23,6 +23,7 @@ export default function Schedule() {
   // ---- Automação por temas ----
   const [themesText, setThemesText] = useState('')
   const [themeType, setThemeType] = useState('film_recap_ai_images')
+  const [themeFormat, setThemeFormat] = useState('long')
   const [contentTypes, setContentTypes] = useState(FALLBACK_CONTENT_TYPES)
   const [queue, setQueue] = useState([])
   const [busy, setBusy] = useState(false)
@@ -60,7 +61,7 @@ export default function Schedule() {
     if (parsedThemes.length === 0) return alert('Informe ao menos um tema')
     setBusy(true)
     try {
-      const r = await api.post('/themes', { account_id: Number(sel), themes: parsedThemes, content_type: themeType, target_platforms: ['youtube'] })
+      const r = await api.post('/themes', { account_id: Number(sel), themes: parsedThemes, content_type: themeType, format: themeFormat, target_platforms: ['youtube'] })
       alert(`${r?.created ?? 0} tema(s) adicionado(s) à fila`)
       setThemesText('')
       loadQueue()
@@ -144,6 +145,26 @@ export default function Schedule() {
                   {contentTypes.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
                 </select>
               </div>
+              <div>
+                <label className="text-xs text-text-muted">Formato</label>
+                <div className="flex gap-2 mt-1">
+                  {[
+                    { v: 'long', label: '🖥️ Vídeo longo', hint: '16:9 • YouTube' },
+                    { v: 'short', label: '📱 Shorts', hint: '9:16 • TikTok/Reels' },
+                  ].map((f) => (
+                    <button key={f.v} type="button" onClick={() => setThemeFormat(f.v)}
+                      className={`flex-1 rounded-card border p-2 text-left text-xs transition-colors ${themeFormat === f.v ? 'border-accent bg-accent/15 text-text-primary' : 'border-border text-text-muted hover:bg-elevated'}`}>
+                      <div className="font-semibold">{f.label}</div>
+                      <div className="text-[10px] opacity-70">{f.hint}</div>
+                    </button>
+                  ))}
+                </div>
+                <p className="text-[11px] text-text-muted mt-1">
+                  {themeFormat === 'short'
+                    ? 'Canal só de Shorts: cada tema vira um vídeo vertical curto, automático.'
+                    : 'Cada tema vira um vídeo longo 16:9.'}
+                </p>
+              </div>
               <button className="btn-primary w-full" disabled={busy || parsedThemes.length === 0} onClick={addThemes}>
                 {busy ? 'Adicionando...' : 'Adicionar à fila de temas'}
               </button>
@@ -163,7 +184,7 @@ export default function Schedule() {
                     <li key={t.id} className="card p-2 flex items-center gap-2">
                       <div className="flex-1 min-w-0">
                         <p className="text-sm truncate" title={t.theme}>{t.theme}</p>
-                        <span className="text-[11px] text-text-muted">{t.content_type}</span>
+                        <span className="text-[11px] text-text-muted">{t.content_type} · {t.format === 'short' ? '📱 Short' : '🖥️ Longo'}</span>
                       </div>
                       <span className="badge shrink-0 bg-elevated text-text-muted">{t.status}</span>
                       <button className="btn-ghost text-xs" onClick={() => deleteTheme(t.id)} title="Excluir tema">🗑</button>
