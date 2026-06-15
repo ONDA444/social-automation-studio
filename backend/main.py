@@ -14,6 +14,8 @@ import shutil
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request as StarletteRequest
 
 from backend import events
 from backend.config import settings
@@ -34,6 +36,21 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+class _StripApiPrefix(BaseHTTPMiddleware):
+    """Allow frontend to call /api/... or bare /... — strips the prefix when present."""
+    async def dispatch(self, request: StarletteRequest, call_next):
+        if request.url.path.startswith("/api/"):
+            scope = dict(request.scope)
+            new_path = request.url.path[4:]  # "/api/jobs" → "/jobs"
+            scope["path"] = new_path
+            scope["raw_path"] = new_path.encode()
+            request = StarletteRequest(scope, request._receive, request._send)
+        return await call_next(request)
+
+
+app.add_middleware(_StripApiPrefix)
 
 # Routers added across phases. Missing modules are skipped with a log line.
 _ROUTER_MODULES = [
