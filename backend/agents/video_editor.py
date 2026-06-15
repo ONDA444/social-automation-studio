@@ -186,9 +186,11 @@ class VideoEditorAgent(BaseAgent):
     def _stitch(self, clip_files, durations, transition, ass_name, work: Path, dst: Path):
         n = len(clip_files)
         soft = fx.xfade_name(transition)
-        # Too many clips for a single xfade graph (would decode all at once -> OOM):
-        # fall back to memory-light hard cuts.
-        if soft is not None and n > MAX_XFADE_CLIPS:
+        # Soft xfade decodes every clip of the segment simultaneously (filter_complex
+        # with all inputs) — the memory spike that OOM-kills a small container. Use it
+        # only when explicitly enabled AND the clip count is small; otherwise hard cuts
+        # (concat demuxer, one clip at a time) keep memory flat.
+        if soft is not None and (not settings.video_transitions or n > MAX_XFADE_CLIPS):
             soft = None
 
         if n == 1:

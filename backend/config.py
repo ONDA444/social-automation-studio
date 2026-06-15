@@ -98,6 +98,11 @@ class Settings(BaseSettings):
     # Render height (landscape). 720 keeps memory well within a small container;
     # the all-clips xfade at 1080p OOM-kills it. Bump to 1080 only on a bigger box.
     video_resolution: int = 720
+    # Soft xfade transitions decode every clip of a segment at once (filter_complex
+    # with all inputs) — the memory spike that OOM-kills a small container. Off by
+    # default: hard cuts look clean and stream one clip at a time. Enable only on a
+    # box with comfortable RAM.
+    video_transitions: bool = False
     default_tts_voice: str = "pt-BR-AntonioNeural"
     default_language: str = "pt-BR"
     log_level: str = "INFO"
