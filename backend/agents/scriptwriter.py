@@ -253,10 +253,16 @@ class ScriptwriterAgent(BaseAgent):
                 "palavras/cenas alvo do tipo acima — vídeos curtos demais são rejeitados. Não resuma."
             )
         retention_block = RETENTION_RULES if content_type != "quote_viral" else ""
+        # The two coaches' accumulated knowledge (engagement + per-type/format tips).
+        try:
+            from backend.agents.coach import playbook_prompt_block
+            coach_block = playbook_prompt_block(content_type, video_format)
+        except Exception:
+            coach_block = ""
         prompt = f"""Tema: "{theme}"
 Modo: {mode}
 
-{guide}{style_hint}{retention_block}{facts_block}
+{guide}{style_hint}{retention_block}{coach_block}{facts_block}
 {length_block}
 
 Responda com JSON neste formato EXATO:

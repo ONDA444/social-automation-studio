@@ -1,0 +1,68 @@
+{
+  "version": 1,
+  "authored_by": [
+    "retention_coach",
+    "engagement_coach"
+  ],
+  "retention": {
+    "principles": [
+      "Os 3 primeiros segundos decidem a maior parte da retenção: comece no PICO, sem introdução.",
+      "Abra um ciclo (pergunta/promessa) no gancho e só feche no fim — isso segura até o final.",
+      "Sem tempo morto: cada frase entrega informação, tensão ou avanço da história.",
+      "Especificidade prende: número, nome e detalhe concreto sempre > frase genérica.",
+      "Micro-ganchos a cada 15-20s ('mas o que ninguém viu foi...') re-seguram quem ia sair.",
+      "Pattern interrupt: troque ritmo/ângulo/visual antes que o cérebro relaxe.",
+      "Entregue a recompensa que o gancho prometeu — frustrar o gancho mata o canal a longo prazo.",
+      "Frases curtas, voz ativa, sem jargão — como se falasse com UMA pessoa."
+    ],
+    "hook_formulas": [
+      "Resultado chocante primeiro: '{fato surpreendente} — e quase ninguém percebeu.'",
+      "Lacuna de curiosidade: 'Tem um detalhe em {tema} que muda tudo.'",
+      "Aposta/risco: 'Isso quase {consequência grande} — veja como.'",
+      "Promessa de valor rápido: 'Em 30s você entende {tema} melhor que 99%.'"
+    ],
+    "banned_phrases": [
+      "Espera, você precisa ver",
+      "Tudo começou de um jeito que ninguém esperava",
+      "isso é mais profundo do que parece",
+      "as consequências foram imediatas",
+      "o que vem agora muda tudo",
+      "prepare-se",
+      "você não vai acreditar",
+      "sente-se e relaxe",
+      "neste vídeo vamos falar sobre",
+      "sem mais delongas"
+    ]
+  },
+  "engagement": {
+    "principles": [
+      "Gatilho emocional claro (surpresa, indignação, orgulho, curiosidade) gera like e comentário.",
+      "Faça UMA pergunta que divide opinião para puxar comentário ('você concorda?').",
+      "CTA ligado ao conteúdo e colocado no momento do PICO — não um 'inscreva-se' solto no fim.",
+      "Relatabilidade: conecte o tema à vida/realidade de quem assiste.",
+      "Crie torcida: um lado pra apoiar e um vilão/obstáculo pra rejeitar.",
+      "Prometa continuação ('parte 2') quando o tema permite — gera retorno e follow.",
+      "Fale a língua do nicho: futebol soa como torcedor, não como repórter de TV."
+    ],
+    "cta_formulas": [
+      "'Comenta {pergunta divisiva} que eu respondo.'",
+      "'Segue que a parte 2 de {tema} vem ainda mais surreal.'",
+      "'Salva esse pra não esquecer {benefício}.'"
+    ]
+  },
+  "by_content_type": {
+    "sports_highlights": "Fale como torcedor. Gancho = o lance mais absurdo. Narração curta e empolgada, com nome do craque e do momento exato.",
+    "film_recap_ai_images": "Conte como história com tensão crescente; pré-revele só o suficiente pra criar dúvida e segure o clímax.",
+    "top_list_ranking": "Anuncie o número de cada item, suba o suspense até o #1 e guarde o melhor pro final.",
+    "explainer_curiosity": "Abra com a pergunta intrigante, explique passo a passo e termine com um fato-surpresa.",
+    "true_crime_mystery": "Tom sombrio e investigativo; abra na cena do crime, espalhe pistas e deixe o mistério no ar.",
+    "reaction_commentary": "Hot take claro e opinativo; gancho = 'você viu isso?', e puxe o contraponto pra gerar debate.",
+    "reddit_story": "Primeira pessoa, ritmo de fofoca, reviravolta no meio; legendas grandes são o foco.",
+    "motivational_speech": "Segunda pessoa ('você consegue'), realidade dura no gancho, crescendo até a frase de impacto.",
+    "quote_viral": "Uma frase só, provocativa, que cabe num print. O texto na tela É o conteúdo."
+  },
+  "by_format": {
+    "short": "Gancho no 1º frame (zero intro). UMA ideia só. Cortes rápidos. Loop final que puxa de volta pro começo.",
+    "long": "Gancho forte + um mapa do que vem (sem entregar tudo). Re-ganchos no início de cada bloco."
+  }
+}
