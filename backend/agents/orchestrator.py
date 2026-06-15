@@ -55,13 +55,18 @@ async def run_pipeline(job_id: int) -> dict:
             return {"error": "job not found"}
 
         ctx: dict = dict(job.video_context or {})
-        voice = settings.default_tts_voice
+        voice = None
         language = settings.default_language
         if job.account_id:
             acct = db.get(PlatformAccount, job.account_id)
             if acct:
-                voice = acct.preferred_voice or voice
+                voice = acct.preferred_voice or None
                 language = acct.content_language or language
+        # Foreign-language channel but the voice is still the pt-BR default? Let the
+        # narrator pick a language-matched voice (the pt clone/voice can't speak English).
+        if voice == "pt-BR-AntonioNeural" and not (language or "").lower().startswith("pt"):
+            voice = None
+        ctx["language"] = language  # narrator/agents read the channel language from here
         ctx["target_platforms"] = job.target_platforms or ["youtube", "tiktok", "instagram"]
         ctx["format"] = getattr(job, "video_format", "long") or "long"  # long(16:9) | short(9:16)
         if job.style_dna:
@@ -117,7 +122,7 @@ async def run_pipeline(job_id: int) -> dict:
                 ctx["narrate"] = False
             upd(progress=40, agent="narrator")
 
-            await NarratorAgent(job_id, ctx).execute(voice=voice)
+            await NarratorAgent(job_id, ctx).execute(voice=voice, language=language)
             upd(progress=55, agent="visuals")
 
             await VisualsAgent(job_id, ctx).execute()

@@ -31,9 +31,21 @@ SYSTEM = (
     "RETENÇÃO de audiência, no nível dos canais que seguram o espectador até o fim. "
     "Você pensa em retenção a cada frase: os 3 primeiros segundos decidem tudo, cada "
     "frase existe pra fazer a próxima ser assistida, e o vídeo entrega no fim a "
-    "recompensa prometida no gancho. Escreve em {lang}, conteúdo 100% original. "
+    "recompensa prometida no gancho. Conteúdo 100% original. "
+    "IDIOMA OBRIGATÓRIO: escreva TODA a narração, títulos, textos de tela e SEO em "
+    "{lang} — sem misturar idiomas. Soe nativo desse idioma. "
     "Responda SEMPRE apenas com JSON válido, sem comentários."
 )
+
+# Readable language name for the prompt (a channel may store en-US, es, etc.).
+_LANG_NAMES = {
+    "pt": "português do Brasil", "en": "inglês (English)", "es": "espanhol (Español)",
+    "fr": "francês (Français)", "de": "alemão (Deutsch)", "it": "italiano (Italiano)",
+}
+
+
+def _lang_name(code: str) -> str:
+    return _LANG_NAMES.get((code or "pt").lower().split("-")[0], code or "português do Brasil")
 
 # Injected into every narrated script (not quote_viral). This is the "cérebro" —
 # the retention discipline that separates a script people finish from filler.
@@ -315,7 +327,7 @@ REGRA DOS VISUAIS (importante — o sistema usa VÍDEO real de stock):
   fallback de imagem IA quando não houver clipe de vídeo para a cena.
 - quote_viral deixa "narration" vazio e usa "on_screen_text"."""
         from backend.agents.style_guide import with_style
-        system = with_style(SYSTEM.format(lang=language))
+        system = with_style(SYSTEM.format(lang=_lang_name(language)))
         return await llm.complete_json(prompt, system=system, max_tokens=4000)
 
     @classmethod

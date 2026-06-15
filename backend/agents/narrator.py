@@ -46,12 +46,15 @@ class NarratorAgent(BaseAgent):
         script: dict | None = None,
         voice: str | None = None,
         content_type: str = "film_recap_ai_images",
+        language: str | None = None,
         **_,
     ) -> dict:
         script = script or self.ctx_get("script") or {}
         content_type = script.get("content_type", content_type)
-        voice = voice or settings.default_tts_voice
+        language = language or self.ctx_get("language") or settings.default_language
+        voice = voice or self._default_voice_for(language)
         rate = RATE_BY_CONTENT.get(content_type, "+0%")
+        self._language = language
 
         out_dir = self.job_dir(self.job_id, settings.abs_path(settings.output_dir))
         audio_path = out_dir / "narration.mp3"
@@ -98,19 +101,36 @@ class NarratorAgent(BaseAgent):
         self.emit("progress", f"Narração pronta: {total:.1f}s, {len(words)} palavras", progress=55)
         return payload
 
+    @staticmethod
+    def _default_voice_for(language: str) -> str:
+        """edge-tts voice matching the channel language (used when LMNT doesn't apply,
+        e.g. English/foreign channels). The account's preferred_voice overrides this."""
+        lang = (language or "pt-BR").lower()
+        table = {
+            "pt": "pt-BR-AntonioNeural", "en": "en-US-GuyNeural", "es": "es-ES-AlvaroNeural",
+            "fr": "fr-FR-HenriNeural", "de": "de-DE-ConradNeural", "it": "it-IT-DiegoNeural",
+        }
+        return table.get(lang.split("-")[0], settings.default_tts_voice)
+
     async def _synthesize(self, text: str, voice: str, rate: str, audio_path: Path):
-        """Provider chain: LMNT (your cloned voice) -> edge-tts fallback."""
-        use_lmnt = (settings.lmnt_api_key and settings.lmnt_voice
+        """Provider chain: LMNT cloned voice -> edge-tts fallback.
+
+        The LMNT clone (MATEUS) is a PORTUGUESE voice, so it's only used for pt
+        channels. English/other-language channels go straight to a language-matched
+        edge-tts voice — otherwise the pt clone would speak English with a pt accent.
+        """
+        lang = (getattr(self, "_language", None) or settings.default_language or "pt-BR").lower()
+        use_lmnt = (lang.startswith("pt") and settings.lmnt_api_key and settings.lmnt_voice
                     and (settings.tts_provider or "auto").lower() in ("auto", "lmnt"))
         if use_lmnt:
             try:
                 self.emit("progress", f"Sintetizando voz LMNT ({settings.lmnt_voice})", progress=45)
-                return await self._synthesize_lmnt(text, rate, audio_path)
+                return await self._synthesize_lmnt(text, rate, audio_path, lang)
             except Exception as exc:  # noqa: BLE001
                 self.emit("progress", f"LMNT falhou ({exc}); usando edge-tts", progress=45)
         return await self._synthesize_edge(text, voice, rate, audio_path)
 
-    async def _synthesize_lmnt(self, text: str, rate: str, audio_path: Path):
+    async def _synthesize_lmnt(self, text: str, rate: str, audio_path: Path, language: str = "pt-BR"):
         """LMNT official API. Word timings are distributed proportionally over the
         real audio length (good enough for caption sync; no source voice cloned)."""
         speed = self._rate_to_speed(rate)
@@ -119,7 +139,7 @@ class NarratorAgent(BaseAgent):
             "text": text,
             "format": "mp3",
             "sample_rate": 24000,
-            "language": (settings.default_language or "pt-BR").split("-")[0],
+            "language": (language or "pt-BR").split("-")[0],
             "speed": speed,
         }
         # LMNT 5xx are frequently transient — retry a few times before letting the
