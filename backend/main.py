@@ -14,8 +14,6 @@ import shutil
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.requests import Request as StarletteRequest
 
 from backend import events
 from backend.config import settings
@@ -38,16 +36,33 @@ app.add_middleware(
 )
 
 
-class _StripApiPrefix(BaseHTTPMiddleware):
-    """Allow frontend to call /api/... or bare /... — strips the prefix when present."""
-    async def dispatch(self, request: StarletteRequest, call_next):
-        if request.url.path.startswith("/api/"):
-            scope = dict(request.scope)
-            new_path = request.url.path[4:]  # "/api/jobs" → "/jobs"
-            scope["path"] = new_path
-            scope["raw_path"] = new_path.encode()
-            request = StarletteRequest(scope, request._receive, request._send)
-        return await call_next(request)
+class _StripApiPrefix:
+    """
+    Pure-ASGI middleware: rewrites '/api/...' -> '/...' before routing.
+
+    Why pure ASGI (not BaseHTTPMiddleware): Starlette's BaseHTTPMiddleware
+    `call_next` ignores any scope you mutate on the Request — it replays the
+    *original* scope captured in its closure, so a path rewrite there is a no-op.
+    Mutating the ASGI `scope` dict directly here is the only thing routing sees.
+
+    The Vercel build baked VITE_API_URL=.../api, so every call arrives as
+    /api/<route>; backend routes live at root. This strips the prefix for both
+    HTTP and WebSocket so /api/dashboard and /dashboard both resolve.
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] in ("http", "websocket"):
+            path = scope.get("path", "")
+            if path.startswith("/api/"):
+                new_path = path[4:]  # "/api/jobs" -> "/jobs"
+                scope = dict(scope)
+                scope["path"] = new_path
+                if scope.get("raw_path"):
+                    scope["raw_path"] = new_path.encode()
+        await self.app(scope, receive, send)
 
 
 app.add_middleware(_StripApiPrefix)
