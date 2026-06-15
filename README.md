@@ -105,19 +105,89 @@ Efeitos FFmpeg testáveis: `python -m backend.effects.ffmpeg_effects --list`.
 
 ---
 
-## ☁️ Deploy: Frontend (Vercel) + Backend (Railway)
+## ☁️ Deploy: GitHub → Railway (backend) + Vercel (frontend)
 
-### Railway (backend + worker + Redis + Postgres)
-1. New Project → Deploy from GitHub → este repo (detecta `nixpacks.toml`, instala FFmpeg).
-2. Add Plugin → **Redis** e **PostgreSQL** (injetam `REDIS_URL` / `DATABASE_URL`).
-3. Em *Variables*: cole as chaves do `.env`.
-4. Crie serviços extras (mesmo repo) para o worker e o beat — comandos no `Procfile`.
-5. Backend fica em `https://seu-app.up.railway.app`.
+### Passo 1 — Criar repositório no GitHub
 
-### Vercel (frontend)
-1. New Project → Import GitHub → este repo (usa `vercel.json`).
-2. Env var **`VITE_API_URL`** = URL do backend Railway.
-3. Deploy → `https://seu-projeto.vercel.app`.
+1. Acesse **github.com/new**
+2. Nome: `social-automation-studio` — visibilidade **Private**
+3. **NÃO** marque "Add a README" (o repo deve começar vazio)
+4. Clique em **Create repository**
+
+### Passo 2 — Subir o código
+
+No terminal, dentro desta pasta:
+
+```bash
+git remote add origin https://github.com/SEU_USUARIO/social-automation-studio.git
+git push -u origin main
+```
+
+> Substitua `SEU_USUARIO` pelo seu usuário do GitHub.
+
+---
+
+### Passo 3 — Railway (backend)
+
+1. Acesse **railway.app** → **New Project → Deploy from GitHub repo**
+2. Selecione `social-automation-studio` — o Railway detecta `nixpacks.toml` (FFmpeg, Python 3.11) e `railway.toml` automaticamente
+3. Clique em **Deploy**
+4. Na aba **+ New**, adicione os plugins: **PostgreSQL** e **Redis** (injetam `DATABASE_URL` e `REDIS_URL` automaticamente)
+5. Vá em **Variables** e adicione:
+
+| Variável | Obrigatório | Valor |
+|---|---|---|
+| `GROQ_API_KEY` | ✅ | console.groq.com |
+| `GEMINI_API_KEY` | ✅ | aistudio.google.com |
+| `PEXELS_API_KEY` | ✅ | pexels.com/api |
+| `SECRET_KEY` | ✅ | string aleatória (ex: `python -c "import secrets; print(secrets.token_hex(32))"`) |
+| `LMNT_API_KEY` | Narração premium | app.lmnt.com |
+| `LMNT_VOICE` | Narração premium | ID da voz no LMNT |
+| `TTS_PROVIDER` | — | `auto` |
+| `PIXABAY_API_KEY` | — | pixabay.com/api |
+| `POLLINATIONS_TOKEN` | — | enter.pollinations.ai |
+| `CORS_ORIGINS` | Após Vercel | `https://SEU-PROJETO.vercel.app` |
+
+**OAuth (publicação automática — opcional):**
+
+```
+GOOGLE_CLIENT_ID=...
+GOOGLE_CLIENT_SECRET=...
+GOOGLE_REDIRECT_URI=https://SEU-BACKEND.railway.app/auth/youtube/callback
+
+TIKTOK_CLIENT_KEY=...
+TIKTOK_CLIENT_SECRET=...
+TIKTOK_REDIRECT_URI=https://SEU-BACKEND.railway.app/auth/tiktok/callback
+
+META_APP_ID=...
+META_APP_SECRET=...
+META_REDIRECT_URI=https://SEU-BACKEND.railway.app/auth/instagram/callback
+```
+
+6. Aguarde o deploy concluir — copie a URL pública (ex: `https://social-automation-studio-production.up.railway.app`)
+
+---
+
+### Passo 4 — Vercel (frontend)
+
+1. Acesse **vercel.com/new** → **Import Git Repository**
+2. Selecione `social-automation-studio` — o Vercel detecta `vercel.json` automaticamente
+3. Em **Environment Variables**, adicione:
+
+| Variável | Valor |
+|---|---|
+| `VITE_API_URL` | `https://SEU-BACKEND.railway.app/api` |
+
+> Use a URL copiada no Passo 3.6, com `/api` no final.
+
+4. Clique em **Deploy**
+5. Copie a URL do Vercel (ex: `https://social-automation-studio.vercel.app`)
+6. Volte ao Railway → **Variables** → adicione `CORS_ORIGINS=https://social-automation-studio.vercel.app`
+
+---
+
+**Pronto.** O dashboard fica no Vercel, a API no Railway.
+Cada `git push origin main` faz redeploy automático nos dois serviços.
 
 Armazenamento de mídia em produção: use **Cloudflare R2** (10 GB grátis) ou
 *Railway Volumes* para persistir `output/`.
