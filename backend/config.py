@@ -107,6 +107,15 @@ class Settings(BaseSettings):
     # "private" is the safe default; set DEFAULT_PRIVACY=public to post publicly so
     # the videos actually reach the audience. (public|unlisted|private)
     default_privacy: str = "private"
+    # Publishing model:
+    #   "schedule"  -> generate a bit AHEAD of the slot and upload to YouTube as
+    #                  SCHEDULED (private + publishAt = slot); YouTube turns it public
+    #                  at the slot time (shows as "Agendado" in Studio).
+    #   "immediate" -> generate AT the slot and publish public right away.
+    publish_mode: str = "schedule"
+    # How many minutes before the slot to start generating (must exceed render time
+    # so the upload's publishAt is still in the future). Used by "schedule" mode.
+    generation_lead_minutes: int = 30
     default_tts_voice: str = "pt-BR-AntonioNeural"
     default_language: str = "pt-BR"
     log_level: str = "INFO"

@@ -86,6 +86,33 @@ class ContentCalendarAgent:
         n = max(1, int(n or 1))
         return sorted(BEST_TIMES_RANKED[:n])
 
+    def upcoming_slots(self, account_id: int, cfg, per_day: int, now_utc: datetime,
+                       days: int = 3) -> list[datetime]:
+        """Future slot datetimes (tz-aware UTC) from the account's resolved post_times,
+        projected over the next `days`. No collision-nudging — the scheduler dedups by
+        existing job scheduled_at, so each slot stays at its exact clock time (needed
+        so YouTube's publishAt lands on the intended hour)."""
+        from datetime import time as _time
+
+        tz = _resolve_tz(cfg.timezone if cfg else None)
+        hhmm = self.resolve_post_times(account_id, cfg, max(1, per_day))
+        times = []
+        for s in hhmm:
+            try:
+                h, m = str(s).split(":")
+                times.append(_time(int(h), int(m)))
+            except Exception:  # noqa: BLE001
+                continue
+        times = sorted(times)[: max(1, per_day)]
+        day = now_utc.astimezone(tz).date()
+        out: list[datetime] = []
+        for d in range(days + 1):
+            for t in times:
+                slot = datetime.combine(day + timedelta(days=d), t, tzinfo=tz).astimezone(timezone.utc)
+                if slot > now_utc:
+                    out.append(slot)
+        return sorted(out)
+
     def _fixed_slots(
         self, post_times: list[str], per_day: int, count: int, tz: ZoneInfo
     ) -> list[datetime]:

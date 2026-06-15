@@ -62,7 +62,10 @@ class VisualsAgent(BaseAgent):
             idx = sc.get("index", len(scene_assets))
             query = self._search_terms(sc)
 
-            if use_broll and query:
+            # Niche topics (gaming/brands/people) are flagged ai_image by the
+            # scriptwriter: stock banks have no real match and would return a fuzzy,
+            # off-theme clip, so skip stock and draw an ON-THEME AI image instead.
+            if use_broll and query and not sc.get("ai_image"):
                 clip = await self._broll_clip(query, assets_dir, idx)
                 if clip:
                     scene_assets.append({"index": idx, "path": str(clip), "type": "video",

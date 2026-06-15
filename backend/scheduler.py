@@ -176,6 +176,30 @@ def _slots_due_today(hhmm_times: list[str], per_day: int, tz_name: str | None, n
     return due
 
 
+def _create_theme_job(db, account_id: int, theme, scheduled_naive: datetime) -> int:
+    """Create a QUEUED VideoJob from a theme, mark the theme consumed, dispatch it."""
+    from backend.models import JobStatus, VideoJob
+    from backend.pipeline.dispatch import dispatch_job
+
+    job = VideoJob(
+        title=theme.theme,
+        topic=theme.theme,
+        content_type=theme.content_type or "film_recap_ai_images",
+        video_format=getattr(theme, "video_format", "long") or "long",
+        target_platforms=theme.target_platforms or ["youtube"],
+        account_id=account_id,
+        status=JobStatus.QUEUED,
+        scheduled_at=scheduled_naive,
+    )
+    db.add(job)
+    db.flush()
+    theme.status = "consumed"
+    theme.consumed_job_id = job.id
+    db.commit()
+    dispatch_job(job.id)
+    return job.id
+
+
 def _job_consume_themes() -> None:
     """
     Turn pending themes into videos AT their scheduled slot time — one per slot,
@@ -225,62 +249,63 @@ def _job_consume_themes() -> None:
                 if not pending:
                     continue
 
-                # Slots that have arrived today, minus what we've already generated
-                # today for this account = how many to kick off right now. Times are
-                # resolved through the calendar so "smart" mode (best/learned hours)
-                # paces generation the same way the user sees it on the Agenda.
                 per_day = max(1, cfg.videos_per_day or 1)
-                times = calendar.resolve_post_times(acct.id, cfg, per_day)
-                due = _slots_due_today(times, per_day, cfg.timezone, now_utc)
-                if due <= 0:
-                    continue  # next slot hasn't arrived yet — wait
-
-                # Local midnight (account tz) expressed as naive UTC, to match the
-                # naive-UTC created_at column.
                 from zoneinfo import ZoneInfo
                 try:
                     tz = ZoneInfo(cfg.timezone or "America/Sao_Paulo")
                 except Exception:  # noqa: BLE001
                     tz = ZoneInfo("America/Sao_Paulo")
-                midnight_local = datetime.combine(now_utc.astimezone(tz).date(),
-                                                  datetime.min.time(), tzinfo=tz)
-                midnight_naive_utc = midnight_local.astimezone(_tz.utc).replace(tzinfo=None)
 
-                generated_today = db.execute(
-                    select(func.count(VideoJob.id)).where(
-                        VideoJob.account_id == acct.id,
-                        VideoJob.created_at >= midnight_naive_utc,
-                    )
-                ).scalar() or 0
-
-                budget = int(due) - int(generated_today)
-                if budget <= 0:
-                    continue  # this slot already produced its video
-
-                take = min(budget, len(pending))
-                for theme in pending[:take]:
-                    job = VideoJob(
-                        title=theme.theme,
-                        topic=theme.theme,
-                        content_type=theme.content_type or "film_recap_ai_images",
-                        video_format=getattr(theme, "video_format", "long") or "long",
-                        target_platforms=theme.target_platforms or ["youtube"],
-                        account_id=acct.id,
-                        status=JobStatus.QUEUED,
-                        scheduled_at=now_utc.replace(tzinfo=None),  # slot is due -> publish now
-                    )
-                    db.add(job)
-                    db.flush()  # assign job.id before we reference it
-
-                    theme.status = "consumed"
-                    theme.consumed_job_id = job.id
-                    db.commit()
-
-                    dispatch_job(job.id)
-                    logger.info(
-                        "Slot due -> gerando theme %s como job %s (conta %s).",
-                        theme.id, job.id, acct.id,
-                    )
+                if (settings.publish_mode or "schedule").lower() == "schedule":
+                    # Generate AHEAD of each upcoming slot and upload to YouTube as
+                    # SCHEDULED (publishAt = slot). One job per slot, deduped by the
+                    # job's scheduled_at so we never double-book a slot.
+                    from datetime import timedelta
+                    lead = timedelta(minutes=max(5, settings.generation_lead_minutes))
+                    win = timedelta(minutes=5)
+                    pidx = 0
+                    for slot in calendar.upcoming_slots(acct.id, cfg, per_day, now_utc):
+                        if slot > now_utc + lead:
+                            break  # sorted — later slots aren't due to generate yet
+                        slot_naive = slot.astimezone(_tz.utc).replace(tzinfo=None)
+                        clash = db.execute(
+                            select(VideoJob.id).where(
+                                VideoJob.account_id == acct.id,
+                                VideoJob.scheduled_at >= slot_naive - win,
+                                VideoJob.scheduled_at <= slot_naive + win,
+                            )
+                        ).first()
+                        if clash:
+                            continue  # already generated for this slot
+                        if pidx >= len(pending):
+                            break
+                        theme = pending[pidx]
+                        pidx += 1
+                        jid = _create_theme_job(db, acct.id, theme, slot_naive)
+                        logger.info("Agendado: theme %s -> job %s (conta %s, publica %s UTC).",
+                                    theme.id, jid, acct.id, slot_naive)
+                else:
+                    # Immediate mode: generate AT the slot, publish public right away.
+                    times = calendar.resolve_post_times(acct.id, cfg, per_day)
+                    due = _slots_due_today(times, per_day, cfg.timezone, now_utc)
+                    if due <= 0:
+                        continue
+                    midnight_local = datetime.combine(now_utc.astimezone(tz).date(),
+                                                      datetime.min.time(), tzinfo=tz)
+                    midnight_naive_utc = midnight_local.astimezone(_tz.utc).replace(tzinfo=None)
+                    generated_today = db.execute(
+                        select(func.count(VideoJob.id)).where(
+                            VideoJob.account_id == acct.id,
+                            VideoJob.created_at >= midnight_naive_utc,
+                        )
+                    ).scalar() or 0
+                    budget = int(due) - int(generated_today)
+                    if budget <= 0:
+                        continue
+                    for theme in pending[:min(budget, len(pending))]:
+                        jid = _create_theme_job(db, acct.id, theme, now_utc.replace(tzinfo=None))
+                        logger.info("Slot due -> gerando theme %s como job %s (conta %s).",
+                                    theme.id, jid, acct.id)
             except Exception as exc:  # noqa: BLE001 — per-account isolation
                 db.rollback()
                 logger.warning("consume_themes failed for account %s: %s", acct.id, exc)

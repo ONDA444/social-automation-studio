@@ -190,6 +190,12 @@ class ScriptwriterAgent(BaseAgent):
             sc.setdefault("visual_prompt", "")
             sc.setdefault("visual_query", "")
             sc.setdefault("is_highlight", False)
+        # Decide stock-vs-AI per the topic domain (covers BOTH the LLM and offline
+        # paths): niche topics with no real stock footage get ON-THEME AI images so
+        # the visuals match the theme instead of a random fuzzy stock clip.
+        _prefer_ai = self._domain_of(f"{theme} {title}") not in self._FOOTAGE_RICH
+        for sc in scenes:
+            sc.setdefault("ai_image", _prefer_ai)
         if content_type != "quote_viral":
             script["narration_text"] = " ".join(s["narration"] for s in scenes if s.get("narration")).strip()
         else:
@@ -393,6 +399,11 @@ REGRA DOS VISUAIS (importante — o sistema usa VÍDEO real de stock):
         ],
     }
 
+    # Domains that DO have matching real stock footage. Everything else (gaming,
+    # brands, specific people, niche topics) gets ON-THEME AI images instead of a
+    # fuzzy/irrelevant stock clip.
+    _FOOTAGE_RICH = {"soccer", "basketball", "space", "history", "nature"}
+
     @classmethod
     def _domain_of(cls, text: str) -> str:
         """Best-effort topic of a theme/title so offline b-roll stays on-theme."""
@@ -449,11 +460,10 @@ REGRA DOS VISUAIS (importante — o sistema usa VÍDEO real de stock):
         # banks; using the THEME's own keywords makes the stock search miss, so the
         # pipeline falls back to an ON-THEME AI image instead of grabbing a random
         # generic clip (what made "Roblox" videos show ocean/forest footage).
-        FOOTAGE_RICH = {"soccer", "basketball", "space", "history", "nature"}
         title_kw = self._title_keywords(title or theme)
         if content_type == "sports_highlights":
             terms = self._DOMAIN_TERMS["soccer"]
-        elif domain in FOOTAGE_RICH:
+        elif domain in self._FOOTAGE_RICH:
             terms = self._DOMAIN_TERMS[domain]
         else:
             terms = [title_kw]

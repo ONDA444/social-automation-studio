@@ -208,6 +208,16 @@ async def run_pipeline(job_id: int) -> dict:
                     job.scheduled_at = datetime.utcnow()
                 upd(status=JobStatus.APPROVED, progress=100, agent=None, approval_status="approved")
                 _emit_job(job_id, status="approved", qc=qc, compliance=comp)
+                # "schedule" mode: upload to YouTube NOW as scheduled (publishAt = the
+                # future slot) instead of waiting for _job_publish_due — that's what
+                # makes it show as "Agendado" and go public exactly at the slot.
+                # "immediate" mode leaves publishing to _job_publish_due at the slot.
+                if (settings.publish_mode or "schedule").lower() == "schedule":
+                    try:
+                        from backend.pipeline.dispatch import dispatch_publish
+                        dispatch_publish(job_id)
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning("auto dispatch_publish (schedule) falhou: %s", exc)
                 return {"status": "approved_auto", "qc": qc, "compliance": comp}
 
             upd(status=JobStatus.AWAITING_APPROVAL, progress=100, agent=None, approval_status="pending")
