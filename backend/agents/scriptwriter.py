@@ -351,6 +351,10 @@ REGRA DOS VISUAIS (importante — o sistema usa VÍDEO real de stock):
             "ocean waves close up", "deep forest light rays", "wild animal slow motion",
             "volcano eruption", "mountain range aerial", "thunderstorm clouds",
         ],
+        "gaming": [
+            "gaming setup rgb lights", "person playing video game", "game controller close up",
+            "esports arena crowd", "computer screen gameplay neon", "gamer reacting headset",
+        ],
         "default": [
             "city skyline aerial", "slow motion crowd", "dramatic clouds time lapse",
             "ocean waves close up", "person walking street", "forest light rays",
@@ -378,6 +382,11 @@ REGRA DOS VISUAIS (importante — o sistema usa VÍDEO real de stock):
             "espaço", "espaco", "universo", "planeta", "galáxia", "galaxia", "nasa",
             "astronauta", "marte", "estrela", "cosmos", "buraco negro", "foguete",
         ],
+        "gaming": [
+            "roblox", "minecraft", "fortnite", "free fire", "gta", "valorant", "league of legends",
+            "videogame", "video game", "gameplay", "gamer", "jogo", "jogos", "jogar", "console",
+            "playstation", "xbox", "nintendo", "fps", "rpg", "skin", "robux",
+        ],
         "nature": [
             "oceano", " mar ", "floresta", "animal", "natureza", "selva", "tubarão",
             "tubarao", "vulcão", "vulcao", "montanha", "tempestade",
@@ -392,6 +401,23 @@ REGRA DOS VISUAIS (importante — o sistema usa VÍDEO real de stock):
             if any(k in t for k in kws):
                 return domain
         return "default"
+
+    _TITLE_STOP = {
+        "the", "a", "an", "of", "to", "in", "on", "for", "and", "or", "is", "are",
+        "most", "top", "best", "how", "why", "what", "your", "you", "with",
+        "melhores", "melhor", "como", "por", "que", "os", "as", "de", "do", "da",
+        "dos", "das", "mais", "um", "uma", "no", "na", "sobre", "pra", "para",
+    }
+
+    @classmethod
+    def _title_keywords(cls, text: str) -> str:
+        """The theme's own salient words — used as the stock query for niche topics so
+        the search misses and the pipeline draws an ON-THEME AI image instead."""
+        import re
+
+        words = re.findall(r"[A-Za-zÀ-ÿ0-9]+", text or "")
+        kw = [w for w in words if w.lower() not in cls._TITLE_STOP and not w.isdigit() and len(w) > 2]
+        return " ".join(kw[:4]).strip() or (text or "").strip()[:40] or "cinematic abstract"
 
     # ---- Offline deterministic fallback (no API keys needed) ----
     def _offline(self, theme: str, title: str, content_type: str, language: str) -> dict:
@@ -418,8 +444,21 @@ REGRA DOS VISUAIS (importante — o sistema usa VÍDEO real de stock):
         domain = self._domain_of(f"{theme} {title}")
         is_sport = content_type == "sports_highlights" or domain in ("soccer", "basketball")
         n = 6 if is_sport else 9
-        terms = (self._DOMAIN_TERMS["soccer"] if content_type == "sports_highlights"
-                 else self._DOMAIN_TERMS.get(domain, self._DOMAIN_TERMS["default"]))
+        # Footage-rich domains have real matching stock — use the curated terms.
+        # Anything else (gaming, brands, people, niche topics) won't exist on stock
+        # banks; using the THEME's own keywords makes the stock search miss, so the
+        # pipeline falls back to an ON-THEME AI image instead of grabbing a random
+        # generic clip (what made "Roblox" videos show ocean/forest footage).
+        FOOTAGE_RICH = {"soccer", "basketball", "space", "history", "nature"}
+        title_kw = self._title_keywords(title or theme)
+        if content_type == "sports_highlights":
+            terms = self._DOMAIN_TERMS["soccer"]
+        elif domain in FOOTAGE_RICH:
+            terms = self._DOMAIN_TERMS[domain]
+        else:
+            terms = [title_kw]
+        angles = ["wide establishing shot", "dramatic close up", "dynamic action angle",
+                  "moody atmospheric wide shot", "vibrant colorful scene", "epic hero shot"]
         scenes = []
         # Deterministic fallback (LLM down). Can't know facts, so it stays generic —
         # but avoids the banned filler clichés and keeps anchoring to the theme.
@@ -439,8 +478,10 @@ REGRA DOS VISUAIS (importante — o sistema usa VÍDEO real de stock):
             narration = text.format(t=theme)
             scenes.append({
                 "narration": narration,
+                # Vary the angle per scene so AI fallback images differ (the image
+                # seed is derived from this prompt) while staying anchored to the theme.
                 "visual_prompt": "" if is_sport
-                else f"cinematic dramatic scene about {theme}, photorealistic, 4k, moody lighting",
+                else f"cinematic scene about {theme}, {angles[i % len(angles)]}, photorealistic, 4k, moody lighting",
                 "visual_query": terms[i % len(terms)],
                 "is_highlight": hi,
             })
