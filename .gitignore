@@ -22,7 +22,6 @@ studio.db
 
 # ===== Node / frontend =====
 node_modules/
-frontend/dist/
 frontend/.vite/
 npm-debug.log*
 
@@ -41,3 +40,5 @@ Thumbs.db
 .idea/
 .vscode/
 *.swp
+
+.vercel
