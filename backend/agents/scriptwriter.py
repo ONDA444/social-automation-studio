@@ -27,9 +27,38 @@ from backend.config import settings
 from backend import llm
 
 SYSTEM = (
-    "Você é um roteirista profissional de conteúdo viral para YouTube, TikTok e "
-    "Instagram. Escreve roteiros 100% originais, em {lang}. Responda SEMPRE apenas "
-    "com JSON válido, sem comentários."
+    "Você é um roteirista de ELITE de YouTube/TikTok/Instagram — referência em "
+    "RETENÇÃO de audiência, no nível dos canais que seguram o espectador até o fim. "
+    "Você pensa em retenção a cada frase: os 3 primeiros segundos decidem tudo, cada "
+    "frase existe pra fazer a próxima ser assistida, e o vídeo entrega no fim a "
+    "recompensa prometida no gancho. Escreve em {lang}, conteúdo 100% original. "
+    "Responda SEMPRE apenas com JSON válido, sem comentários."
+)
+
+# Injected into every narrated script (not quote_viral). This is the "cérebro" —
+# the retention discipline that separates a script people finish from filler.
+RETENTION_RULES = (
+    "\n=== REGRAS DE RETENÇÃO (OBRIGATÓRIAS) ===\n"
+    "1. GANCHO (1ª frase): ZERO aquecimento. Abra com a informação mais surpreendente/"
+    "específica OU uma lacuna de curiosidade concreta (um número, um nome, uma aposta "
+    "clara). O espectador tem que PRECISAR saber o que vem.\n"
+    "2. SEM ENROLAÇÃO: toda frase entrega informação, tensão ou avanço da história. "
+    "Nada de frase de encheção de linguiça.\n"
+    "3. ESPECÍFICO > genérico: use nomes, lugares e números CONCRETOS (somente os fatos "
+    "verificados — NUNCA invente). Detalhe concreto prende; vago faz pular o vídeo.\n"
+    "4. CICLOS ABERTOS: levante uma pergunta no começo e só responda mais pra frente; "
+    "encadeie com 'mas', 'então', 'até que' pra puxar a próxima cena.\n"
+    "5. RITMO: alterne frases curtas e médias, com viradas. Tom de quem conversa, não "
+    "de narração de enciclopédia.\n"
+    "6. RECOMPENSA + CTA: entregue o que o gancho prometeu e feche com um CTA ligado à "
+    "curiosidade do tema — nunca um 'segue o canal' solto.\n"
+    "7. PROIBIDO começar ou rechear com clichês vazios como: 'Espera, você precisa ver', "
+    "'Tudo começou de um jeito que ninguém esperava', 'isso é mais profundo do que "
+    "parece', 'as consequências foram imediatas', 'o que vem agora muda tudo', "
+    "'prepare-se', 'você não vai acreditar'.\n"
+    "8. TÍTULO: específico + lacuna de curiosidade (com número/aposta quando couber). "
+    "Nada de título genérico.\n"
+    "=== FIM DAS REGRAS ===\n"
 )
 
 # Per-content-type instructions injected into the LLM prompt.
@@ -223,10 +252,11 @@ class ScriptwriterAgent(BaseAgent):
                 "IMPORTANTE (duração): gere o roteiro COMPLETO atingindo a contagem de "
                 "palavras/cenas alvo do tipo acima — vídeos curtos demais são rejeitados. Não resuma."
             )
+        retention_block = RETENTION_RULES if content_type != "quote_viral" else ""
         prompt = f"""Tema: "{theme}"
 Modo: {mode}
 
-{guide}{style_hint}{facts_block}
+{guide}{style_hint}{retention_block}{facts_block}
 {length_block}
 
 Responda com JSON neste formato EXATO:
@@ -347,16 +377,18 @@ REGRA DOS VISUAIS (importante — o sistema usa VÍDEO real de stock):
         terms = (self._DOMAIN_TERMS["soccer"] if content_type == "sports_highlights"
                  else self._DOMAIN_TERMS.get(domain, self._DOMAIN_TERMS["default"]))
         scenes = []
+        # Deterministic fallback (LLM down). Can't know facts, so it stays generic —
+        # but avoids the banned filler clichés and keeps anchoring to the theme.
         beats = [
-            ("Você não vai acreditar no que aconteceu com {t}.", True),
-            ("Tudo começou de um jeito que ninguém esperava.", False),
-            ("O contexto por trás de {t} é mais profundo do que parece.", False),
-            ("E então veio o momento que mudou tudo.", True),
-            ("As consequências foram imediatas e impactantes.", False),
-            ("Cada detalhe revela uma camada nova de {t}.", False),
-            ("O clímax deixou todos sem palavras.", True),
-            ("No fim, a lição que fica é poderosa.", False),
-            ("Se curtiu, segue o canal para mais sobre {t}.", False),
+            ("{t} — e tem um detalhe que quase ninguém percebeu.", True),
+            ("Pra entender de verdade, olha como cada parte se conecta.", False),
+            ("É aqui que {t} fica realmente interessante.", False),
+            ("E foi nesse ponto que a virada aconteceu.", True),
+            ("Repara nos detalhes — eles mudam como você enxerga {t}.", False),
+            ("Poucos sabem o que veio logo depois disso.", False),
+            ("Esse foi o momento que ninguém mais esquece.", True),
+            ("E é por isso que {t} ainda dá o que falar.", False),
+            ("Curtiu? Tem mais sobre {t} aqui no canal.", False),
         ]
         for i in range(n):
             text, hi = beats[i % len(beats)]
