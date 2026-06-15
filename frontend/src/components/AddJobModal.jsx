@@ -48,8 +48,8 @@ export default function AddJobModal({ open, onClose, onCreated }) {
   }
 
   return (
-    <div className="fixed inset-0 bg-black/60 grid place-items-center z-50 p-4" onClick={onClose}>
-      <div className="card p-6 w-full max-w-lg" onClick={(e) => e.stopPropagation()}>
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm grid place-items-center z-50 p-4 fade-in" onClick={onClose}>
+      <div className="card p-6 w-full max-w-lg shadow-[0_20px_60px_rgba(0,0,0,0.5)] animate-[fadeIn_.2s_ease-out] origin-center" onClick={(e) => e.stopPropagation()}>
         <h3 className="heading text-lg font-semibold mb-4">Novo vídeo</h3>
         <div className="space-y-3">
           <div>
@@ -85,7 +85,7 @@ export default function AddJobModal({ open, onClose, onCreated }) {
             <label className="text-xs text-text-muted">Plataformas</label>
             <div className="flex gap-2 mt-1">
               {PLATFORMS.map((p) => (
-                <button key={p} onClick={() => toggle(p)} className={`badge cursor-pointer ${form.target_platforms.includes(p) ? 'bg-accent text-white' : 'bg-elevated text-text-muted'}`}>{p}</button>
+                <button key={p} onClick={() => toggle(p)} className={`badge cursor-pointer transition-colors ${form.target_platforms.includes(p) ? 'bg-accent text-white' : 'bg-elevated text-text-muted hover:text-text-primary hover:bg-border'}`}>{p}</button>
               ))}
             </div>
           </div>

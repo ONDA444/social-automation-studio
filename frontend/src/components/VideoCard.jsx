@@ -5,10 +5,10 @@ export default function VideoCard({ job, onClick }) {
   const s = statusMeta(job.status)
   const thumb = mediaUrl(job.thumbnail_path)
   return (
-    <div className="card p-3 hover:border-accent/50 transition-colors cursor-pointer" onClick={onClick}>
+    <div className="card card-hover group p-3 cursor-pointer fade-in" onClick={onClick}>
       <div className="aspect-video rounded-btn overflow-hidden bg-elevated mb-3 flex items-center justify-center">
         {thumb ? (
-          <img src={thumb} alt="" className="w-full h-full object-cover" onError={(e) => (e.target.style.display = 'none')} />
+          <img src={thumb} alt="" className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105" onError={(e) => (e.target.style.display = 'none')} />
         ) : (
           <span className="text-3xl opacity-40">🎬</span>
         )}
@@ -20,7 +20,7 @@ export default function VideoCard({ job, onClick }) {
       {job.status === 'processing' && (
         <div className="mt-2">
           <div className="h-1.5 rounded-full bg-elevated overflow-hidden">
-            <div className="h-full bg-accent transition-all" style={{ width: `${job.progress || 0}%` }} />
+            <div className="h-full bg-accent rounded-full transition-[width] duration-500 ease-out" style={{ width: `${job.progress || 0}%` }} />
           </div>
           <p className="text-[11px] text-text-muted mt-1">{job.current_agent || '...'} · {job.progress}%</p>
         </div>

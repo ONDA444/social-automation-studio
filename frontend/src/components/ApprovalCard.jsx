@@ -40,7 +40,7 @@ export default function ApprovalCard({ job, onDone }) {
   const yt = seo.youtube || {}
 
   return (
-    <div className="card p-4">
+    <div className="card card-hover p-4 fade-in">
       <div className="flex gap-4">
         <div className="w-64 shrink-0">
           {showPlayer ? (
@@ -50,7 +50,7 @@ export default function ApprovalCard({ job, onDone }) {
               {job.thumbnail_path
                 ? <img src={mediaUrl(job.thumbnail_path)} className="w-full h-full object-cover" alt="" />
                 : <span className="absolute inset-0 grid place-items-center text-3xl opacity-40">🎬</span>}
-              <span className="absolute inset-0 grid place-items-center bg-black/30 group-hover:bg-black/50 text-white text-2xl">▶ Preview</span>
+              <span className="absolute inset-0 grid place-items-center bg-black/20 group-hover:bg-black/45 text-white text-2xl opacity-80 group-hover:opacity-100 transition-all duration-200">▶ Preview</span>
             </button>
           )}
           <div className="flex flex-wrap gap-1 mt-2">
