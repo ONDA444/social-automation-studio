@@ -156,8 +156,11 @@ class ScriptwriterAgent(BaseAgent):
         **_,
     ) -> dict:
         language = language or settings.default_language
-        content_type = content_type if content_type in TEMPLATE_GUIDE else "film_recap_ai_images"
         theme = topic or title
+        if content_type in (None, "", "auto"):
+            content_type = self._detect_content_type(theme)
+            self.emit("progress", f"Tipo detectado automaticamente: {content_type}", progress=12)
+        content_type = content_type if content_type in TEMPLATE_GUIDE else "film_recap_ai_images"
         research = research or self.ctx_get("research") or {}
         video_format = video_format or self.ctx_get("format") or "long"
 
@@ -286,6 +289,40 @@ REGRA DOS VISUAIS (importante — o sistema usa VÍDEO real de stock):
 - quote_viral deixa "narration" vazio e usa "on_screen_text"."""
         system = SYSTEM.format(lang=language)
         return await llm.complete_json(prompt, system=system, max_tokens=4000)
+
+    @classmethod
+    def _detect_content_type(cls, theme: str) -> str:
+        """Keyword-based auto-detection — picks the best content_type for a theme."""
+        t = f" {(theme or '').lower()} "
+        # Sports: reuse the existing domain keywords (most specific signal)
+        sport_kws = cls._DOMAIN_KEYWORDS.get("soccer", []) + cls._DOMAIN_KEYWORDS.get("basketball", [])
+        if any(k in t for k in sport_kws):
+            return "sports_highlights"
+        # Ranking / top N
+        if any(k in t for k in ["top ", "top5", "top10", "top 5", "top 10", "melhores ", "ranking", "piores "]):
+            return "top_list_ranking"
+        # True crime / mystery
+        if any(k in t for k in ["crime", "assassin", "mistério", "misterio", "desaparec",
+                                  "serial killer", "caso", "morreu", "morte de ", "homicid"]):
+            return "true_crime_mystery"
+        # Motivational
+        if any(k in t for k in ["motivação", "motivacao", "não desista", "nao desista",
+                                  "disciplina", "mindset", "acredite", "guerreiro"]):
+            return "motivational_speech"
+        # Curiosity / explainer
+        if any(k in t for k in ["por que", "como funciona", "por quê", "porquê",
+                                  "ciência", "ciencia", "descoberta", "fenômeno", "fenomeno", "teoria"]):
+            return "explainer_curiosity"
+        # Reddit story
+        if any(k in t for k in ["reddit", "aconteceu comigo", "confissão", "confissao", "tifu"]):
+            return "reddit_story"
+        # Reaction / commentary
+        if any(k in t for k in ["react", "polêmica", "polemica", "notícia", "noticia", "trending"]):
+            return "reaction_commentary"
+        # Quote viral
+        if any(k in t for k in ["frase", "reflexão", "reflexao", "filosofia", "sabedoria"]):
+            return "quote_viral"
+        return "film_recap_ai_images"
 
     # Domain -> concrete English stock-video search terms. Lets the OFFLINE
     # fallback (when the LLM is rate-limited) still pull ON-THEME footage instead

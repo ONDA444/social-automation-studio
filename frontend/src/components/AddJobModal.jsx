@@ -3,6 +3,7 @@ import { api } from '../api'
 
 // Fallback usado quando GET /content-types falhar ou ainda não existir.
 const FALLBACK_CONTENT_TYPES = [
+  { value: 'auto', label: '✨ Automático (IA detecta)' },
   { value: 'film_recap_ai_images', label: 'Recap (imagens IA)' },
   { value: 'sports_highlights', label: 'Esportes (highlights)' },
   { value: 'quote_viral', label: 'Frase viral' },
@@ -10,7 +11,7 @@ const FALLBACK_CONTENT_TYPES = [
 const PLATFORMS = ['youtube', 'tiktok', 'instagram']
 
 export default function AddJobModal({ open, onClose, onCreated }) {
-  const [form, setForm] = useState({ title: '', topic: '', content_type: 'film_recap_ai_images', format: 'long', target_platforms: ['youtube'], account_id: '' })
+  const [form, setForm] = useState({ title: '', topic: '', content_type: 'auto', format: 'long', target_platforms: ['youtube'], account_id: '' })
   const [accounts, setAccounts] = useState([])
   const [contentTypes, setContentTypes] = useState(FALLBACK_CONTENT_TYPES)
   const [busy, setBusy] = useState(false)
@@ -42,7 +43,7 @@ export default function AddJobModal({ open, onClose, onCreated }) {
       }
       onCreated?.()
       onClose()
-      setForm({ title: '', topic: '', content_type: 'film_recap_ai_images', format: 'long', target_platforms: ['youtube'], account_id: '' })
+      setForm({ title: '', topic: '', content_type: 'auto', format: 'long', target_platforms: ['youtube'], account_id: '' })
     } catch (e) { alert(e.message) } finally { setBusy(false) }
   }
 
@@ -61,6 +62,9 @@ export default function AddJobModal({ open, onClose, onCreated }) {
             <select className="input mt-1" value={form.content_type} onChange={(e) => setForm({ ...form, content_type: e.target.value })}>
               {contentTypes.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
             </select>
+            {form.content_type === 'auto' && (
+              <p className="text-[11px] text-accent mt-1">✨ A IA detecta o melhor tipo com base no tema que você escreveu.</p>
+            )}
           </div>
           <div>
             <label className="text-xs text-text-muted">Formato</label>

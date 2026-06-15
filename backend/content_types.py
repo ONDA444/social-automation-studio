@@ -16,6 +16,11 @@ from __future__ import annotations
 # backend; `label`/`description` are human-facing (pt-BR) for the frontend.
 CONTENT_TYPES: list[dict[str, str]] = [
     {
+        "value": "auto",
+        "label": "✨ Automático (IA detecta)",
+        "description": "A IA analisa o tema e escolhe o melhor tipo de conteúdo automaticamente.",
+    },
+    {
         "value": "film_recap_ai_images",
         "label": "Recap de Filme (imagens IA)",
         "description": "Recap dramático narrado estilo documentário, com imagens geradas por IA.",
