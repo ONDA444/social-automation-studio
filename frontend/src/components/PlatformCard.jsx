@@ -62,16 +62,28 @@ export default function PlatformCard({ account, onChange, onChanged, onDone }) {
         </div>
       </div>
 
+      {/* CTA dedicado de voz — alvo grande e rotulado */}
+      <button
+        className={`${account.preferred_voice && account.preferred_voice.startsWith('v_') ? 'btn-ghost' : 'btn-primary'} w-full mb-2`}
+        onClick={() => setRecording(true)}
+        title="Gravar e clonar minha voz para este canal"
+      >
+        <span className="text-base leading-none">🎤</span>
+        <span className="flex-1 text-left">
+          {account.preferred_voice && account.preferred_voice.startsWith('v_') ? 'Regravar minha voz' : 'Gravar minha voz'}
+        </span>
+        {account.preferred_voice && account.preferred_voice.startsWith('v_')
+          ? <span className="badge text-[10px]" style={{ background: 'var(--success)' + '22', color: 'var(--success)' }}>● Voz clonada</span>
+          : <span className="text-[11px] opacity-80">clonar p/ este canal</span>}
+      </button>
+
       <div className="flex items-center gap-2">
         {connected
           ? <button className="btn-ghost flex-1 text-xs" style={{ color: 'var(--error)' }} onClick={disconnect}>⤫ Desconectar</button>
           : <button className="btn-ghost flex-1 text-xs" onClick={connect}>🔗 Conectar</button>}
-        <button className="btn-ghost text-xs" onClick={() => setRecording(true)} title="Gravar e clonar minha voz para este canal">🎤</button>
         <button className="btn-ghost text-xs" onClick={toggle} title={account.status === 'active' ? 'Pausar' : 'Retomar'}>{account.status === 'active' ? '⏸' : '▶'}</button>
         <button className="btn-ghost text-xs" onClick={remove} title="Remover conta">🗑</button>
       </div>
-      {account.preferred_voice && account.preferred_voice.startsWith('v_') &&
-        <p className="text-[10px] text-accent mt-1">🎙️ Voz clonada ativa</p>}
       {recording && <VoiceRecorder account={account} onClose={() => setRecording(false)} onCloned={() => { setRecording(false); refresh?.() }} />}
       {connected
         ? <p className="text-[10px] text-success mt-2">✓ {account.channel_id || account.display_name} conectado</p>
