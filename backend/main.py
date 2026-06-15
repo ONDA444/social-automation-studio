@@ -98,6 +98,13 @@ _load_routers()
 settings.ensure_dirs()
 app.mount("/files", StaticFiles(directory=str(settings.abs_path(settings.output_dir))), name="files")
 
+# Built frontend (SPA) served from THIS service — one deploy updates everything,
+# no separate host / deploy limit. Built bundle lives in frontend/dist.
+from backend.config import ROOT_DIR as _ROOT_DIR  # noqa: E402
+
+_FRONTEND_DIST = _ROOT_DIR / "frontend" / "dist"
+_RESERVED_PREFIXES = {"api", "files", "media", "health", "ws", "docs", "openapi.json", "redoc"}
+
 
 def _recover_orphan_jobs() -> None:
     """
@@ -222,6 +229,11 @@ async def _on_shutdown() -> None:
 
 @app.get("/")
 async def root():
+    from fastapi.responses import FileResponse
+
+    idx = _FRONTEND_DIST / "index.html"
+    if idx.is_file():
+        return FileResponse(str(idx))
     return {"service": "Social Automation Studio", "status": "ok", "docs": "/docs"}
 
 
@@ -310,3 +322,21 @@ async def websocket_endpoint(ws: WebSocket):
         events.manager.disconnect(ws)
     except Exception:
         events.manager.disconnect(ws)
+
+
+# SPA catch-all — MUST be last so real API/util routes match first. Serves a built
+# asset if it exists, else index.html (client-side routing handles /queue, etc.).
+@app.get("/{full_path:path}")
+async def _spa(full_path: str):
+    from fastapi import HTTPException
+    from fastapi.responses import FileResponse
+
+    if full_path.split("/")[0] in _RESERVED_PREFIXES:
+        raise HTTPException(404, "Not Found")
+    candidate = _FRONTEND_DIST / full_path
+    if full_path and candidate.is_file():
+        return FileResponse(str(candidate))
+    idx = _FRONTEND_DIST / "index.html"
+    if idx.is_file():
+        return FileResponse(str(idx))
+    raise HTTPException(404, "frontend não compilado")
