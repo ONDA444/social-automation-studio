@@ -23,6 +23,12 @@ logger = logging.getLogger("studio.calendar")
 SPACING = timedelta(minutes=15)
 DEFAULT_TZ = "America/Sao_Paulo"
 
+# General high-engagement posting windows (BR audience, YouTube/Shorts consensus),
+# ranked. Used by "smart" mode UNTIL the account has its own analytics, and as the
+# fallback when no post_times are configured. Once real first-2h view data exists,
+# _smart_times() overrides these with the account's actually-best hours.
+BEST_TIMES_RANKED = ["19:00", "21:00", "12:00", "18:00", "20:00", "15:00", "13:00", "08:00", "22:00", "17:00"]
+
 
 def _utcnow() -> datetime:
     """Timezone-aware 'now' in UTC (replaces the old naive datetime.utcnow())."""
@@ -51,15 +57,34 @@ class ContentCalendarAgent:
         ).scalars().first()
         mode = mode or (cfg.mode if cfg else "fixed")
         per_day = (cfg.videos_per_day if cfg else None) or (acct.schedule or {}).get("videos_per_day", 1)
-        post_times = (cfg.post_times if cfg else None) or (acct.schedule or {}).get("post_times", ["19:00"])
         tz = _resolve_tz(cfg.timezone if cfg else None)
 
-        if mode == "smart":
-            post_times = self._smart_times(account_id) or post_times
         if mode == "trending_aware":
             return self._asap_slots(count)
 
+        post_times = self.resolve_post_times(account_id, cfg, per_day, mode)
         return self._fixed_slots(post_times, per_day, count, tz)
+
+    def resolve_post_times(self, account_id: int, cfg, per_day: int, mode: str | None = None) -> list[str]:
+        """Effective HH:MM list for an account, resolving the schedule mode.
+
+        smart  -> the account's learned best hours, or the general best-times spread
+                  (BEST_TIMES_RANKED) until enough analytics exist.
+        fixed  -> the configured post_times, or the best-times spread if none set.
+        Used by both next_slots() and the scheduler's slot-due check so the calendar
+        the user sees and the generation timing always agree.
+        """
+        mode = mode or (cfg.mode if cfg else "fixed")
+        configured = list(cfg.post_times) if (cfg and cfg.post_times) else []
+        if mode == "smart":
+            return self._smart_times(account_id) or self.best_times(per_day)
+        return configured or self.best_times(per_day)
+
+    @staticmethod
+    def best_times(n: int) -> list[str]:
+        """Top-N general best posting times, time-sorted for a sane daily spread."""
+        n = max(1, int(n or 1))
+        return sorted(BEST_TIMES_RANKED[:n])
 
     def _fixed_slots(
         self, post_times: list[str], per_day: int, count: int, tz: ZoneInfo

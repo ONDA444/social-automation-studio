@@ -139,12 +139,13 @@ def _as_naive_utc(dt: datetime) -> datetime:
     return dt
 
 
-def _slots_due_today(cfg, now_utc: datetime) -> int:
+def _slots_due_today(hhmm_times: list[str], per_day: int, tz_name: str | None, now_utc: datetime) -> int:
     """
     How many of today's posting slots have already arrived (slot time <= now),
     capped at videos_per_day.
 
-    post_times are HH:MM in the account's local timezone. We compare against the
+    `hhmm_times` are the EFFECTIVE HH:MM slots (already resolved for fixed/smart
+    mode by the calendar) in the account's local timezone. We compare against the
     local wall-clock 'now'. This is what paces generation: one video is produced
     only once its slot has come — never the whole list up front (which would
     hammer the LLM/voice APIs).
@@ -152,14 +153,13 @@ def _slots_due_today(cfg, now_utc: datetime) -> int:
     from datetime import time as _time
     from zoneinfo import ZoneInfo
 
-    per_day = max(1, cfg.videos_per_day or 1)
+    per_day = max(1, per_day or 1)
     try:
-        tz = ZoneInfo(cfg.timezone or "America/Sao_Paulo")
+        tz = ZoneInfo(tz_name or "America/Sao_Paulo")
     except Exception:  # noqa: BLE001
         tz = ZoneInfo("America/Sao_Paulo")
-    raw = (cfg.post_times or ["19:00"])[:]
     times = []
-    for hhmm in raw:
+    for hhmm in (hhmm_times or ["19:00"]):
         try:
             h, m = str(hhmm).split(":")
             times.append(_time(int(h), int(m)))
@@ -193,6 +193,7 @@ def _job_consume_themes() -> None:
 
     from sqlalchemy import func, select
 
+    from backend.agents.content_calendar import ContentCalendarAgent
     from backend.models import JobStatus, PlatformAccount, ScheduleConfig, ThemeQueue, VideoJob
     from backend.pipeline.dispatch import dispatch_job
 
@@ -200,6 +201,7 @@ def _job_consume_themes() -> None:
 
     db = SessionLocal()
     try:
+        calendar = ContentCalendarAgent(db)
         accounts = db.execute(
             select(PlatformAccount).where(PlatformAccount.status == "active")
         ).scalars().all()
@@ -224,8 +226,12 @@ def _job_consume_themes() -> None:
                     continue
 
                 # Slots that have arrived today, minus what we've already generated
-                # today for this account = how many to kick off right now.
-                due = _slots_due_today(cfg, now_utc)
+                # today for this account = how many to kick off right now. Times are
+                # resolved through the calendar so "smart" mode (best/learned hours)
+                # paces generation the same way the user sees it on the Agenda.
+                per_day = max(1, cfg.videos_per_day or 1)
+                times = calendar.resolve_post_times(acct.id, cfg, per_day)
+                due = _slots_due_today(times, per_day, cfg.timezone, now_utc)
                 if due <= 0:
                     continue  # next slot hasn't arrived yet — wait
 
