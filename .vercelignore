@@ -1,0 +1,10 @@
+.venv/
+backend/
+output/
+tmp/
+cache/
+logs/
+assets/music/
+*.db
+*.sqlite
+*.log
