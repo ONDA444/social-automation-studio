@@ -301,8 +301,9 @@ async def import_csv(file: UploadFile = File(...), db: Session = Depends(get_db)
     """
     raw = (await file.read()).decode("utf-8-sig")
     reader = csv.DictReader(io.StringIO(raw))
-    created = []
-    for row in reader:
+    created: list[int] = []
+    skipped: list[dict] = []
+    for i, row in enumerate(reader, start=1):
         title = (row.get("title") or "").strip()
         if not title:
             continue
@@ -311,7 +312,11 @@ async def import_csv(file: UploadFile = File(...), db: Session = Depends(get_db)
         platforms = [p.strip() for p in (row.get("target_platforms") or "youtube").split("|") if p.strip()]
         acct = row.get("account_id")
         account_id = int(acct) if acct and acct.strip().isdigit() else None
-        _require_account(db, account_id)
+        # A bad account on one row must NOT abort the whole import (losing every
+        # later row). Skip it and report instead.
+        if account_id is not None and db.get(PlatformAccount, account_id) is None:
+            skipped.append({"row": i, "title": title, "reason": f"account_id {account_id} não existe"})
+            continue
         job = VideoJob(
             title=title,
             topic=(row.get("topic") or None),
@@ -326,7 +331,7 @@ async def import_csv(file: UploadFile = File(...), db: Session = Depends(get_db)
         db.refresh(job)
         dispatch_job(job.id)
         created.append(job.id)
-    return {"created": created, "count": len(created)}
+    return {"created": created, "count": len(created), "skipped": skipped}
 
 
 @router.post("/{job_id}/publish")

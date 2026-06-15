@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from backend.agents.content_calendar import ContentCalendarAgent
 from backend.database import get_db
-from backend.models import ScheduleConfig, VideoJob
+from backend.models import PlatformAccount, ScheduleConfig, VideoJob
 
 router = APIRouter(prefix="/schedule", tags=["schedule"])
 
@@ -32,6 +32,10 @@ def get_config(account_id: int, db: Session = Depends(get_db)):
 
 @router.put("/config/{account_id}")
 def upsert_config(account_id: int, payload: ScheduleConfigIn, db: Session = Depends(get_db)):
+    # Validate the account exists first — otherwise we'd insert a ScheduleConfig
+    # with a dangling FK (500 on Postgres / orphan row on SQLite).
+    if db.get(PlatformAccount, account_id) is None:
+        raise HTTPException(404, f"conta {account_id} não encontrada")
     cfg = db.execute(
         select(ScheduleConfig).where(ScheduleConfig.account_id == account_id)
     ).scalars().first()
