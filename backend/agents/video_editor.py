@@ -24,8 +24,16 @@ from backend.agents.base_agent import BaseAgent
 from backend.config import settings
 from backend.effects import ffmpeg_effects as fx
 
-W, H, FPS = 1920, 1080, 30
+# Landscape dimensions derived from the configured render height (default 720p).
+# Lower height => far less memory in the multi-clip xfade (avoids container OOM).
+FPS = 30
+_LH = max(360, min(1080, settings.video_resolution))
+H = _LH
+W = (round(_LH * 16 / 9)) & ~1  # even width for yuv420p
 TRANSITION_DUR = 0.4  # seconds of xfade overlap
+# Beyond this many clips, a single all-inputs xfade graph decodes too many videos
+# at once and OOM-kills the container — fall back to (memory-light) hard cuts.
+MAX_XFADE_CLIPS = 6
 
 # Capped-bitrate H.264 profile (~8-12 Mbps target; keeps grain from exploding size).
 # -threads caps x264's thread count: left to auto it spawns one per HOST core (60+
@@ -71,8 +79,9 @@ class VideoEditorAgent(BaseAgent):
             raise FFmpegError("Nenhum asset de cena para editar.")
 
         # Target frame: native vertical (9:16) for Shorts, else landscape (16:9).
+        # Portrait just swaps the configured dimensions (720p -> 720x1280).
         fmt = (self.ctx_get("format") or script.get("format") or "long")
-        self.W, self.H = (1080, 1920) if fmt == "short" else (W, H)
+        self.W, self.H = (H, W) if fmt == "short" else (W, H)
 
         out_dir = self.job_dir(self.job_id, settings.abs_path(settings.output_dir))
         work = self.job_dir(self.job_id, settings.abs_path(settings.temp_dir)) / "edit"
@@ -177,6 +186,10 @@ class VideoEditorAgent(BaseAgent):
     def _stitch(self, clip_files, durations, transition, ass_name, work: Path, dst: Path):
         n = len(clip_files)
         soft = fx.xfade_name(transition)
+        # Too many clips for a single xfade graph (would decode all at once -> OOM):
+        # fall back to memory-light hard cuts.
+        if soft is not None and n > MAX_XFADE_CLIPS:
+            soft = None
 
         if n == 1:
             vf = f"ass={ass_name}" if ass_name else None

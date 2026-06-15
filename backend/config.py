@@ -95,6 +95,9 @@ class Settings(BaseSettings):
     # the container (ffmpeg rc=-9). Cap it low to fit the container's RAM. Override
     # with FFMPEG_THREADS if you move to a bigger box.
     ffmpeg_threads: int = 2
+    # Render height (landscape). 720 keeps memory well within a small container;
+    # the all-clips xfade at 1080p OOM-kills it. Bump to 1080 only on a bigger box.
+    video_resolution: int = 720
     default_tts_voice: str = "pt-BR-AntonioNeural"
     default_language: str = "pt-BR"
     log_level: str = "INFO"
