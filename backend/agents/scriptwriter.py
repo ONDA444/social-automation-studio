@@ -251,6 +251,74 @@ REGRA DOS VISUAIS (importante — o sistema usa VÍDEO real de stock):
         system = SYSTEM.format(lang=language)
         return await llm.complete_json(prompt, system=system, max_tokens=4000)
 
+    # Domain -> concrete English stock-video search terms. Lets the OFFLINE
+    # fallback (when the LLM is rate-limited) still pull ON-THEME footage instead
+    # of generic city/ocean b-roll. Keyed off the THEME TEXT, not just content_type
+    # — fixes "remix de futebol gerou arranha-céu/nuvem".
+    _DOMAIN_TERMS = {
+        "soccer": [
+            "soccer stadium crowd night", "slow motion goal celebration",
+            "football players running pitch", "stadium floodlights fans",
+            "soccer ball net close up", "fans cheering stadium",
+        ],
+        "basketball": [
+            "basketball arena crowd", "slam dunk slow motion", "basketball court night",
+            "basketball players game", "basketball hoop close up", "cheering fans arena",
+        ],
+        "history": [
+            "ancient ruins aerial", "old battlefield landscape", "vintage archival film grain",
+            "ancient castle fog", "old map close up", "candle lit stone hall",
+        ],
+        "space": [
+            "earth from space", "galaxy stars timelapse", "planet surface render",
+            "rocket launch slow motion", "astronaut floating", "nebula deep space",
+        ],
+        "nature": [
+            "ocean waves close up", "deep forest light rays", "wild animal slow motion",
+            "volcano eruption", "mountain range aerial", "thunderstorm clouds",
+        ],
+        "default": [
+            "city skyline aerial", "slow motion crowd", "dramatic clouds time lapse",
+            "ocean waves close up", "person walking street", "forest light rays",
+            "old documents close up", "stadium lights night", "rain window night",
+        ],
+    }
+    _DOMAIN_KEYWORDS = {
+        "soccer": [
+            "futebol", "football", "soccer", "gol ", "golaço", "golaco", "jogador",
+            "craque", "neymar", "messi", "ronaldo", "cr7", "cristiano", "mbappe",
+            "mbappé", "copa", "champions", "libertadores", "penalti", "pênalti",
+            "drible", "passe", "partida", "seleção", "selecao", "psg", "barcelona",
+            "real madrid", "campeonato", "atacante", "zagueiro", "goleiro", "fifa",
+            "estádio", "estadio", "chute", "dribl",
+        ],
+        "basketball": ["basquete", "basketball", "nba", "lebron", "jordan", "curry", "enterrada", "dunk"],
+        # NOTE: "história/historia" is intentionally absent — it means "story" in
+        # almost every theme ("a história de...") and would hijack every video.
+        "history": [
+            "guerra", "batalha", "império", "imperio", "antigo", "faraó", "farao",
+            "roma", "egito", "medieval", "segunda guerra", "nazista", "revolução",
+            "revolucao", "império romano", "gladiador", "viking", "cavaleiro",
+        ],
+        "space": [
+            "espaço", "espaco", "universo", "planeta", "galáxia", "galaxia", "nasa",
+            "astronauta", "marte", "estrela", "cosmos", "buraco negro", "foguete",
+        ],
+        "nature": [
+            "oceano", " mar ", "floresta", "animal", "natureza", "selva", "tubarão",
+            "tubarao", "vulcão", "vulcao", "montanha", "tempestade",
+        ],
+    }
+
+    @classmethod
+    def _domain_of(cls, text: str) -> str:
+        """Best-effort topic of a theme/title so offline b-roll stays on-theme."""
+        t = f" {(text or '').lower()} "
+        for domain, kws in cls._DOMAIN_KEYWORDS.items():
+            if any(k in t for k in kws):
+                return domain
+        return "default"
+
     # ---- Offline deterministic fallback (no API keys needed) ----
     def _offline(self, theme: str, title: str, content_type: str, language: str) -> dict:
         theme = theme or "História impressionante"
@@ -270,22 +338,14 @@ REGRA DOS VISUAIS (importante — o sistema usa VÍDEO real de stock):
                 "seo_keywords": [theme.lower(), "reflexão", "motivação"],
             }
 
-        is_sport = content_type == "sports_highlights"
+        # Pick b-roll from the THEME, not just content_type: a football theme must
+        # pull football footage even when the LLM is down and content_type is the
+        # neutral "film_recap_ai_images" (what remix uses).
+        domain = self._domain_of(f"{theme} {title}")
+        is_sport = content_type == "sports_highlights" or domain in ("soccer", "basketball")
         n = 6 if is_sport else 9
-        # Concrete, filmable b-roll terms so the offline path still pulls real
-        # stock video (rotated per scene); paired with the theme for relevance.
-        broll_terms = [
-            "city skyline aerial", "slow motion crowd", "dramatic clouds time lapse",
-            "ocean waves close up", "person walking street", "forest light rays",
-            "old documents close up", "stadium lights night", "rain window night",
-        ]
-        # English-only sports terms (the user's title/theme is usually Portuguese and
-        # may carry proper nouns that zero-out English-indexed stock engines).
-        sport_terms = [
-            "soccer stadium crowd night", "slow motion goal celebration",
-            "football players running pitch", "stadium floodlights fans",
-            "soccer ball net close up", "fans cheering stadium",
-        ]
+        terms = (self._DOMAIN_TERMS["soccer"] if content_type == "sports_highlights"
+                 else self._DOMAIN_TERMS.get(domain, self._DOMAIN_TERMS["default"]))
         scenes = []
         beats = [
             ("Você não vai acreditar no que aconteceu com {t}.", True),
@@ -301,20 +361,13 @@ REGRA DOS VISUAIS (importante — o sistema usa VÍDEO real de stock):
         for i in range(n):
             text, hi = beats[i % len(beats)]
             narration = text.format(t=theme)
-            if is_sport:
-                scenes.append({
-                    "narration": narration,
-                    "visual_prompt": "",
-                    "visual_query": sport_terms[i % len(sport_terms)],
-                    "is_highlight": hi,
-                })
-            else:
-                scenes.append({
-                    "narration": narration,
-                    "visual_prompt": f"cinematic dramatic scene about {theme}, photorealistic, 4k, moody lighting",
-                    "visual_query": broll_terms[i % len(broll_terms)],
-                    "is_highlight": hi,
-                })
+            scenes.append({
+                "narration": narration,
+                "visual_prompt": "" if is_sport
+                else f"cinematic dramatic scene about {theme}, photorealistic, 4k, moody lighting",
+                "visual_query": terms[i % len(terms)],
+                "is_highlight": hi,
+            })
         return {
             "title_options": [
                 f"{theme}: a história completa",
