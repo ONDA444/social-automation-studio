@@ -113,6 +113,10 @@ class Settings(BaseSettings):
     #                  at the slot time (shows as "Agendado" in Studio).
     #   "immediate" -> generate AT the slot and publish public right away.
     publish_mode: str = "schedule"
+    # When the LLM is unavailable, the scriptwriter would emit a hollow generic
+    # template (no real facts). False = REJECT it and retry instead of publishing
+    # garbage (real content only). Set True only if you'd rather ship a placeholder.
+    allow_offline_script: bool = False
     # How many minutes before the slot to start generating (must exceed render time
     # so the upload's publishAt is still in the future). Used by "schedule" mode.
     generation_lead_minutes: int = 30

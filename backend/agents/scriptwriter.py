@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import asyncio
 
-from backend.agents.base_agent import BaseAgent
+from backend.agents.base_agent import AgentError, BaseAgent
 from backend.config import settings
 from backend import llm
 
@@ -142,6 +142,10 @@ TEMPLATE_GUIDE = {
 
 class ScriptwriterAgent(BaseAgent):
     name = "scriptwriter"
+    # Scripting is the content source — retry fast (LLM rate limits recover in
+    # seconds) instead of the default 30s/2min/5min, so a real script is produced
+    # without long stalls before the gate gives up.
+    backoffs = [8, 20, 45]
 
     async def run(
         self,
@@ -168,15 +172,21 @@ class ScriptwriterAgent(BaseAgent):
 
         try:
             script = await self._via_llm(theme, title, mode, content_type, style_dna, language, research, video_format)
-        except llm.LLMUnavailable:
+        except llm.LLMUnavailable as exc:
+            # NEVER ship the hollow generic template (it throws away the researched
+            # facts -> "vídeo escroto"). Reject so BaseAgent retries; if it keeps
+            # failing the job errors and is retried later, when the LLM is back.
+            if not settings.allow_offline_script:
+                raise AgentError("LLM indisponível — roteiro real não pôde ser gerado (não publico genérico)") from exc
             self.emit("progress", "Sem LLM disponível — usando roteiro offline (placeholder)", progress=30)
             script = self._offline(theme, title, content_type, language)
 
-        # Harden the most failure-prone seam: a syntactically-valid LLM JSON whose
-        # "scenes" is the wrong shape (null / list of strings / dict) would crash the
-        # normalization loop below. Coerce to the offline template instead of aborting.
+        # A syntactically-valid LLM JSON whose "scenes" is the wrong shape is also
+        # unusable — retry rather than fall back to the generic template.
         sc_list = script.get("scenes") if isinstance(script, dict) else None
         if not (isinstance(sc_list, list) and sc_list and all(isinstance(s, dict) for s in sc_list)):
+            if not settings.allow_offline_script:
+                raise AgentError("LLM retornou roteiro inválido — repetindo para gerar conteúdo real")
             self.emit("progress", "Roteiro LLM com 'scenes' inválido — usando offline", progress=30)
             script = self._offline(theme, title, content_type, language)
 
@@ -216,6 +226,17 @@ class ScriptwriterAgent(BaseAgent):
                 script["narration_text"] = " ".join(
                     s.get("narration", "") for s in scenes if s.get("narration")).strip()
             script["estimated_duration"] = self._estimate_duration(script, content_type)
+
+        # QUALITY GATE: never let a generic/templated script (no real content) through.
+        # If it reads as filler, raise so BaseAgent retries and the LLM produces real,
+        # fact-based narration instead of the hollow placeholder.
+        if not settings.allow_offline_script:
+            from backend.agents.quality_gate import assess
+
+            ok, reason = assess(script)
+            if not ok:
+                self.emit("progress", f"Roteiro rejeitado pelo controle de qualidade: {reason}", progress=30)
+                raise AgentError(f"Roteiro genérico rejeitado: {reason}")
 
         self.ctx_set("script", script)
         self.emit("progress", f"Roteiro pronto: {len(scenes)} cena(s) [{video_format}]", progress=40)
@@ -506,6 +527,7 @@ REGRA DOS VISUAIS (importante — o sistema usa VÍDEO real de stock):
             "scenes": scenes,
             "on_screen_text": [],
             "seo_keywords": [theme.lower(), "história", "viral"],
+            "_offline": True,  # flag so the quality gate can block this placeholder
         }
 
     @staticmethod
