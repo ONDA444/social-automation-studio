@@ -28,8 +28,11 @@ W, H, FPS = 1920, 1080, 30
 TRANSITION_DUR = 0.4  # seconds of xfade overlap
 
 # Capped-bitrate H.264 profile (~8-12 Mbps target; keeps grain from exploding size).
+# -threads caps x264's thread count: left to auto it spawns one per HOST core (60+
+# on Railway) and the per-thread memory blows the container limit -> SIGKILL (rc=-9).
 VENC = ["-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "veryfast",
-        "-crf", "21", "-maxrate", "12M", "-bufsize", "24M"]
+        "-crf", "21", "-maxrate", "12M", "-bufsize", "24M",
+        "-threads", str(max(1, settings.ffmpeg_threads))]
 
 
 class FFmpegError(RuntimeError):

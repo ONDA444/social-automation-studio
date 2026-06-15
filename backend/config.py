@@ -90,6 +90,11 @@ class Settings(BaseSettings):
     # approval. Off by default (the approval gate stays). Set AUTO_PUBLISH=1 to
     # enable hands-off posting.
     auto_publish: bool = False
+    # ffmpeg/x264 thread cap. x264 auto-detects the HOST's core count (60+ on
+    # Railway), spawns that many threads, and the per-thread memory overhead OOM-kills
+    # the container (ffmpeg rc=-9). Cap it low to fit the container's RAM. Override
+    # with FFMPEG_THREADS if you move to a bigger box.
+    ffmpeg_threads: int = 2
     default_tts_voice: str = "pt-BR-AntonioNeural"
     default_language: str = "pt-BR"
     log_level: str = "INFO"
