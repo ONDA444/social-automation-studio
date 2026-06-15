@@ -16,6 +16,7 @@ export default function RemixEngine() {
   const [title, setTitle] = useState('')
   const [contentType, setContentType] = useState('film_recap_ai_images')
   const [contentTypes, setContentTypes] = useState(FALLBACK_CONTENT_TYPES)
+  const [typeDetected, setTypeDetected] = useState(false)
   const [format, setFormat] = useState('long')
   const [analyzing, setAnalyzing] = useState(false)
   const [creating, setCreating] = useState(false)
@@ -32,12 +33,15 @@ export default function RemixEngine() {
 
   const analyze = async () => {
     if (!source.trim()) return
-    setAnalyzing(true); setDna(null)
+    setAnalyzing(true); setDna(null); setTypeDetected(false)
     try {
       const d = await api.post('/remix/analyze', { source })
-      setDna(d.style_dna)
-      if (d.style_dna?.suggested_theme) setTitle(d.style_dna.suggested_theme)  // auto-detected topic
-      if (d.style_dna?.suggested_format) setFormat(d.style_dna.suggested_format)  // 9:16/1:1 -> short
+      const dna = d.style_dna
+      setDna(dna)
+      if (dna?.suggested_theme) setTitle(dna.suggested_theme)  // auto-detected topic
+      if (dna?.suggested_format) setFormat(dna.suggested_format)  // 9:16/1:1 -> short
+      const detected = dna?.content_type || dna?.template_recommendation  // auto-detected type
+      if (detected && contentTypes.some((c) => c.value === detected)) { setContentType(detected); setTypeDetected(true) }
     }
     catch (e) { alert('Falha ao analisar: ' + e.message) } finally { setAnalyzing(false) }
   }
@@ -81,10 +85,12 @@ export default function RemixEngine() {
             </div>
             <div>
               <label className="text-xs text-text-muted">Tipo de conteúdo</label>
-              <select className="input mt-1" value={contentType} onChange={(e) => setContentType(e.target.value)}>
+              <select className="input mt-1" value={contentType} onChange={(e) => { setContentType(e.target.value); setTypeDetected(false) }}>
                 {contentTypes.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
               </select>
-              <p className="text-[11px] text-text-muted mt-1">O vídeo será SOBRE este tema/tipo. O estilo da referência (cor, ritmo, música) é aplicado por cima.</p>
+              {typeDetected
+                ? <p className="text-[11px] text-accent mt-1">✨ Tipo detectado automaticamente do vídeo — edite se quiser</p>
+                : <p className="text-[11px] text-text-muted mt-1">O vídeo será SOBRE este tema/tipo. O estilo da referência (cor, ritmo, música) é aplicado por cima.</p>}
             </div>
             <div>
               <label className="text-xs text-text-muted">Formato</label>
