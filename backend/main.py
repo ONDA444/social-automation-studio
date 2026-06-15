@@ -111,6 +111,12 @@ def _recover_orphan_jobs() -> None:
 async def _on_startup() -> None:
     settings.ensure_dirs()
     try:
+        from backend.database import Base, engine
+        Base.metadata.create_all(bind=engine)
+        logger.info("Tabelas criadas/verificadas no banco.")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("create_all falhou: %s", exc)
+    try:
         from backend.database import ensure_columns
 
         ensure_columns()  # idempotent: adds new columns (e.g. video_format) to old DBs
