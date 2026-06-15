@@ -67,7 +67,14 @@ async def run_publish(job_id: int) -> dict:
         _emit(job_id, status="publishing")
 
         shorts = job.shorts_paths or []
-        publish_at = job.scheduled_at.isoformat() + "Z" if job.scheduled_at else None
+        # YouTube's publishAt must be in the FUTURE. In the slot-gated/auto-publish
+        # model the slot has already arrived (scheduled_at <= now), so a past value
+        # would make the API error or ignore the schedule — publish immediately
+        # instead. Only defer when the slot is genuinely still ahead.
+        from datetime import datetime as _dt
+        publish_at = None
+        if job.scheduled_at and job.scheduled_at > _dt.utcnow():
+            publish_at = job.scheduled_at.isoformat() + "Z"
         # Privacy chosen for the job (default 'private' = nothing goes public
         # until the user explicitly opts in). STUDIO_TEST_MODE forces private.
         privacy = _resolve_privacy(job)
@@ -78,41 +85,48 @@ async def run_publish(job_id: int) -> dict:
         pinned = svc.get(job.account_id) if job.account_id else None
 
         for platform in platforms:
-            acct = _resolve_account(svc, platform, pinned)
-            if not acct:
-                results[platform] = {"ok": False, "status": "no_account",
-                                     "error": f"Sem conta ativa de {platform}."}
-                _emit(job_id, platform=platform, status="no_account")
-                continue
-            # Guard: never hand an account without connected credentials to the
-            # uploader (otherwise YouTube fails with a cryptic RefreshError).
-            if not svc.has_valid_credentials(acct):
-                results[platform] = {
-                    "ok": False, "status": "auth_error",
-                    "error": "Conta sem credenciais conectadas. Conecte a conta em Contas.",
-                }
-                _emit(job_id, platform=platform, status="auth_error")
-                continue
-            if not svc.can_upload(acct.id):
-                svc.pause(acct.id, "quota_exceeded")
-                results[platform] = {"ok": False, "status": "quota_exceeded",
-                                     "error": f"Quota diária de {platform} atingida."}
-                _emit(job_id, platform=platform, status="quota_exceeded")
-                continue
-            creds = svc.get_credentials(acct.id)
+            # Isolate each platform: a crash uploading to one must never abort the
+            # others (or leave the whole multi-platform job stuck/ERROR).
+            try:
+                acct = _resolve_account(svc, platform, pinned)
+                if not acct:
+                    results[platform] = {"ok": False, "status": "no_account",
+                                         "error": f"Sem conta ativa de {platform}."}
+                    _emit(job_id, platform=platform, status="no_account")
+                    continue
+                # Guard: never hand an account without connected credentials to the
+                # uploader (otherwise YouTube fails with a cryptic RefreshError).
+                if not svc.has_valid_credentials(acct):
+                    results[platform] = {
+                        "ok": False, "status": "auth_error",
+                        "error": "Conta sem credenciais conectadas. Conecte a conta em Contas.",
+                    }
+                    _emit(job_id, platform=platform, status="auth_error")
+                    continue
+                if not svc.can_upload(acct.id):
+                    svc.pause(acct.id, "quota_exceeded")
+                    results[platform] = {"ok": False, "status": "quota_exceeded",
+                                         "error": f"Quota diária de {platform} atingida."}
+                    _emit(job_id, platform=platform, status="quota_exceeded")
+                    continue
+                creds = svc.get_credentials(acct.id)
 
-            if platform == "youtube":
-                results["youtube"] = await self_publish_youtube(job, seo, creds, publish_at, shorts, privacy)
-            elif platform == "tiktok":
-                results["tiktok"] = await self_publish_tiktok(seo, creds, shorts)
-            elif platform == "instagram":
-                results["instagram"] = await self_publish_instagram(seo, creds, shorts)
-            else:
-                results[platform] = {"ok": False, "status": "unsupported"}
+                if platform == "youtube":
+                    results["youtube"] = await self_publish_youtube(job, seo, creds, publish_at, shorts, privacy)
+                elif platform == "tiktok":
+                    results["tiktok"] = await self_publish_tiktok(seo, creds, shorts)
+                elif platform == "instagram":
+                    results["instagram"] = await self_publish_instagram(seo, creds, shorts)
+                else:
+                    results[platform] = {"ok": False, "status": "unsupported"}
 
-            if results.get(platform, {}).get("ok"):
-                svc.record_upload(acct.id)
-            _emit(job_id, platform=platform, status=results[platform].get("status"))
+                if results.get(platform, {}).get("ok"):
+                    svc.record_upload(acct.id)
+                _emit(job_id, platform=platform, status=results[platform].get("status"))
+            except Exception as exc:  # noqa: BLE001 — per-platform isolation
+                logger.warning("Publicação em %s falhou para job %s: %s", platform, job_id, exc)
+                results[platform] = {"ok": False, "status": "error", "error": str(exc)[:300]}
+                _emit(job_id, platform=platform, status="error")
 
         job.publish_status = results
         job.status = _overall_status(results)

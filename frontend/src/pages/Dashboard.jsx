@@ -11,15 +11,25 @@ export default function Dashboard() {
   const [data, setData] = useState(null)
   const [trending, setTrending] = useState([])
   const [modal, setModal] = useState(false)
-  const { events } = useWs()
+  const { count } = useWs()
   const nav = useNavigate()
 
   const load = () => api.get('/dashboard').then(setData).catch(() => setData({ error: true }))
   useEffect(() => { load(); api.get('/dashboard/trending?niche=entretenimento').then((d) => setTrending(d.suggestions || [])).catch(() => {}) }, [])
   // Refresh job cards when pipeline events arrive.
-  useEffect(() => { const t = setTimeout(load, 800); return () => clearTimeout(t) }, [events.length])
+  useEffect(() => { const t = setTimeout(load, 800); return () => clearTimeout(t) }, [count])
 
-  if (!data) return <p className="text-text-muted">Carregando…</p>
+  if (!data) return (
+    <div className="space-y-6">
+      <div className="h-8 w-40 skeleton" />
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        {Array.from({ length: 4 }).map((_, i) => <div key={i} className="card p-4"><div className="h-20 skeleton" /></div>)}
+      </div>
+      <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+        {Array.from({ length: 6 }).map((_, i) => <div key={i} className="h-44 skeleton" />)}
+      </div>
+    </div>
+  )
   if (data.error) return <p className="text-error">Backend offline. Inicie a API em :8000.</p>
 
   const sc = data.status_counts || {}
@@ -39,12 +49,12 @@ export default function Dashboard() {
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         {stats.map((s) => (
-          <div key={s.label} className="card p-4">
+          <div key={s.label} className="card card-hover p-4">
             <div className="flex items-center justify-between">
-              <span className="text-2xl">{s.icon}</span>
-              <span className="heading text-2xl font-bold">{s.value}</span>
+              <span className="w-10 h-10 rounded-btn bg-accent/10 grid place-items-center text-xl">{s.icon}</span>
+              <span className="heading text-2xl font-bold tabular-nums">{s.value}</span>
             </div>
-            <p className="text-xs text-text-muted mt-1">{s.label}</p>
+            <p className="text-xs text-text-muted mt-2">{s.label}</p>
           </div>
         ))}
       </div>

@@ -287,7 +287,8 @@ REGRA DOS VISUAIS (importante — o sistema usa VÍDEO real de stock):
 - Preencha também "visual_prompt" (descrição cinematográfica em inglês) — é o
   fallback de imagem IA quando não houver clipe de vídeo para a cena.
 - quote_viral deixa "narration" vazio e usa "on_screen_text"."""
-        system = SYSTEM.format(lang=language)
+        from backend.agents.style_guide import with_style
+        system = with_style(SYSTEM.format(lang=language))
         return await llm.complete_json(prompt, system=system, max_tokens=4000)
 
     @classmethod

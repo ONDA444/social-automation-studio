@@ -193,7 +193,14 @@ class NarratorAgent(BaseAgent):
                         "start": round(start, 3),
                         "end": round(start + dur, 3),
                     })
+        # edge-tts can silently yield no audio bytes (network blip / throttling).
+        # An empty MP3 would pass as "success" and produce a silent video — raise so
+        # BaseAgent.execute retries instead.
+        if not audio_path.exists() or audio_path.stat().st_size < 1024:
+            raise RuntimeError("edge-tts retornou áudio vazio")
         total = words[-1]["end"] if words else self._probe_duration(audio_path)
+        if total <= 0:
+            raise RuntimeError("edge-tts: duração inválida (áudio sem conteúdo)")
         return words, round(total, 3)
 
     @staticmethod

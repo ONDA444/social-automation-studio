@@ -74,7 +74,8 @@ JSON EXATO:
   "tiktok": {{"caption": "<=150 chars com 3-5 hashtags de nicho + #fyp #foryou"}},
   "instagram": {{"caption": "storytelling <=2200 chars", "hashtags": ["25-30 hashtags"]}}
 }}"""
-        return await llm.complete_json(prompt, system=SYSTEM, max_tokens=1500)
+        from backend.agents.style_guide import with_style
+        return await llm.complete_json(prompt, system=with_style(SYSTEM), max_tokens=1500)
 
     def _offline(self, script: dict, content_type: str) -> dict:
         title = script.get("title", "Vídeo")

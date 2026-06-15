@@ -6,11 +6,11 @@ import ApprovalCard from '../components/ApprovalCard.jsx'
 export default function Approvals() {
   const [jobs, setJobs] = useState([])
   const [loading, setLoading] = useState(true)
-  const { events } = useWs()
+  const { count } = useWs()
 
-  const load = () => api.get('/jobs/approvals').then((d) => { setJobs(d.jobs); setLoading(false) }).catch(() => setLoading(false))
+  const load = () => api.get('/jobs/approvals').then((d) => { setJobs(d.jobs || []); setLoading(false) }).catch(() => setLoading(false))
   useEffect(() => { load() }, [])
-  useEffect(() => { const t = setTimeout(load, 1000); return () => clearTimeout(t) }, [events.length])
+  useEffect(() => { const t = setTimeout(load, 1000); return () => clearTimeout(t) }, [count])
 
   return (
     <div className="space-y-4">

@@ -5,6 +5,7 @@ import { wsUrl } from './api'
 // Returns { events, connected }. `events` keeps the last `max` messages.
 export function useWebSocket(max = 200) {
   const [events, setEvents] = useState([])
+  const [count, setCount] = useState(0)
   const [connected, setConnected] = useState(false)
   const wsRef = useRef(null)
 
@@ -33,6 +34,10 @@ export function useWebSocket(max = 200) {
           const msg = JSON.parse(e.data)
           msg._t = Date.now()
           setEvents((prev) => [...prev.slice(-(max - 1)), msg])
+          // Monotonic counter: `events.length` plateaus at `max`, so effects keyed
+          // on it stop firing once the buffer fills (exactly during heavy
+          // generation). Components depend on `count` to keep refreshing.
+          setCount((c) => c + 1)
         } catch { /* ignore */ }
       }
     }
@@ -44,5 +49,5 @@ export function useWebSocket(max = 200) {
     }
   }, [max])
 
-  return { events, connected }
+  return { events, connected, count }
 }

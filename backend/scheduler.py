@@ -308,9 +308,16 @@ def _job_publish_due() -> None:
         ).scalars().all()
         for job in due:
             try:
+                # Flip to PUBLISHING *before* dispatching so the next tick (60s) does
+                # NOT re-select this still-APPROVED job while it sits in the serial
+                # worker queue — that caused the same video to publish 2x+. run_publish
+                # accepts PUBLISHING; orphan recovery resets it to APPROVED on restart.
+                job.status = JobStatus.PUBLISHING
+                db.commit()
                 dispatch_publish(job.id)
                 logger.info("Publishing due job %s (scheduled %s UTC).", job.id, job.scheduled_at)
             except Exception as exc:  # noqa: BLE001 — isolate per job
+                db.rollback()
                 logger.warning("publish_due failed for job %s: %s", job.id, exc)
     except Exception as exc:  # noqa: BLE001 — never let the scheduler die
         logger.warning("publish_due job failed: %s", exc)

@@ -1,4 +1,4 @@
-import { createContext, useContext } from 'react'
+import { createContext, useContext, useState } from 'react'
 import { Routes, Route, Navigate } from 'react-router-dom'
 import Sidebar from './components/Sidebar.jsx'
 import TopBar from './components/TopBar.jsx'
@@ -14,17 +14,18 @@ import Schedule from './pages/Schedule.jsx'
 import Analytics from './pages/Analytics.jsx'
 import Settings from './pages/Settings.jsx'
 
-const WsContext = createContext({ events: [], connected: false })
+const WsContext = createContext({ events: [], connected: false, count: 0 })
 export const useWs = () => useContext(WsContext)
 
 export default function App() {
   const ws = useWebSocket(250)
+  const [mobileNavOpen, setMobileNavOpen] = useState(false)
   return (
     <WsContext.Provider value={ws}>
       <div className="flex h-screen overflow-hidden">
-        <Sidebar />
+        <Sidebar mobileOpen={mobileNavOpen} onClose={() => setMobileNavOpen(false)} />
         <div className="flex-1 flex flex-col min-w-0">
-          <TopBar connected={ws.connected} />
+          <TopBar connected={ws.connected} onMenuClick={() => setMobileNavOpen(true)} />
           <main className="flex-1 overflow-y-auto p-6">
             <Routes>
               <Route path="/" element={<Dashboard />} />

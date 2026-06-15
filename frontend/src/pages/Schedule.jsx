@@ -29,8 +29,8 @@ export default function Schedule() {
   const [busy, setBusy] = useState(false)
 
   useEffect(() => {
-    api.get('/schedule/calendar').then((d) => setEvents(d.events)).catch(() => {})
-    api.get('/accounts').then((d) => { setAccounts(d.accounts); if (d.accounts[0]) setSel(String(d.accounts[0].id)) }).catch(() => {})
+    api.get('/schedule/calendar').then((d) => setEvents(d.events || [])).catch(() => {})
+    api.get('/accounts').then((d) => { const a = d.accounts || []; setAccounts(a); if (a[0]) setSel(String(a[0].id)) }).catch(() => {})
     api.get('/jobs/content-types')
       .then((d) => { const list = Array.isArray(d) ? d : d?.content_types; if (Array.isArray(list) && list.length) setContentTypes(list) })
       .catch(() => setContentTypes(FALLBACK_CONTENT_TYPES))

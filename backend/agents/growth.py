@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 
 from backend.agents.base_agent import BaseAgent
+from backend.agents.style_guide import with_style
 from backend import llm
 
 # Purely-creative types have no spoken narration to re-hook (quote_viral) — hook/
@@ -81,7 +82,7 @@ Regras do gancho (primeiros 3 segundos decidem tudo):
 - Verdadeiro: não invente fatos.{fact_note}
 
 Responda SÓ JSON: {{"hook": "<nova narração da 1a cena>", "overlay": "<texto curto p/ tela, 2-5 palavras MAIÚSCULAS>"}}"""
-        return await llm.complete_json(prompt, system="Responda só com JSON válido.", max_tokens=400)
+        return await llm.complete_json(prompt, system=with_style("Responda só com JSON válido."), max_tokens=400)
 
     @staticmethod
     def _offline(script: dict, original: str) -> tuple[str, str]:
@@ -126,7 +127,7 @@ Para MAXIMIZAR RETENÇÃO e watch time:
 2) "cta": a fala FINAL — chamada à ação forte + gancho de loop (faz querer rever/seguir),
    em português, 1 frase.
 Responda SÓ JSON: {{"rehook": "...", "cta": "..."}}"""
-        return await llm.complete_json(prompt, system="Responda só com JSON válido.", max_tokens=300)
+        return await llm.complete_json(prompt, system=with_style("Responda só com JSON válido."), max_tokens=300)
 
     @staticmethod
     def _offline(script: dict) -> tuple[str, str]:
@@ -170,7 +171,7 @@ JSON EXATO:
   "tiktok_title": "<curto, gancho + 2-3 hashtags de nicho>",
   "thumbnail": {{"text": "2-4 PALAVRAS gigantes", "emotion": "<choque/curiosidade/raiva/euforia>", "visual": "<elemento visual principal em inglês p/ imagem>"}}
 }}"""
-        return await llm.complete_json(prompt, system="Responda só com JSON válido.", max_tokens=600)
+        return await llm.complete_json(prompt, system=with_style("Responda só com JSON válido."), max_tokens=600)
 
     @staticmethod
     def _offline(script: dict) -> dict:
@@ -225,7 +226,7 @@ Os 3 primeiros segundos definem se a pessoa para de rolar.
 Responda SÓ JSON:
 {{"overlay": "<2-5 PALAVRAS gigantes p/ o 1o frame, em MAIÚSCULAS>",
   "best_format": "<hook|standard|medium|long|mini — o tamanho que mais viraliza p/ este tema>"}}"""
-        return await llm.complete_json(prompt, system="Responda só com JSON válido.", max_tokens=200)
+        return await llm.complete_json(prompt, system=with_style("Responda só com JSON válido."), max_tokens=200)
 
 
 class ShortsStrategistAgent(BaseAgent):
@@ -266,7 +267,7 @@ JSON EXATO:
   }},
   "hashtags": ["8-12 hashtags de nicho + alcance (sem espaços)"]
 }}"""
-        return await llm.complete_json(prompt, system="Responda só com JSON válido.", max_tokens=500)
+        return await llm.complete_json(prompt, system=with_style("Responda só com JSON válido."), max_tokens=500)
 
     @staticmethod
     def _offline(script: dict) -> dict:

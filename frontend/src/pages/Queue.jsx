@@ -69,12 +69,12 @@ export default function Queue() {
   const [selected, setSelected] = useState(() => new Set())
   const [modal, setModal] = useState(false)
   const fileRef = useRef(null)
-  const { events } = useWs()
+  const { count } = useWs()
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }))
 
-  const load = () => api.get('/jobs?limit=200').then((d) => setJobs(d.jobs)).catch(() => {})
+  const load = () => api.get('/jobs?limit=200').then((d) => setJobs(d.jobs || [])).catch(() => {})
   useEffect(() => { load() }, [])
-  useEffect(() => { const t = setTimeout(load, 800); return () => clearTimeout(t) }, [events.length])
+  useEffect(() => { const t = setTimeout(load, 800); return () => clearTimeout(t) }, [count])
   // Carrega as contas uma vez para o seletor de canal.
   useEffect(() => { api.get('/accounts').then((d) => setAccounts(d.accounts || [])).catch(() => setAccounts([])) }, [])
 
