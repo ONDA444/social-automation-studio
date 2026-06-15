@@ -1,7 +1,10 @@
+import { useState } from 'react'
 import { api } from '../api'
 import { PLATFORM_META } from '../lib'
+import VoiceRecorder from './VoiceRecorder.jsx'
 
 export default function PlatformCard({ account, onChange, onChanged, onDone }) {
+  const [recording, setRecording] = useState(false)
   const m = PLATFORM_META[account.platform] || { label: account.platform, color: 'var(--accent)', icon: '●' }
   const quotaPct = account.quota_limit ? Math.round((account.quota_used_today / account.quota_limit) * 100) : 0
   const refresh = onChange || onChanged || onDone
@@ -63,9 +66,13 @@ export default function PlatformCard({ account, onChange, onChanged, onDone }) {
         {connected
           ? <button className="btn-ghost flex-1 text-xs" style={{ color: 'var(--error)' }} onClick={disconnect}>⤫ Desconectar</button>
           : <button className="btn-ghost flex-1 text-xs" onClick={connect}>🔗 Conectar</button>}
+        <button className="btn-ghost text-xs" onClick={() => setRecording(true)} title="Gravar e clonar minha voz para este canal">🎤</button>
         <button className="btn-ghost text-xs" onClick={toggle} title={account.status === 'active' ? 'Pausar' : 'Retomar'}>{account.status === 'active' ? '⏸' : '▶'}</button>
         <button className="btn-ghost text-xs" onClick={remove} title="Remover conta">🗑</button>
       </div>
+      {account.preferred_voice && account.preferred_voice.startsWith('v_') &&
+        <p className="text-[10px] text-accent mt-1">🎙️ Voz clonada ativa</p>}
+      {recording && <VoiceRecorder account={account} onClose={() => setRecording(false)} onCloned={() => { setRecording(false); refresh?.() }} />}
       {connected
         ? <p className="text-[10px] text-success mt-2">✓ {account.channel_id || account.display_name} conectado</p>
         : <p className="text-[10px] text-text-muted mt-2">Conta não conectada</p>}

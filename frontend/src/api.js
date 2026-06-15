@@ -35,12 +35,16 @@ export const api = {
   put: (p, b) => req('PUT', p, b),
   del: (p) => req('DELETE', p),
 
-  // multipart upload (CSV import)
+  // multipart upload (CSV import, voice recording)
   async upload(path, file) {
     const fd = new FormData()
     fd.append('file', file)
     const res = await fetch(`${BASE}${path}`, { method: 'POST', body: fd })
-    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    if (!res.ok) {
+      let msg
+      try { const d = (await res.json()).detail; msg = typeof d === 'string' ? d : JSON.stringify(d) } catch { msg = `HTTP ${res.status}` }
+      throw new Error(msg || `HTTP ${res.status}`)
+    }
     return res.json()
   },
 }
