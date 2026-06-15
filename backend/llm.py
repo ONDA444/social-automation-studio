@@ -14,12 +14,20 @@ import asyncio
 import json
 import logging
 import re
+import time
 
 import httpx
 
 from backend.config import settings
 
 logger = logging.getLogger("studio.llm")
+
+# Circuit breaker: once Groq starts rate-limiting (429), every call would waste
+# ~30s of backoff before falling through to Gemini. After a tripped call we skip
+# Groq entirely for a cooldown and go straight to Gemini — so a whole video's ~8
+# LLM calls don't each eat the full backoff. Re-probes Groq after the cooldown.
+_GROQ_COOLDOWN_S = 120.0
+_groq_blocked_until = 0.0
 
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 GROQ_MODEL = "llama-3.3-70b-versatile"
@@ -39,7 +47,11 @@ class LLMUnavailable(Exception):
 
 
 async def _try_groq(system: str | None, prompt: str, json_mode: bool, max_tokens: int) -> str | None:
+    global _groq_blocked_until
     if not settings.groq_api_key:
+        return None
+    # Circuit open: skip Groq, let complete() fall straight to Gemini.
+    if time.monotonic() < _groq_blocked_until:
         return None
     messages = []
     if system:
@@ -49,9 +61,10 @@ async def _try_groq(system: str | None, prompt: str, json_mode: bool, max_tokens
     if json_mode:
         payload["response_format"] = {"type": "json_object"}
     # Each video makes ~8 LLM calls in seconds (script + growth agents + SEO); the
-    # free tier rate-limits (429) under that burst. Back off and retry so agents
-    # don't silently fall through to the generic offline templates.
-    for attempt in range(4):
+    # free tier rate-limits (429) under that burst. Try a couple of short backoffs;
+    # if still limited, trip the breaker and let Gemini take over (much faster than
+    # eating the full backoff on every subsequent call).
+    for attempt in range(2):
         try:
             async with httpx.AsyncClient(timeout=60) as client:
                 r = await client.post(
@@ -64,8 +77,8 @@ async def _try_groq(system: str | None, prompt: str, json_mode: bool, max_tokens
                         wait = float(r.headers.get("retry-after", "") or 0)
                     except ValueError:
                         wait = 0
-                    wait = min(wait or (1.5 * (attempt + 1)), 8.0)
-                    logger.info("Groq 429 — backoff %.1fs (tentativa %d/4)", wait, attempt + 1)
+                    wait = min(wait or (1.5 * (attempt + 1)), 4.0)
+                    logger.info("Groq 429 — backoff %.1fs (tentativa %d/2)", wait, attempt + 1)
                     await asyncio.sleep(wait)
                     continue
                 r.raise_for_status()
@@ -73,6 +86,10 @@ async def _try_groq(system: str | None, prompt: str, json_mode: bool, max_tokens
         except Exception as exc:  # noqa: BLE001
             logger.warning("Groq failed: %s", exc)
             return None
+    # Still rate-limited after retries — open the circuit so the next ~cooldown of
+    # calls skip Groq and use Gemini directly.
+    _groq_blocked_until = time.monotonic() + _GROQ_COOLDOWN_S
+    logger.warning("Groq rate-limited; pulando Groq por %.0fs (usando Gemini).", _GROQ_COOLDOWN_S)
     return None
 
 
