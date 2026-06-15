@@ -1,7 +1,7 @@
 """Accounts API + OAuth connect flows for YouTube / TikTok / Instagram."""
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
@@ -92,6 +92,47 @@ def delete_account(account_id: int, db: Session = Depends(get_db)):
     db.delete(acct)
     db.commit()
     return {"deleted": account_id}
+
+
+@router.post("/accounts/{account_id}/clone-voice")
+async def clone_voice(account_id: int, file: UploadFile = File(...), db: Session = Depends(get_db)):
+    """Create an LMNT instant voice clone from a recorded mic sample and set it as
+    this channel's narration voice. The browser posts the recording here."""
+    import json as _json
+
+    import httpx
+
+    from backend.config import settings
+
+    if not settings.lmnt_api_key:
+        raise HTTPException(400, "Clonagem de voz indisponível (LMNT_API_KEY não configurada).")
+    svc = AccountProfileService(db)
+    acct = svc.get(account_id)
+    if not acct:
+        raise HTTPException(404, "conta não encontrada")
+    audio = await file.read()
+    if len(audio) < 20_000:
+        raise HTTPException(400, "Gravação muito curta — fale por ~10 segundos e tente de novo.")
+    try:
+        async with httpx.AsyncClient(timeout=180) as client:
+            r = await client.post(
+                "https://api.lmnt.com/v1/ai/voice",
+                headers={"X-API-Key": settings.lmnt_api_key},
+                data={"metadata": _json.dumps(
+                    {"name": f"voz-{acct.display_name or account_id}", "type": "instant"})},
+                files={"files": (file.filename or "voice.webm", audio, file.content_type or "audio/webm")},
+            )
+            r.raise_for_status()
+            voice = r.json()
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(502, f"Falha ao clonar a voz no LMNT: {exc}")
+    vid = voice.get("id") or (voice.get("voice") or {}).get("id")
+    if not vid:
+        raise HTTPException(502, "LMNT não retornou o id da voz clonada.")
+    acct.preferred_voice = vid  # narrator detects 'v_...' ids as the LMNT clone
+    db.commit()
+    return {"ok": True, "voice_id": vid, "account_id": account_id,
+            "note": "Voz clonada e definida para este canal."}
 
 
 @router.post("/accounts/{account_id}/pause")

@@ -120,22 +120,31 @@ class NarratorAgent(BaseAgent):
         edge-tts voice — otherwise the pt clone would speak English with a pt accent.
         """
         lang = (getattr(self, "_language", None) or settings.default_language or "pt-BR").lower()
-        use_lmnt = (lang.startswith("pt") and settings.lmnt_api_key and settings.lmnt_voice
-                    and (settings.tts_provider or "auto").lower() in ("auto", "lmnt"))
+        # An account that recorded its own voice stores an LMNT id ("v_...") in
+        # preferred_voice — use that clone (any language). Otherwise the global MATEUS
+        # clone, but only for pt (it's a pt voice). Non-pt without a clone -> edge-tts.
+        explicit_clone = bool(voice) and voice.startswith("v_")
+        lmnt_voice_id = voice if explicit_clone else settings.lmnt_voice
+        use_lmnt = (settings.lmnt_api_key and lmnt_voice_id
+                    and (settings.tts_provider or "auto").lower() in ("auto", "lmnt")
+                    and (explicit_clone or lang.startswith("pt")))
         if use_lmnt:
             try:
-                self.emit("progress", f"Sintetizando voz LMNT ({settings.lmnt_voice})", progress=45)
-                return await self._synthesize_lmnt(text, rate, audio_path, lang)
+                self.emit("progress", f"Sintetizando voz LMNT ({lmnt_voice_id})", progress=45)
+                return await self._synthesize_lmnt(text, rate, audio_path, lang, lmnt_voice_id)
             except Exception as exc:  # noqa: BLE001
                 self.emit("progress", f"LMNT falhou ({exc}); usando edge-tts", progress=45)
-        return await self._synthesize_edge(text, voice, rate, audio_path)
+        # edge fallback needs a real voice name (not an LMNT id).
+        edge_voice = voice if (voice and not voice.startswith("v_")) else self._default_voice_for(lang)
+        return await self._synthesize_edge(text, edge_voice, rate, audio_path)
 
-    async def _synthesize_lmnt(self, text: str, rate: str, audio_path: Path, language: str = "pt-BR"):
+    async def _synthesize_lmnt(self, text: str, rate: str, audio_path: Path,
+                               language: str = "pt-BR", voice_id: str | None = None):
         """LMNT official API. Word timings are distributed proportionally over the
         real audio length (good enough for caption sync; no source voice cloned)."""
         speed = self._rate_to_speed(rate)
         payload = {
-            "voice": settings.lmnt_voice,
+            "voice": voice_id or settings.lmnt_voice,
             "text": text,
             "format": "mp3",
             "sample_rate": 24000,
