@@ -85,6 +85,11 @@ class Settings(BaseSettings):
     # pipeline IN-PROCESS instead of pushing tasks to a queue nobody consumes.
     # Set USE_CELERY=1 only if you also run `celery ... worker`.
     use_celery: bool = False
+    # Fully automatic mode: scheduled videos (and manual videos tied to a channel)
+    # are generated at their slot time and PUBLISHED without waiting for human
+    # approval. Off by default (the approval gate stays). Set AUTO_PUBLISH=1 to
+    # enable hands-off posting.
+    auto_publish: bool = False
     default_tts_voice: str = "pt-BR-AntonioNeural"
     default_language: str = "pt-BR"
     log_level: str = "INFO"

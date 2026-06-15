@@ -14,6 +14,7 @@ fails, the job is marked 'error' and the queue continues.
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime
 
 from backend.config import settings
 from backend.database import SessionLocal
@@ -197,6 +198,18 @@ async def run_pipeline(job_id: int) -> dict:
                     for s in ctx.get("shorts", [])
                 ],
             }
+            # Auto-publish (hands-off): a video tied to a channel skips the human
+            # gate and goes straight to APPROVED. _job_publish_due then publishes it
+            # (it needs scheduled_at <= now, so stamp one if the job has none — e.g.
+            # a manual video with a channel selected). Without a channel, or with
+            # AUTO_PUBLISH off, the approval gate stays.
+            if settings.auto_publish and job.account_id is not None:
+                if job.scheduled_at is None:
+                    job.scheduled_at = datetime.utcnow()
+                upd(status=JobStatus.APPROVED, progress=100, agent=None, approval_status="approved")
+                _emit_job(job_id, status="approved", qc=qc, compliance=comp)
+                return {"status": "approved_auto", "qc": qc, "compliance": comp}
+
             upd(status=JobStatus.AWAITING_APPROVAL, progress=100, agent=None, approval_status="pending")
             _emit_job(job_id, status="awaiting_approval", qc=qc, compliance=comp)
             return {"status": "awaiting_approval", "qc": qc, "compliance": comp}

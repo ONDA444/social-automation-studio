@@ -139,41 +139,70 @@ def _as_naive_utc(dt: datetime) -> datetime:
     return dt
 
 
+def _slots_due_today(cfg, now_utc: datetime) -> int:
+    """
+    How many of today's posting slots have already arrived (slot time <= now),
+    capped at videos_per_day.
+
+    post_times are HH:MM in the account's local timezone. We compare against the
+    local wall-clock 'now'. This is what paces generation: one video is produced
+    only once its slot has come — never the whole list up front (which would
+    hammer the LLM/voice APIs).
+    """
+    from datetime import time as _time
+    from zoneinfo import ZoneInfo
+
+    per_day = max(1, cfg.videos_per_day or 1)
+    try:
+        tz = ZoneInfo(cfg.timezone or "America/Sao_Paulo")
+    except Exception:  # noqa: BLE001
+        tz = ZoneInfo("America/Sao_Paulo")
+    raw = (cfg.post_times or ["19:00"])[:]
+    times = []
+    for hhmm in raw:
+        try:
+            h, m = str(hhmm).split(":")
+            times.append(_time(int(h), int(m)))
+        except Exception:  # noqa: BLE001
+            continue
+    times = sorted(times)[:per_day]
+    now_local = now_utc.astimezone(tz)
+    today = now_local.date()
+    due = 0
+    for t in times:
+        slot_local = datetime.combine(today, t, tzinfo=tz)
+        if slot_local <= now_local:
+            due += 1
+    return due
+
+
 def _job_consume_themes() -> None:
     """
-    Pull pending themes from the ThemeQueue and turn them into VideoJobs, paced so
-    no account ever has more than its daily quota worth of work in flight.
+    Turn pending themes into videos AT their scheduled slot time — one per slot,
+    in theme order — instead of generating the whole list up front.
 
-    Pacing: for each ACTIVE account that has a ScheduleConfig and pending themes,
-    count in-flight jobs (QUEUED, PROCESSING, AWAITING_APPROVAL, APPROVED). The
-    buffer = videos_per_day; we only consume while in_flight < buffer. For each
-    consumed theme we take the next free slot (already converted to UTC by the
-    calendar), create a QUEUED VideoJob with scheduled_at = that slot, kick off
-    generation via dispatch_job (so the video is READY in Approvals well before
-    its publish time), then mark the theme consumed + record consumed_job_id.
-
-    The actual publish happens later in _job_publish_due, only after a human has
-    approved — the AWAITING_APPROVAL gate is never bypassed.
+    For each ACTIVE account with a ScheduleConfig and pending themes:
+      budget = (slots already due today) - (videos already generated today)
+    We consume exactly `budget` themes now (usually 1, right after a slot ticks
+    over), create the VideoJob, and dispatch generation. With AUTO_PUBLISH on the
+    orchestrator approves+publishes it automatically when the render finishes;
+    otherwise it lands in Approvals. This natural pacing keeps API usage low and
+    spreads posts across the day.
     """
+    from datetime import timezone as _tz
+
     from sqlalchemy import func, select
 
-    from backend.agents.content_calendar import ContentCalendarAgent
     from backend.models import JobStatus, PlatformAccount, ScheduleConfig, ThemeQueue, VideoJob
     from backend.pipeline.dispatch import dispatch_job
 
-    in_flight_statuses = [
-        JobStatus.QUEUED,
-        JobStatus.PROCESSING,
-        JobStatus.AWAITING_APPROVAL,
-        JobStatus.APPROVED,
-    ]
+    now_utc = datetime.now(_tz.utc)
 
     db = SessionLocal()
     try:
         accounts = db.execute(
             select(PlatformAccount).where(PlatformAccount.status == "active")
         ).scalars().all()
-        calendar = ContentCalendarAgent(db)
 
         for acct in accounts:
             try:
@@ -183,9 +212,6 @@ def _job_consume_themes() -> None:
                 if cfg is None:
                     continue  # no schedule configured -> account opts out of automation
 
-                videos_per_day = max(1, cfg.videos_per_day or 1)
-
-                # How many pending themes does this account have?
                 pending = db.execute(
                     select(ThemeQueue)
                     .where(
@@ -197,25 +223,36 @@ def _job_consume_themes() -> None:
                 if not pending:
                     continue
 
-                # Pacing gate: count what's already in the pipeline for this account.
-                in_flight = db.execute(
-                    select(func.count(VideoJob.id))
-                    .where(
+                # Slots that have arrived today, minus what we've already generated
+                # today for this account = how many to kick off right now.
+                due = _slots_due_today(cfg, now_utc)
+                if due <= 0:
+                    continue  # next slot hasn't arrived yet — wait
+
+                # Local midnight (account tz) expressed as naive UTC, to match the
+                # naive-UTC created_at column.
+                from zoneinfo import ZoneInfo
+                try:
+                    tz = ZoneInfo(cfg.timezone or "America/Sao_Paulo")
+                except Exception:  # noqa: BLE001
+                    tz = ZoneInfo("America/Sao_Paulo")
+                midnight_local = datetime.combine(now_utc.astimezone(tz).date(),
+                                                  datetime.min.time(), tzinfo=tz)
+                midnight_naive_utc = midnight_local.astimezone(_tz.utc).replace(tzinfo=None)
+
+                generated_today = db.execute(
+                    select(func.count(VideoJob.id)).where(
                         VideoJob.account_id == acct.id,
-                        VideoJob.status.in_(in_flight_statuses),
+                        VideoJob.created_at >= midnight_naive_utc,
                     )
                 ).scalar() or 0
 
-                budget = videos_per_day - int(in_flight)
+                budget = int(due) - int(generated_today)
                 if budget <= 0:
-                    continue  # buffer full — wait for the human to approve/publish
+                    continue  # this slot already produced its video
 
                 take = min(budget, len(pending))
-                slots = calendar.next_slots(acct.id, count=take)
-                if not slots:
-                    continue
-
-                for theme, slot in zip(pending[:take], slots):
+                for theme in pending[:take]:
                     job = VideoJob(
                         title=theme.theme,
                         topic=theme.theme,
@@ -224,7 +261,7 @@ def _job_consume_themes() -> None:
                         target_platforms=theme.target_platforms or ["youtube"],
                         account_id=acct.id,
                         status=JobStatus.QUEUED,
-                        scheduled_at=_as_naive_utc(slot),
+                        scheduled_at=now_utc.replace(tzinfo=None),  # slot is due -> publish now
                     )
                     db.add(job)
                     db.flush()  # assign job.id before we reference it
@@ -233,11 +270,10 @@ def _job_consume_themes() -> None:
                     theme.consumed_job_id = job.id
                     db.commit()
 
-                    # Generate now so it's ready in Approvals ahead of its slot.
                     dispatch_job(job.id)
                     logger.info(
-                        "Consumed theme %s -> job %s (account %s, slot %s UTC).",
-                        theme.id, job.id, acct.id, job.scheduled_at,
+                        "Slot due -> gerando theme %s como job %s (conta %s).",
+                        theme.id, job.id, acct.id,
                     )
             except Exception as exc:  # noqa: BLE001 — per-account isolation
                 db.rollback()
