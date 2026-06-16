@@ -511,6 +511,27 @@ class ScriptwriterAgent(BaseAgent):
                 "IMPORTANTE (duração): gere o roteiro COMPLETO atingindo a contagem de "
                 "palavras/cenas alvo do tipo acima — vídeos curtos demais são rejeitados. Não resuma."
             )
+        # HARD mandate: concrete STORY over vague praise. The free LLM tends to fill
+        # short videos with empty adjectives ("dominou os campos", "habilidade sem
+        # igual", "gols impressionantes") — the quality gate REJECTS that and the job
+        # regenerates, so demand specificity up front to get it right the first time.
+        story_block = (
+            "\n\n=== HISTÓRIA E ESPECIFICIDADE (OBRIGATÓRIO — senão o roteiro é REJEITADO) ===\n"
+            "Conte uma HISTÓRIA real, não um amontoado de elogios. Mesmo em vídeo curto:\n"
+            "- ÂNCORAS CONCRETAS: cite nomes próprios, lugares, números, datas, placares, "
+            "recordes REAIS (use os FATOS abaixo). Cada cena precisa de pelo menos UM detalhe "
+            "concreto e verificável — não frases genéricas que serviriam para qualquer tema.\n"
+            "- ARCO: setup (quem/quando/o que estava em jogo) -> tensão (a virada, o conflito, "
+            "o número improvável) -> PAGAMENTO concreto (o que de fato aconteceu, com o detalhe "
+            "específico). NÃO termine no vago.\n"
+            "- PROIBIDO recheio vago: 'incrível', 'sem igual', 'impressionante', 'inesquecível', "
+            "'dominou os campos', 'talento sem igual', 'inspirou gerações' — SÓ valem se "
+            "acompanhados de um fato concreto que os comprove. Adjetivo sem fato = lixo.\n"
+            "- Se NÃO houver fato concreto disponível para o tema, ancore no CONTEXTO real "
+            "(história, regras, por que importa) em vez de inventar ou encher de elogio.\n"
+            "=== FIM ===\n"
+        )
+
         try:
             from backend.agents.coach import playbook_prompt_block
             coach_block = playbook_prompt_block(content_type, video_format)
@@ -542,7 +563,7 @@ Modo: {mode}
 content_type: {content_type}
 video_format: {video_format}
 
-{guide}{style_hint}{coach_block}{perf_block}{facts_block}
+{guide}{style_hint}{coach_block}{perf_block}{facts_block}{story_block}
 {length_block}
 
 Responda com JSON neste formato EXATO:
