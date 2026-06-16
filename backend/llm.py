@@ -124,6 +124,44 @@ async def _try_gemini(system: str | None, prompt: str, json_mode: bool, max_toke
     return None
 
 
+CLAUDE_URL = "https://api.anthropic.com/v1/messages"
+CLAUDE_MODEL = "claude-haiku-4-5-20251001"
+
+
+async def _try_claude(system: str | None, prompt: str, json_mode: bool, max_tokens: int) -> str | None:
+    if not settings.anthropic_api_key:
+        return None
+    messages = [{"role": "user", "content": prompt}]
+    if json_mode:
+        messages[0]["content"] += "\n\nResponda APENAS com JSON válido, sem markdown, sem texto fora do objeto JSON."
+    payload: dict = {
+        "model": CLAUDE_MODEL,
+        "max_tokens": max_tokens,
+        "messages": messages,
+    }
+    if system:
+        payload["system"] = system
+    try:
+        async with httpx.AsyncClient(timeout=60) as client:
+            r = await client.post(
+                CLAUDE_URL,
+                headers={
+                    "x-api-key": settings.anthropic_api_key,
+                    "anthropic-version": "2023-06-01",
+                    "content-type": "application/json",
+                },
+                json=payload,
+            )
+            if r.status_code == 529:
+                logger.info("Claude overloaded (529) — skipping.")
+                return None
+            r.raise_for_status()
+            return r.json()["content"][0]["text"]
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Claude failed: %s", exc)
+        return None
+
+
 async def _try_ollama(system: str | None, prompt: str, json_mode: bool, max_tokens: int) -> str | None:
     full = f"{system}\n\n{prompt}" if system else prompt
     payload = {"model": "llama3.1", "prompt": full, "stream": False}
@@ -146,13 +184,13 @@ async def complete(
     max_tokens: int = 2048,
 ) -> str:
     """Return completion text from the first available provider."""
-    for provider in (_try_groq, _try_gemini, _try_ollama):
+    for provider in (_try_groq, _try_gemini, _try_claude, _try_ollama):
         text = await provider(system, prompt, json_mode, max_tokens)
         if text:
             return text
     raise LLMUnavailable(
-        "Nenhum provedor LLM disponível (configure GROQ_API_KEY ou GEMINI_API_KEY, "
-        "ou rode Ollama localmente)."
+        "Nenhum provedor LLM disponível (configure GROQ_API_KEY, GEMINI_API_KEY ou "
+        "ANTHROPIC_API_KEY, ou rode Ollama localmente)."
     )
 
 
@@ -234,4 +272,4 @@ async def research(query: str, max_tokens: int = 1200) -> dict:
 
 
 def available() -> bool:
-    return bool(settings.groq_api_key or settings.gemini_api_key)
+    return bool(settings.groq_api_key or settings.gemini_api_key or settings.anthropic_api_key)

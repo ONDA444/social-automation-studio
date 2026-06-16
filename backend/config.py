@@ -31,6 +31,7 @@ class Settings(BaseSettings):
     # ---- LLMs ----
     groq_api_key: str = ""
     gemini_api_key: str = ""
+    anthropic_api_key: str = ""
     ollama_host: str = "http://localhost:11434"
     # Ground factual topics (sports/news/events) in real web sources via Gemini +
     # Google Search before scripting, so narration states TRUE facts (real score,
