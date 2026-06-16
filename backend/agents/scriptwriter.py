@@ -564,7 +564,10 @@ REGRA DOS VISUAIS:
 - quote_viral: "narration" vazio, conteúdo em "on_screen_text".
 GERE narration_text (COM marcadores) E tts_text (LIMPO, sem nenhum colchete)."""
         from backend.agents.style_guide import with_style
-        system = with_style(SYSTEM.format(lang=_lang_name(language)))
+        # NB: use .replace, not .format — SYSTEM contains literal prompt braces
+        # like [ENFASE]{texto} and {x} that .format() would treat as fields
+        # (KeyError 'texto'). Only {lang} is a real placeholder.
+        system = with_style(SYSTEM.replace("{lang}", _lang_name(language)))
         return await llm.complete_json(prompt, system=system, max_tokens=4500)
 
     @classmethod
