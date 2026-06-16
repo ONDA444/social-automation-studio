@@ -77,7 +77,8 @@ class ContentCalendarAgent:
         mode = mode or (cfg.mode if cfg else "fixed")
         configured = list(cfg.post_times) if (cfg and cfg.post_times) else []
         if mode == "smart":
-            return self._smart_times(account_id) or self.best_times(per_day)
+            tz = _resolve_tz(cfg.timezone if cfg else None)
+            return self._smart_times(account_id, tz) or self.best_times(per_day)
         return configured or self.best_times(per_day)
 
     @staticmethod
@@ -145,8 +146,8 @@ class ContentCalendarAgent:
         base = _utcnow() + timedelta(minutes=5)
         return [self._avoid_collision(base + i * timedelta(hours=2)) for i in range(count)]
 
-    def _smart_times(self, account_id: int) -> list[str]:
-        """Top posting hours by average first-2h views for this account's jobs."""
+    def _smart_times(self, account_id: int, tz: "ZoneInfo | None" = None) -> list[str]:
+        """Top posting hours (in account LOCAL timezone) by avg first-2h views."""
         rows = self.db.execute(
             select(VideoAnalytics.collected_at, VideoAnalytics.views)
             .join(VideoJob, VideoJob.id == VideoAnalytics.job_id)
@@ -154,10 +155,16 @@ class ContentCalendarAgent:
         ).all()
         if not rows:
             return []
+        local_tz = tz or ZoneInfo(DEFAULT_TZ)
         by_hour: dict[int, list[int]] = {}
         for collected_at, views in rows:
             if collected_at:
-                by_hour.setdefault(collected_at.hour, []).append(views or 0)
+                # collected_at is stored as naive UTC — attach UTC tzinfo so
+                # astimezone() converts correctly to the account's local timezone.
+                if collected_at.tzinfo is None:
+                    collected_at = collected_at.replace(tzinfo=timezone.utc)
+                local_hour = collected_at.astimezone(local_tz).hour
+                by_hour.setdefault(local_hour, []).append(views or 0)
         ranked = sorted(by_hour.items(), key=lambda kv: sum(kv[1]) / len(kv[1]), reverse=True)
         return [f"{h:02d}:00" for h, _ in ranked[:3]]
 

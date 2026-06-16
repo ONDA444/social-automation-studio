@@ -52,8 +52,21 @@ def upsert_config(account_id: int, payload: ScheduleConfigIn, db: Session = Depe
 @router.get("/{account_id}/slots")
 def next_slots(account_id: int, count: int = Query(5, le=30), mode: str | None = None,
                db: Session = Depends(get_db)):
-    slots = ContentCalendarAgent(db).next_slots(account_id, count, mode)
-    return {"account_id": account_id, "slots": [s.isoformat() for s in slots]}
+    cal = ContentCalendarAgent(db)
+    slots = cal.next_slots(account_id, count, mode)
+    cfg = db.execute(
+        select(ScheduleConfig).where(ScheduleConfig.account_id == account_id)
+    ).scalars().first()
+    resolved_mode = mode or (cfg.mode if cfg else "fixed")
+    per_day = (cfg.videos_per_day if cfg else None) or 1
+    effective_times = cal.resolve_post_times(account_id, cfg, per_day, resolved_mode)
+    has_analytics = resolved_mode == "smart" and bool(cal._smart_times(account_id, None))
+    return {
+        "account_id": account_id,
+        "slots": [s.isoformat() for s in slots],
+        "effective_times": effective_times,
+        "from_analytics": has_analytics,
+    }
 
 
 @router.get("/calendar")
