@@ -5,8 +5,12 @@ import { fmtNum } from '../lib'
 
 export default function Analytics() {
   const [overview, setOverview] = useState(null)
+  const [videos, setVideos] = useState(null)
 
-  useEffect(() => { api.get('/analytics/overview').then(setOverview).catch(() => setOverview({ totals: {}, by_platform: {} })) }, [])
+  useEffect(() => {
+    api.get('/analytics/overview').then(setOverview).catch(() => setOverview({ totals: {}, by_platform: {} }))
+    api.get('/analytics/videos').then((r) => setVideos(r.videos || [])).catch(() => setVideos([]))
+  }, [])
 
   if (!overview) return (
     <div className="space-y-6 fade-in">
@@ -58,12 +62,48 @@ export default function Analytics() {
       </div>
 
       <div className="card p-5">
-        <div className="flex items-center gap-3 mb-2">
-          <h3 className="heading font-semibold">Thumbnail A/B</h3>
-          <span className="badge text-[10px]" style={{ background: 'rgba(255,182,39,0.15)', color: 'var(--warning)' }}>Em breve</span>
+        <div className="flex items-center gap-3 mb-4">
+          <h3 className="heading font-semibold">Desempenho por vídeo</h3>
+          <span className="text-text-muted text-xs">cada vídeo separadamente</span>
           <div className="flex-1 h-px" style={{ background: 'rgba(255,255,255,0.06)' }} />
         </div>
-        <p className="text-text-muted text-sm">A comparação de CTR entre as variantes A e B aparece aqui após a coleta de analytics das contas conectadas.</p>
+        {videos === null
+          ? <div className="space-y-2">{[1,2,3].map(i => <div key={i} className="skeleton h-10 rounded-card" />)}</div>
+          : videos.length === 0
+            ? <p className="text-text-muted text-sm py-8 text-center">Nenhum vídeo publicado ainda. Assim que um vídeo for ao ar, ele aparece aqui com as métricas (coletadas em 2h / 24h / 7d).</p>
+            : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-text-muted text-xs uppercase tracking-wider text-left">
+                      <th className="pb-3 pr-3 font-medium">Vídeo</th>
+                      <th className="pb-3 px-3 font-medium">Tipo</th>
+                      <th className="pb-3 px-3 font-medium text-right">Views</th>
+                      <th className="pb-3 px-3 font-medium text-right">Likes</th>
+                      <th className="pb-3 px-3 font-medium text-right">Coment.</th>
+                      <th className="pb-3 pl-3 font-medium" />
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {videos.map((v) => (
+                      <tr key={v.job_id} className="border-t" style={{ borderColor: 'rgba(255,255,255,0.06)' }}>
+                        <td className="py-3 pr-3 max-w-[280px]">
+                          <p className="truncate font-medium" title={v.title}>{v.title || `Job ${v.job_id}`}</p>
+                          {v.snapshots === 0 && <span className="text-text-muted text-[10px]">métricas em coleta…</span>}
+                        </td>
+                        <td className="py-3 px-3 text-text-muted text-xs whitespace-nowrap">{(v.content_type || '').replace(/_/g, ' ')}</td>
+                        <td className="py-3 px-3 text-right font-semibold tabular-nums">{fmtNum(v.views)}</td>
+                        <td className="py-3 px-3 text-right tabular-nums">{fmtNum(v.likes)}</td>
+                        <td className="py-3 px-3 text-right tabular-nums">{fmtNum(v.comments)}</td>
+                        <td className="py-3 pl-3 text-right">
+                          {v.youtube_url && <a href={v.youtube_url} target="_blank" rel="noreferrer" className="text-xs text-accent hover:underline whitespace-nowrap">YouTube ↗</a>}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
       </div>
     </div>
   )

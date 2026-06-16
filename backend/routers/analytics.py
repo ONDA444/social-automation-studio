@@ -7,8 +7,9 @@ from sqlalchemy.orm import Session
 
 from backend.agents.analytics import AnalyticsAgent
 from backend.agents.content_calendar import ContentCalendarAgent
+from backend.agents.performance import PerformanceInsights
 from backend.database import get_db
-from backend.models import VideoAnalytics
+from backend.models import VideoAnalytics, VideoJob
 
 router = APIRouter(prefix="/analytics", tags=["analytics"])
 
@@ -32,6 +33,57 @@ def overview(db: Session = Depends(get_db)):
                    "comments": int(agg[2]), "shares": int(agg[3])},
         "by_platform": {p: int(v) for p, v in by_platform},
     }
+
+
+@router.get("/videos")
+def videos(account_id: int | None = None, limit: int = 200, db: Session = Depends(get_db)):
+    """Per-VIDEO breakdown (each published video separately, not aggregated).
+
+    Returns one row per published job with its latest metrics summed across the
+    platforms it was posted to. Videos with no metrics yet are still listed
+    (zeros) so the user sees every video as soon as it publishes.
+    """
+    q = select(VideoJob).order_by(VideoJob.created_at.desc()).limit(limit)
+    if account_id:
+        q = select(VideoJob).where(VideoJob.account_id == account_id).order_by(
+            VideoJob.created_at.desc()).limit(limit)
+    out: list[dict] = []
+    for job in db.execute(q).scalars().all():
+        ps = job.publish_status or {}
+        yt = ps.get("youtube") or {}
+        if not yt.get("video_id") and not yt.get("url"):
+            continue  # not actually published anywhere — skip
+        latest: dict[str, VideoAnalytics] = {}
+        for r in (job.analytics or []):
+            cur = latest.get(r.platform)
+            if cur is None or (r.collected_at and (cur.collected_at is None
+                               or r.collected_at > cur.collected_at)):
+                latest[r.platform] = r
+        vals = latest.values()
+        last_at = max((r.collected_at for r in vals if r.collected_at), default=None)
+        out.append({
+            "job_id": job.id,
+            "title": job.title,
+            "content_type": job.content_type,
+            "format": getattr(job, "video_format", None),
+            "account_id": job.account_id,
+            "status": job.status.value if hasattr(job.status, "value") else job.status,
+            "youtube_url": yt.get("url"),
+            "views": sum(int(getattr(r, "views", 0) or 0) for r in vals),
+            "likes": sum(int(getattr(r, "likes", 0) or 0) for r in vals),
+            "comments": sum(int(getattr(r, "comments", 0) or 0) for r in vals),
+            "snapshots": len(job.analytics or []),
+            "last_collected": last_at.isoformat() if last_at else None,
+            "published_at": job.updated_at.isoformat() if job.updated_at else None,
+        })
+    out.sort(key=lambda v: v["views"], reverse=True)
+    return {"videos": out, "count": len(out)}
+
+
+@router.get("/insights/{account_id}")
+def insights(account_id: int, db: Session = Depends(get_db)):
+    """The live 'what's working / what's not' brief that steers new videos."""
+    return PerformanceInsights(db).account_insights(account_id)
 
 
 @router.get("/job/{job_id}")

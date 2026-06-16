@@ -517,6 +517,10 @@ class ScriptwriterAgent(BaseAgent):
         except Exception:
             coach_block = ""
 
+        # Live learning signal — what already performed on this channel (from real
+        # analytics). Empty until enough measured videos exist. See performance.py.
+        perf_block = self.ctx_get("performance_insights") or ""
+
         is_narrated = content_type != "quote_viral"
         schema_extra = (
             '  "has_narration": true,\n'
@@ -538,7 +542,7 @@ Modo: {mode}
 content_type: {content_type}
 video_format: {video_format}
 
-{guide}{style_hint}{coach_block}{facts_block}
+{guide}{style_hint}{coach_block}{perf_block}{facts_block}
 {length_block}
 
 Responda com JSON neste formato EXATO:

@@ -14,6 +14,7 @@ fails, the job is marked 'error' and the queue continues.
 from __future__ import annotations
 
 import asyncio
+import logging
 from datetime import datetime
 
 from backend.config import settings
@@ -40,6 +41,8 @@ from backend.agents.shorts_factory import ShortsFactoryAgent
 from backend.agents.seo_agent import SEOAgent
 from backend.agents.quality_control import QualityControlAgent
 from backend.agents.compliance_agent import ComplianceAgent
+
+logger = logging.getLogger("studio.orchestrator")
 
 
 def _emit_job(job_id: int, **fields) -> None:
@@ -93,6 +96,17 @@ async def run_pipeline(job_id: int) -> dict:
             research = await ResearchAgent(job_id, ctx).execute(
                 title=job.title, topic=job.topic, content_type=job.content_type,
             )
+            # Learning loop: distill what's actually worked on THIS channel from
+            # real analytics and feed it to the scriptwriter + SEO, so each new
+            # video leans toward what performs. Pure Python aggregation — no extra
+            # LLM/API cost (free-API constraint preserved). Silent until enough
+            # measured videos exist.
+            try:
+                from backend.agents.performance import PerformanceInsights
+                ctx["performance_insights"] = PerformanceInsights(db).prompt_block(job.account_id)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("performance insights skipped: %s", exc)
+                ctx["performance_insights"] = ""
             upd(progress=10, agent="scriptwriter")
 
             script = await ScriptwriterAgent(job_id, ctx).execute(

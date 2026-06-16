@@ -86,6 +86,8 @@ class SEOAgent(BaseAgent):
         target_platforms = self.ctx_get("target_platforms") or ["youtube"]
         research = self.ctx_get("research") or {}
         facts_snippet = (research.get("facts") or "")[:400]
+        # Live learning signal — titles/tags/types that performed on this channel.
+        perf_block = self.ctx_get("performance_insights") or ""
 
         fyp_block = ""
         if any(p in target_platforms for p in ("tiktok", "instagram")):
@@ -101,7 +103,7 @@ Título recomendado (Packaging — NÃO regere): "{recommended_title}"
 Tipo: {content_type}
 Keywords semente: {keywords}
 Plataformas: {target_platforms}
-Fatos verificados: {facts_snippet or 'N/A'}{fyp_block}
+Fatos verificados: {facts_snippet or 'N/A'}{perf_block}{fyp_block}
 
 JSON EXATO (preencha todos os campos, não omita plataformas):
 {{
