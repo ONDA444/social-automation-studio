@@ -4,7 +4,9 @@ ContentCalendarAgent — strategic scheduling (not just fixed clock times).
 Modes:
   fixed          - use the account's configured post_times
   smart          - learn best hours from video_analytics (first-2h views)
-  trending_aware - publish ASAP into the nearest free slot
+  trending_aware - hands-off auto-spread: videos_per_day posts at the account's
+                   learned-best hours (or the general best-times spread) — the
+                   calendar the user SEES is exactly what the scheduler generates.
 
 Avoids cross-account collisions (15-min spacing) and respects daily quota.
 """
@@ -59,24 +61,27 @@ class ContentCalendarAgent:
         per_day = (cfg.videos_per_day if cfg else None) or (acct.schedule or {}).get("videos_per_day", 1)
         tz = _resolve_tz(cfg.timezone if cfg else None)
 
-        if mode == "trending_aware":
-            return self._asap_slots(count)
-
+        # ALL modes resolve to anchored clock slots (trending_aware/smart pick their
+        # hours automatically — see resolve_post_times). Using the same path for display
+        # and generation means the calendar the user sees is exactly what the scheduler
+        # produces & posts — no more floating ASAP slots that never generated anything.
         post_times = self.resolve_post_times(account_id, cfg, per_day, mode)
         return self._fixed_slots(post_times, per_day, count, tz)
 
     def resolve_post_times(self, account_id: int, cfg, per_day: int, mode: str | None = None) -> list[str]:
         """Effective HH:MM list for an account, resolving the schedule mode.
 
-        smart  -> the account's learned best hours, or the general best-times spread
-                  (BEST_TIMES_RANKED) until enough analytics exist.
+        smart / trending_aware -> hands-off: the account's learned best hours, or the
+                  general best-times spread (BEST_TIMES_RANKED) until analytics exist.
+                  Always returns a per_day-sized spread, so videos_per_day is honored
+                  even if the account still has a stale single post_time saved.
         fixed  -> the configured post_times, or the best-times spread if none set.
         Used by both next_slots() and the scheduler's slot-due check so the calendar
         the user sees and the generation timing always agree.
         """
         mode = mode or (cfg.mode if cfg else "fixed")
         configured = list(cfg.post_times) if (cfg and cfg.post_times) else []
-        if mode == "smart":
+        if mode in ("smart", "trending_aware"):
             tz = _resolve_tz(cfg.timezone if cfg else None)
             return self._smart_times(account_id, tz) or self.best_times(per_day)
         return configured or self.best_times(per_day)
@@ -141,10 +146,6 @@ class ContentCalendarAgent:
             day += timedelta(days=1)
             guard += 1
         return slots
-
-    def _asap_slots(self, count: int) -> list[datetime]:
-        base = _utcnow() + timedelta(minutes=5)
-        return [self._avoid_collision(base + i * timedelta(hours=2)) for i in range(count)]
 
     def _smart_times(self, account_id: int, tz: "ZoneInfo | None" = None) -> list[str]:
         """Top posting hours (in account LOCAL timezone) by avg first-2h views."""
