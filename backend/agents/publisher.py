@@ -195,6 +195,8 @@ async def self_publish_youtube(job, seo, creds, publish_at, shorts, privacy="pri
     short_results = []
     if main.get("ok"):
         for sp in shorts:
+            if sp == job.main_video_path:
+                continue
             short_results.append(await _with_retry(
                 yt.upload_video, sp, (y.get("title", job.title) + " #shorts")[:100],
                 y.get("description", ""), y.get("tags", []), creds,
