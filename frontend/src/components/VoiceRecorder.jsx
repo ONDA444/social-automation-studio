@@ -84,8 +84,8 @@ export default function VoiceRecorder({ account, onClose, onCloned }) {
     : `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 
   return (
-    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm grid place-items-center z-50 p-4 fade-in" onClick={onClose}>
-      <div className="card p-6 w-full max-w-md" onClick={(e) => e.stopPropagation()}>
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm grid place-items-center z-50 p-3 sm:p-4 fade-in overflow-y-auto" onClick={onClose}>
+      <div className="card p-4 sm:p-6 w-full max-w-md max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
         <h3 className="heading text-lg font-semibold mb-1">🎙️ Voz do canal</h3>
         <p className="text-xs text-text-muted mb-4">
           Clone sua voz e use nas narrações de <b>{account.display_name}</b>.

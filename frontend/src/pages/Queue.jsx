@@ -25,9 +25,10 @@ function Row({ job, accounts, selected, onToggleSelect, onChannelChange, onRetry
       ref={setNodeRef}
       style={{ transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.5 : 1 }}
       className="card p-3 fade-in">
-      <div className="flex items-center gap-3">
-        <input type="checkbox" className="shrink-0 accent-accent" checked={selected} onChange={() => onToggleSelect(job.id)} />
-        <span {...attributes} {...listeners} className="cursor-grab text-text-muted px-1 select-none text-lg leading-none">⠿</span>
+      {/* Linha principal: seleção, título e status */}
+      <div className="flex items-start gap-2 sm:gap-3">
+        <input type="checkbox" className="shrink-0 accent-accent mt-1 w-4 h-4" checked={selected} onChange={() => onToggleSelect(job.id)} />
+        <span {...attributes} {...listeners} className="cursor-grab text-text-muted px-1 select-none text-lg leading-none mt-0.5 shrink-0">⠿</span>
 
         <div className="flex-1 min-w-0">
           <p className="font-medium truncate">{job.title}</p>
@@ -57,9 +58,26 @@ function Row({ job, accounts, selected, onToggleSelect, onChannelChange, onRetry
           )}
         </div>
 
+        {/* Badge de status — sempre visível na linha de cima */}
+        <span className="badge shrink-0" style={{ background: s.color + '22', color: s.color }}>{s.label}</span>
+      </div>
+
+      {/* Barra de progresso (full width no mobile) */}
+      {job.status === 'processing' && (
+        <div className="mt-2.5">
+          <div className="h-1.5 rounded-full bg-elevated overflow-hidden">
+            <div className="h-full rounded-full transition-all duration-500"
+              style={{ width: `${job.progress || 0}%`, background: 'var(--grad-accent)' }} />
+          </div>
+          <p className="text-[10px] text-text-muted mt-0.5 truncate">{job.current_agent}</p>
+        </div>
+      )}
+
+      {/* Linha de controles: canal + ações — empilha/encolhe no mobile */}
+      <div className="flex flex-wrap items-center gap-2 mt-3 pt-2.5 border-t" style={{ borderColor: 'rgba(255,255,255,0.06)' }}>
         {/* Seletor de canal */}
         <select
-          className="input text-xs py-1 px-2 w-32 shrink-0"
+          className="input text-xs py-1.5 px-2 w-full sm:w-40 shrink-0"
           value={job.account_id ?? ''}
           disabled={!canEditChannel}
           title={canEditChannel ? 'Trocar canal' : 'Canal não editável neste status'}
@@ -70,37 +88,25 @@ function Row({ job, accounts, selected, onToggleSelect, onChannelChange, onRetry
           ))}
         </select>
 
-        {/* Barra de progresso */}
-        {job.status === 'processing' && (
-          <div className="w-28 shrink-0">
-            <div className="h-1.5 rounded-full bg-elevated overflow-hidden">
-              <div className="h-full rounded-full transition-all duration-500"
-                style={{ width: `${job.progress || 0}%`, background: 'var(--grad-accent)' }} />
-            </div>
-            <p className="text-[10px] text-text-muted mt-0.5 truncate">{job.current_agent}</p>
-          </div>
-        )}
-
-        {/* Badge de status */}
-        <span className="badge shrink-0" style={{ background: s.color + '22', color: s.color }}>{s.label}</span>
+        <div className="flex-1 hidden sm:block" />
 
         {/* Ações */}
         {job.main_video_path && (
-          <button className="btn-ghost text-xs shrink-0" onClick={() => setShowPlayer((v) => !v)}>
+          <button className="btn-ghost text-xs shrink-0 min-h-[34px]" onClick={() => setShowPlayer((v) => !v)}>
             {showPlayer ? 'Ocultar' : '▶ Ver'}
           </button>
         )}
         {canRepublish && (
-          <button className="btn-ghost text-xs shrink-0" onClick={() => onRepublish(job.id)} title="Republicar">
+          <button className="btn-ghost text-xs shrink-0 min-h-[34px]" onClick={() => onRepublish(job.id)} title="Republicar">
             ⤴ Republicar
           </button>
         )}
         {job.status === 'error' && (
-          <button className="btn-ghost text-xs shrink-0" onClick={() => onRetry(job.id)} title="Tentar novamente">
+          <button className="btn-ghost text-xs shrink-0 min-h-[34px] px-3" onClick={() => onRetry(job.id)} title="Tentar novamente">
             ↻
           </button>
         )}
-        <button className="btn-ghost text-xs shrink-0" onClick={() => onDelete(job.id)} title="Excluir">🗑</button>
+        <button className="btn-ghost text-xs shrink-0 min-h-[34px] px-3" onClick={() => onDelete(job.id)} title="Excluir">🗑</button>
       </div>
 
       {showPlayer && job.main_video_path && (
@@ -215,7 +221,7 @@ export default function Queue() {
 
   return (
     <div className="space-y-4 fade-in">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-3">
           <h2 className="heading text-2xl font-semibold">Fila</h2>
           <span className="badge" style={{ background: 'rgba(108,92,231,0.15)', color: 'var(--accent)', border: '1px solid rgba(108,92,231,0.25)' }}>
@@ -227,10 +233,10 @@ export default function Queue() {
             </span>
           )}
         </div>
-        <div className="flex gap-2">
-          <button className="btn-ghost text-sm" onClick={() => fileRef.current?.click()}>⬆ Importar CSV</button>
+        <div className="flex gap-2 w-full sm:w-auto">
+          <button className="btn-ghost text-sm flex-1 sm:flex-none" onClick={() => fileRef.current?.click()}>⬆ Importar CSV</button>
           <input ref={fileRef} type="file" accept=".csv" className="hidden" onChange={importCsv} />
-          <button className="btn-primary text-sm" onClick={() => setModal(true)}>+ Novo vídeo</button>
+          <button className="btn-primary text-sm flex-1 sm:flex-none" onClick={() => setModal(true)}>+ Novo vídeo</button>
         </div>
       </div>
 

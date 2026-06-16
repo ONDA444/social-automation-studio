@@ -48,8 +48,8 @@ export default function AddJobModal({ open, onClose, onCreated }) {
   }
 
   return (
-    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm grid place-items-center z-50 p-4 fade-in" onClick={onClose}>
-      <div className="card p-6 w-full max-w-lg shadow-[0_20px_60px_rgba(0,0,0,0.5)] animate-[fadeIn_.2s_ease-out] origin-center" onClick={(e) => e.stopPropagation()}>
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm grid place-items-center z-50 p-3 sm:p-4 fade-in overflow-y-auto" onClick={onClose}>
+      <div className="card p-4 sm:p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto shadow-[0_20px_60px_rgba(0,0,0,0.5)] animate-[fadeIn_.2s_ease-out] origin-center" onClick={(e) => e.stopPropagation()}>
         <h3 className="heading text-lg font-semibold mb-4">Novo vídeo</h3>
         <div className="space-y-3">
           <div>
@@ -97,9 +97,9 @@ export default function AddJobModal({ open, onClose, onCreated }) {
             </select>
           </div>
         </div>
-        <div className="flex gap-2 justify-end mt-5">
-          <button className="btn-ghost" onClick={onClose}>Cancelar</button>
-          <button className="btn-primary" disabled={busy} onClick={submit}>{busy ? 'Criando...' : (themes.length > 1 ? `Criar ${themes.length} vídeos` : 'Criar e gerar')}</button>
+        <div className="flex flex-col-reverse sm:flex-row gap-2 sm:justify-end mt-5">
+          <button className="btn-ghost w-full sm:w-auto" onClick={onClose}>Cancelar</button>
+          <button className="btn-primary w-full sm:w-auto" disabled={busy} onClick={submit}>{busy ? 'Criando...' : (themes.length > 1 ? `Criar ${themes.length} vídeos` : 'Criar e gerar')}</button>
         </div>
       </div>
     </div>

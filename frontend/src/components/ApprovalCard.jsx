@@ -43,8 +43,8 @@ export default function ApprovalCard({ job, onDone }) {
     <div className="relative">
       <div className="absolute left-0 top-4 bottom-4 w-0.5 rounded-full" style={{ background: 'var(--grad-accent)' }} />
       <div className="card card-hover p-4 pl-5 fade-in">
-        <div className="flex gap-4">
-          <div className="w-64 shrink-0">
+        <div className="flex flex-col sm:flex-row gap-4">
+          <div className="w-full sm:w-64 shrink-0">
             {showPlayer ? (
               <video src={mediaUrl(job.main_video_path)} controls className="w-full rounded-btn bg-black aspect-video" />
             ) : (
@@ -69,7 +69,7 @@ export default function ApprovalCard({ job, onDone }) {
             </p>
           </div>
 
-          <div className="flex-1 min-w-0 pl-4">
+          <div className="flex-1 min-w-0 sm:pl-4">
             <div className="flex items-start justify-between gap-2">
               <h3 className="font-medium">{job.title}{job.is_mirror && <span className="badge bg-accent/20 text-accent ml-2 text-[10px]">mirror</span>}</h3>
             </div>
@@ -101,11 +101,11 @@ export default function ApprovalCard({ job, onDone }) {
               </div>
             )}
 
-            <div className="flex gap-2 mt-4">
-              <button disabled={busy} className="btn-success text-xs px-6" onClick={() => act('approve')}>✓ Aprovar</button>
-              <button disabled={busy} className="btn-danger text-xs px-6" onClick={() => act('reject')}>✗ Rejeitar</button>
-              {!editing && <button className="btn-ghost text-xs" onClick={() => setEditing(true)}>✏ Editar SEO</button>}
-              <button disabled={busy} className="btn-ghost text-xs text-error" onClick={remove}>🗑 Excluir</button>
+            <div className="flex flex-wrap gap-2 mt-4">
+              <button disabled={busy} className="btn-success text-xs px-4 sm:px-6 min-h-[36px] flex-1 sm:flex-none" onClick={() => act('approve')}>✓ Aprovar</button>
+              <button disabled={busy} className="btn-danger text-xs px-4 sm:px-6 min-h-[36px] flex-1 sm:flex-none" onClick={() => act('reject')}>✗ Rejeitar</button>
+              {!editing && <button className="btn-ghost text-xs min-h-[36px]" onClick={() => setEditing(true)}>✏ Editar SEO</button>}
+              <button disabled={busy} className="btn-ghost text-xs text-error min-h-[36px]" onClick={remove}>🗑 Excluir</button>
             </div>
           </div>
         </div>

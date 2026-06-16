@@ -77,7 +77,7 @@ export default function Dashboard() {
     <div className="space-y-6">
 
       {/* ── Page header ── */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2
             className="heading text-gradient font-black"
@@ -116,7 +116,7 @@ export default function Dashboard() {
         {stats.map((s) => (
           <div
             key={s.label}
-            className="card-stat p-6 relative overflow-hidden"
+            className="card-stat p-4 sm:p-6 relative overflow-hidden"
             style={{
               background: 'rgba(14,14,26,0.9)',
               border: '1px solid rgba(255,255,255,0.07)',
@@ -158,7 +158,7 @@ export default function Dashboard() {
             <p
               className="heading font-black tabular-nums"
               style={{
-                fontSize: 36,
+                fontSize: 'clamp(26px, 7vw, 36px)',
                 lineHeight: 1.1,
                 color: s.color,
                 margin: '8px 0 0',

@@ -61,11 +61,11 @@ export default function Settings() {
         </p>
         <div className="space-y-2">
           {KEYS.map((k) => (
-            <div key={k.env} className="flex items-center gap-3 text-sm py-1.5 border-b last:border-0" style={{ borderColor: 'rgba(255,255,255,0.05)' }}>
-              <code className="font-mono text-[12px] text-accent w-48 shrink-0">{k.env}</code>
-              <span className="flex-1">{k.label}</span>
+            <div key={k.env} className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm py-2 border-b last:border-0" style={{ borderColor: 'rgba(255,255,255,0.05)' }}>
+              <code className="font-mono text-[12px] text-accent w-full sm:w-48 sm:shrink-0 break-all">{k.env}</code>
+              <span className="flex-1 min-w-0">{k.label}</span>
               <span className="badge text-[10px]" style={{ background: k.tier === 'grátis' ? 'rgba(0,214,143,.15)' : 'rgba(255,182,39,.15)', color: k.tier === 'grátis' ? 'var(--success)' : 'var(--warning)' }}>{k.tier}</span>
-              <a href={k.url} target="_blank" rel="noreferrer" className="text-text-muted hover:text-accent text-xs">obter ↗</a>
+              <a href={k.url} target="_blank" rel="noreferrer" className="text-text-muted hover:text-accent text-xs shrink-0">obter ↗</a>
             </div>
           ))}
         </div>

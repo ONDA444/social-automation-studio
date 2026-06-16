@@ -26,12 +26,12 @@ export default function Platforms() {
 
   return (
     <div className="space-y-6 fade-in">
-      <div className="flex items-start justify-between">
+      <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h2 className="heading text-2xl font-bold text-gradient">Plataformas & Canais</h2>
           <p className="text-text-muted text-sm mt-1">Conecte e gerencie seus canais de publicação.</p>
         </div>
-        <button className="btn-primary" onClick={() => setAdding((a) => !a)}>+ Conectar canal</button>
+        <button className="btn-primary w-full sm:w-auto" onClick={() => setAdding((a) => !a)}>+ Conectar canal</button>
       </div>
 
       {adding && (

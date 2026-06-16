@@ -41,11 +41,11 @@ export default function Analytics() {
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         {cards.map((c) => (
-          <div key={c.label} className="card-stat p-6">
+          <div key={c.label} className="card-stat p-4 sm:p-6">
             <div className="relative overflow-hidden">
-              <span className="absolute right-3 top-3 text-5xl opacity-10 select-none">{c.icon}</span>
+              <span className="absolute right-2 top-2 sm:right-3 sm:top-3 text-4xl sm:text-5xl opacity-10 select-none">{c.icon}</span>
               <p className="text-text-muted text-xs uppercase tracking-wider mb-2">{c.label}</p>
-              <p className="heading text-3xl font-black">{c.value}</p>
+              <p className="heading text-2xl sm:text-3xl font-black">{c.value}</p>
             </div>
           </div>
         ))}
