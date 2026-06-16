@@ -1,22 +1,66 @@
 :root {
-  --bg-base:       #0A0A0F;
-  --bg-surface:    #12121A;
-  --bg-elevated:   #1A1A26;
-  --border:        #2A2A3A;
-  --accent:        #6C5CE7;
-  --accent-yt:     #FF0000;
-  --accent-tk:     #FF0050;
-  --accent-ig:     #E1306C;
-  --text-primary:  #F0F0FF;
-  --text-muted:    #8888AA;
-  --success:       #00D68F;
+  /* Backgrounds — deeper, richer dark */
+  --bg-base:       #06060C;
+  --bg-surface:    #0D0D18;
+  --bg-elevated:   #14142A;
+  --bg-glass:      rgba(20, 20, 42, 0.55);
+
+  /* Borders */
+  --border:        rgba(108, 92, 231, 0.18);
+  --border-glow:   rgba(108, 92, 231, 0.45);
+  --border-glass:  rgba(255, 255, 255, 0.07);
+
+  /* Accent — more saturated purple with electric feel */
+  --accent:        #7C6AFF;
+  --accent-dim:    rgba(124, 106, 255, 0.15);
+  --accent-glow:   rgba(124, 106, 255, 0.55);
+
+  /* Platforms */
+  --accent-yt:     #FF4444;
+  --accent-tk:     #FF2D78;
+  --accent-ig:     #C13584;
+
+  /* Text */
+  --text-primary:  #EEEEFF;
+  --text-muted:    #7070A0;
+  --text-dim:      #404060;
+
+  /* Status */
+  --success:       #00F5A0;
   --warning:       #FFB627;
   --error:         #FF4757;
-  --radius-card:   12px;
-  --radius-btn:    8px;
+
+  /* Radius */
+  --radius-card:   16px;
+  --radius-btn:    10px;
   --radius-badge:  20px;
-  --shadow-card:   0 4px 24px rgba(108, 92, 231, 0.08);
+  --radius-pill:   999px;
+
+  /* Shadows — layered for real depth */
+  --shadow-xs:     0 1px 3px rgba(0,0,0,0.5);
+  --shadow-sm:     0 2px 8px rgba(0,0,0,0.45), 0 1px 2px rgba(0,0,0,0.6);
+  --shadow-md:     0 8px 32px rgba(0,0,0,0.5), 0 2px 8px rgba(0,0,0,0.4);
+  --shadow-lg:     0 20px 60px rgba(0,0,0,0.6), 0 4px 16px rgba(0,0,0,0.4);
+  --shadow-glow:   0 0 0 1px rgba(124,106,255,0.3), 0 8px 32px rgba(124,106,255,0.25);
+  --shadow-glow-lg: 0 0 0 1px rgba(124,106,255,0.4), 0 16px 48px rgba(124,106,255,0.35);
+
+  /* Gradients */
+  --grad-accent:   linear-gradient(135deg, #9B8AFF 0%, #7C6AFF 50%, #5F4AE8 100%);
+  --grad-success:  linear-gradient(135deg, #00F5A0 0%, #00D68F 100%);
+  --grad-danger:   linear-gradient(135deg, #FF6B7A 0%, #FF4757 100%);
+  --grad-surface:  linear-gradient(180deg, rgba(255,255,255,0.04) 0%, rgba(255,255,255,0) 50%);
+  --grad-glass:    linear-gradient(135deg, rgba(255,255,255,0.08) 0%, rgba(255,255,255,0.02) 100%);
+  --grad-nebula:   radial-gradient(ellipse 900px 600px at 15% -10%, rgba(124,106,255,0.22), transparent 60%),
+                   radial-gradient(ellipse 700px 500px at 90% 10%, rgba(0,245,160,0.07), transparent 55%),
+                   radial-gradient(ellipse 1000px 700px at 50% 110%, rgba(124,106,255,0.10), transparent 60%);
+
+  /* Typography */
   --font-display:  'Space Grotesk', sans-serif;
   --font-ui:       'Inter', sans-serif;
   --font-mono:     'JetBrains Mono', monospace;
+
+  /* Easing */
+  --ease-out:      cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-spring:   cubic-bezier(0.34, 1.56, 0.64, 1);
+  --ease-smooth:   cubic-bezier(0.4, 0, 0.2, 1);
 }

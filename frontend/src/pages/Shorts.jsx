@@ -30,29 +30,42 @@ export default function Shorts() {
   const copy = (txt) => { if (txt) navigator.clipboard?.writeText(txt) }
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-5 fade-in">
       <div className="flex items-center justify-between">
-        <div>
-          <h1 className="heading text-2xl font-bold">Shorts</h1>
-          <p className="text-text-muted text-sm">Vídeos curtos verticais (TikTok • Reels • YouTube Shorts) — gancho + captions prontos.</p>
+        <div className="flex items-center gap-3">
+          <div>
+            <div className="flex items-center gap-2">
+              <h1 className="heading text-2xl text-gradient font-bold">Shorts</h1>
+              {cards.length > 0 && <span className="badge" style={{ background: 'rgba(124,106,255,0.15)', color: 'var(--accent)' }}>{cards.length}</span>}
+            </div>
+            <p className="text-text-muted text-sm">Vídeos curtos verticais (TikTok • Reels • YouTube Shorts) — gancho + captions prontos.</p>
+          </div>
         </div>
         <button className="btn-ghost" onClick={load}>↻ Atualizar</button>
       </div>
 
-      {loading && <p className="text-text-muted">Carregando…</p>}
+      {loading && (
+        <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-4">
+          {[1,2,3,4].map(i => <div key={i} className="card skeleton aspect-[9/16]" />)}
+        </div>
+      )}
+
       {!loading && cards.length === 0 && (
-        <div className="card p-8 text-center text-text-muted">
-          Nenhum Short ainda. Gere um vídeo na <b>Fila</b> — cada vídeo produz Shorts automaticamente.
+        <div className="card p-12 text-center">
+          <p className="text-5xl mb-4">📱</p>
+          <p className="heading font-semibold text-lg">Nenhum Short ainda</p>
+          <p className="text-text-muted text-sm mt-2">Crie um vídeo na Fila — os Shorts são gerados automaticamente em 9:16.</p>
         </div>
       )}
 
       <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-4">
         {cards.map(({ job, short }, idx) => (
           <div key={`${job.id}-${short.num}-${idx}`} className="card p-3 flex flex-col gap-2">
-            <div className="relative rounded-card overflow-hidden bg-black aspect-[9/16]">
+            <div className="relative rounded-card overflow-hidden bg-black aspect-[9/16] group">
               {short.path
                 ? <video src={mediaUrl(short.path)} controls preload="metadata" className="w-full h-full object-contain" />
                 : <div className="grid place-items-center h-full text-text-muted text-xs">sem arquivo</div>}
+              <div className="absolute bottom-0 inset-x-0 h-16 bg-gradient-to-t from-black/60 to-transparent" />
               {short.hook_overlay && (
                 <div className="absolute top-2 inset-x-2 text-center">
                   <span className="inline-block bg-black/70 text-white text-[11px] font-bold px-2 py-1 rounded">
@@ -61,7 +74,7 @@ export default function Shorts() {
                 </div>
               )}
               {short.recommended && (
-                <span className="absolute bottom-2 right-2 badge bg-accent text-white text-[10px]">★ recomendado</span>
+                <span className="absolute bottom-2 right-2 badge text-[10px]" style={{ background: 'var(--grad-accent)', color: '#fff' }}>★ recomendado</span>
               )}
             </div>
 
@@ -75,15 +88,15 @@ export default function Shorts() {
             {short.captions && (
               <div className="flex flex-wrap gap-1">
                 {short.captions.tiktok && (
-                  <button className="badge bg-elevated hover:bg-accent/20 text-[10px]" title={short.captions.tiktok}
+                  <button style={{ background: 'rgba(20,20,42,0.8)', color: 'var(--text-primary)' }} className="badge text-[10px] transition-colors hover:border-accent" title={short.captions.tiktok}
                           onClick={() => copy(short.captions.tiktok)}>📋 TikTok</button>
                 )}
                 {short.captions.instagram && (
-                  <button className="badge bg-elevated hover:bg-accent/20 text-[10px]" title={short.captions.instagram}
+                  <button style={{ background: 'rgba(20,20,42,0.8)', color: 'var(--text-primary)' }} className="badge text-[10px] transition-colors hover:border-accent" title={short.captions.instagram}
                           onClick={() => copy(short.captions.instagram)}>📋 Reels</button>
                 )}
                 {short.captions.youtube_shorts && (
-                  <button className="badge bg-elevated hover:bg-accent/20 text-[10px]" title={short.captions.youtube_shorts}
+                  <button style={{ background: 'rgba(20,20,42,0.8)', color: 'var(--text-primary)' }} className="badge text-[10px] transition-colors hover:border-accent" title={short.captions.youtube_shorts}
                           onClick={() => copy(short.captions.youtube_shorts)}>📋 Shorts</button>
                 )}
               </div>

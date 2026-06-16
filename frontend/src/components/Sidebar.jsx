@@ -2,94 +2,226 @@ import { NavLink } from 'react-router-dom'
 
 const NAV = [
   { to: '/', icon: '📊', label: 'Dashboard' },
-  { to: '/queue', icon: '📋', label: 'Fila' },
-  { to: '/shorts', icon: '🎞️', label: 'Shorts' },
+  { to: '/queue', icon: '🎬', label: 'Fila' },
+  { to: '/schedule', icon: '📅', label: 'Agenda' },
   { to: '/approvals', icon: '✅', label: 'Aprovações' },
-  { to: '/remix', icon: '🔀', label: 'Remix' },
-  { to: '/platforms', icon: '📱', label: 'Contas' },
-  { to: '/schedule', icon: '🕐', label: 'Agenda' },
+  { to: '/shorts', icon: '📱', label: 'Shorts' },
+  { to: '/remix', icon: '🎨', label: 'Remix' },
+  { to: '/platforms', icon: '🔗', label: 'Plataformas' },
   { to: '/analytics', icon: '📈', label: 'Analytics' },
   { to: '/settings', icon: '⚙️', label: 'Config' },
 ]
 
-export default function Sidebar({ mobileOpen = false, onClose = () => {} }) {
+const sidebarBase = {
+  background: 'rgba(6,6,12,0.95)',
+  backdropFilter: 'blur(24px)',
+  WebkitBackdropFilter: 'blur(24px)',
+  borderRight: '1px solid rgba(124,106,255,0.15)',
+}
+
+function SidebarContent({ onItemClick, showCloseBtn, onClose }) {
   return (
     <>
-      {/* Rail desktop — inalterado em telas md+ */}
-      <aside className="hidden md:flex w-20 shrink-0 bg-surface border-r border-border flex-col items-center py-4 gap-2">
-        <div className="w-11 h-11 rounded-card bg-accent flex items-center justify-center text-xl mb-4 shadow-[0_4px_18px_rgba(108,92,231,0.4)] transition-transform duration-200 hover:scale-105">
-          🎬
+      {/* ── Logo area ── */}
+      <div style={{ padding: '22px 16px 20px', position: 'relative', display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0 }}>
+        {/* Glow orb */}
+        <div
+          aria-hidden="true"
+          style={{
+            position: 'absolute',
+            left: -8,
+            top: '50%',
+            transform: 'translateY(-50%)',
+            width: 90,
+            height: 90,
+            background: 'radial-gradient(ellipse at center, rgba(124,106,255,0.38) 0%, transparent 70%)',
+            filter: 'blur(18px)',
+            pointerEvents: 'none',
+          }}
+        />
+        {/* SAS badge */}
+        <div
+          style={{
+            position: 'relative',
+            zIndex: 1,
+            width: 40,
+            height: 40,
+            borderRadius: 12,
+            background: 'linear-gradient(135deg, #7C6AFF 0%, #A78BFA 100%)',
+            boxShadow: '0 0 20px rgba(124,106,255,0.5), 0 4px 12px rgba(0,0,0,0.4)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            flexShrink: 0,
+          }}
+        >
+          <span style={{ fontWeight: 900, color: '#fff', fontSize: 12, letterSpacing: '-0.5px' }}>SAS</span>
         </div>
+        {/* Name */}
+        <div style={{ position: 'relative', zIndex: 1, minWidth: 0, flex: 1 }}>
+          <p style={{ margin: 0, fontWeight: 700, color: '#EEEEFF', fontSize: 13, letterSpacing: '-0.2px', lineHeight: 1.2 }}>
+            Social Automation
+          </p>
+          <p style={{ margin: '2px 0 0', fontSize: 11, color: 'rgba(160,150,220,0.65)', lineHeight: 1.2 }}>
+            Studio
+          </p>
+        </div>
+        {/* Mobile close button */}
+        {showCloseBtn && (
+          <button
+            onClick={onClose}
+            aria-label="Fechar menu"
+            style={{
+              position: 'relative',
+              zIndex: 1,
+              width: 30,
+              height: 30,
+              borderRadius: 8,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: 'rgba(160,150,220,0.7)',
+              background: 'transparent',
+              border: 'none',
+              cursor: 'pointer',
+              flexShrink: 0,
+              transition: 'background 150ms',
+            }}
+            onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(255,255,255,0.07)' }}
+            onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent' }}
+          >
+            <svg width="13" height="13" viewBox="0 0 13 13" fill="none">
+              <path d="M1 1L12 12M12 1L1 12" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+            </svg>
+          </button>
+        )}
+      </div>
+
+      {/* ── Nav items ── */}
+      <nav style={{ display: 'flex', flexDirection: 'column', gap: 2, padding: '0 12px', flex: 1, overflowY: 'auto' }}>
         {NAV.map((item) => (
           <NavLink
             key={item.to}
             to={item.to}
             end={item.to === '/'}
-            title={item.label}
+            onClick={onItemClick}
             className={({ isActive }) =>
-              `group relative w-14 h-14 rounded-card flex flex-col items-center justify-center gap-0.5 transition-all duration-150 ${
-                isActive ? 'bg-accent/20 text-accent' : 'text-text-muted hover:bg-elevated hover:text-text-primary'
+              `flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium border transition-all ${
+                isActive ? 'border-accent/40' : 'border-transparent hover:bg-white/5'
               }`
             }
+            style={({ isActive }) =>
+              isActive
+                ? {
+                    background: 'rgba(124,106,255,0.18)',
+                    color: '#A78BFA',
+                    boxShadow: '0 0 14px rgba(124,106,255,0.10)',
+                    transitionDuration: '180ms',
+                  }
+                : {
+                    color: '#7070A0',
+                    transitionDuration: '180ms',
+                  }
+            }
           >
-            {({ isActive }) => (
-              <>
-                <span className={`absolute left-0 top-1/2 -translate-y-1/2 w-1 rounded-r-full bg-accent transition-all duration-200 ${isActive ? 'h-7 opacity-100' : 'h-0 opacity-0'}`} />
-                <span className="text-lg leading-none transition-transform duration-150 group-hover:scale-110">{item.icon}</span>
-                <span className="text-[9px] font-medium">{item.label}</span>
-              </>
-            )}
+            <span
+              style={{
+                width: 28,
+                height: 28,
+                borderRadius: 8,
+                background: 'rgba(255,255,255,0.04)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                fontSize: 16,
+                lineHeight: 1,
+                flexShrink: 0,
+              }}
+            >
+              {item.icon}
+            </span>
+            <span>{item.label}</span>
           </NavLink>
         ))}
+      </nav>
+
+      {/* ── Status footer ── */}
+      <div
+        style={{
+          padding: '14px 16px 20px',
+          borderTop: '1px solid rgba(124,106,255,0.10)',
+          flexShrink: 0,
+        }}
+      >
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            padding: '7px 12px',
+            borderRadius: 10,
+            background: 'rgba(0,214,143,0.06)',
+            border: '1px solid rgba(0,214,143,0.15)',
+          }}
+        >
+          <span
+            style={{
+              width: 7,
+              height: 7,
+              borderRadius: '50%',
+              background: '#00D68F',
+              boxShadow: '0 0 7px #00D68F',
+              flexShrink: 0,
+              animation: 'sas-pulse 2.2s ease-in-out infinite',
+            }}
+          />
+          <span style={{ fontSize: 12, color: 'rgba(0,214,143,0.85)', fontWeight: 500 }}>
+            Railway live
+          </span>
+        </div>
+      </div>
+    </>
+  )
+}
+
+export default function Sidebar({ mobileOpen = false, onClose = () => {} }) {
+  return (
+    <>
+      {/* Keyframe for status dot */}
+      <style>{`
+        @keyframes sas-pulse {
+          0%, 100% { box-shadow: 0 0 5px #00D68F; opacity: 1; }
+          50% { box-shadow: 0 0 13px #00D68F; opacity: 0.65; }
+        }
+      `}</style>
+
+      {/* ── Desktop sidebar ── */}
+      <aside
+        className="hidden md:flex w-64 shrink-0 flex-col"
+        style={{ ...sidebarBase, height: '100vh', position: 'sticky', top: 0 }}
+      >
+        <SidebarContent />
       </aside>
 
-      {/* Overlay mobile — só aparece abaixo de md quando aberto */}
+      {/* ── Mobile: backdrop ── */}
       <div
-        className={`md:hidden fixed inset-0 z-40 bg-black/60 transition-opacity duration-200 ${
+        className={`md:hidden fixed inset-0 z-40 transition-opacity duration-200 ${
           mobileOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'
         }`}
+        style={{ background: 'rgba(0,0,0,0.72)', backdropFilter: 'blur(4px)' }}
         onClick={onClose}
         aria-hidden="true"
       />
 
-      {/* Drawer mobile — desliza da esquerda */}
+      {/* ── Mobile: drawer ── */}
       <aside
-        className={`md:hidden fixed top-0 left-0 z-50 h-full w-64 bg-surface border-r border-border flex flex-col py-4 px-3 gap-1 shadow-card transform transition-transform duration-200 ${
+        className={`md:hidden fixed top-0 left-0 z-50 h-full w-64 flex flex-col shadow-2xl transform transition-transform duration-200 ${
           mobileOpen ? 'translate-x-0' : '-translate-x-full'
         }`}
+        style={sidebarBase}
         aria-hidden={!mobileOpen}
       >
-        <div className="flex items-center justify-between mb-4 px-1">
-          <div className="flex items-center gap-2">
-            <div className="w-10 h-10 rounded-card bg-accent flex items-center justify-center text-lg shadow-card">
-              🎬
-            </div>
-            <span className="heading text-sm font-semibold">Studio</span>
-          </div>
-          <button
-            onClick={onClose}
-            aria-label="Fechar menu"
-            className="w-9 h-9 rounded-btn flex items-center justify-center text-text-muted hover:bg-elevated hover:text-text-primary transition-colors"
-          >
-            ✕
-          </button>
-        </div>
-        {NAV.map((item) => (
-          <NavLink
-            key={item.to}
-            to={item.to}
-            end={item.to === '/'}
-            onClick={onClose}
-            className={({ isActive }) =>
-              `flex items-center gap-3 w-full px-3 py-2.5 rounded-card transition-colors ${
-                isActive ? 'bg-accent/20 text-accent' : 'text-text-muted hover:bg-elevated hover:text-text-primary'
-              }`
-            }
-          >
-            <span className="text-lg leading-none">{item.icon}</span>
-            <span className="text-sm font-medium">{item.label}</span>
-          </NavLink>
-        ))}
+        <SidebarContent showCloseBtn onClose={onClose} onItemClick={onClose} />
       </aside>
     </>
   )

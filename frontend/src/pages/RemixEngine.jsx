@@ -58,16 +58,26 @@ export default function RemixEngine() {
   }
 
   return (
-    <div className="space-y-6 max-w-4xl">
-      <h2 className="heading text-2xl font-semibold">Remix Engine</h2>
-      <p className="text-sm text-text-muted">
-        Analise um vídeo de referência para extrair o <b>StyleDNA</b> (apenas o estilo).
-        Nenhum frame, áudio ou clipe da referência entra no vídeo final — o conteúdo é 100% original.
-      </p>
+    <div className="space-y-6 max-w-4xl fade-in">
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h2 className="heading text-2xl text-gradient font-bold">Remix Engine</h2>
+          <p className="text-text-muted text-sm mt-1">Analise um vídeo de referência para extrair o StyleDNA (apenas o estilo).</p>
+        </div>
+        <span className="badge text-[10px] shrink-0 mt-1" style={{ background: 'rgba(124,106,255,0.15)', color: 'var(--accent)', border: '1px solid rgba(124,106,255,0.3)' }}>100% original</span>
+      </div>
+
+      <div className="card p-4 flex items-start gap-3" style={{ borderColor: 'rgba(0,245,160,0.2)', background: 'rgba(0,245,160,0.04)' }}>
+        <span className="text-lg shrink-0 mt-0.5">🛡️</span>
+        <p className="text-xs text-text-muted leading-relaxed">Nenhum frame, áudio ou clipe da referência entra no vídeo final. O StyleDNA captura apenas ritmo, paleta e estrutura narrativa — o conteúdo é criado do zero.</p>
+      </div>
 
       <div className="card p-5">
-        <label className="text-xs text-text-muted">URL de referência (YouTube, TikTok, Instagram) ou caminho local</label>
-        <div className="flex gap-2 mt-1">
+        <div className="flex items-center gap-2 mb-3">
+          <h3 className="heading font-semibold text-sm">Referência de estilo</h3>
+          <span className="text-[10px] text-text-muted">YouTube • TikTok • Instagram • arquivo local</span>
+        </div>
+        <div className="flex gap-2">
           <input className="input" value={source} onChange={(e) => setSource(e.target.value)} placeholder="https://..." />
           <button className="btn-primary whitespace-nowrap" onClick={analyze} disabled={analyzing}>{analyzing ? 'Analisando…' : 'Analisar'}</button>
         </div>
@@ -100,7 +110,10 @@ export default function RemixEngine() {
                   { v: 'short', label: '📱 Shorts', hint: '9:16' },
                 ].map((f) => (
                   <button key={f.v} type="button" onClick={() => setFormat(f.v)}
-                    className={`flex-1 rounded-card border p-2 text-left text-xs transition-colors ${format === f.v ? 'border-accent bg-accent/15 text-text-primary' : 'border-border text-text-muted hover:bg-elevated'}`}>
+                    className="flex-1 rounded-card border p-2.5 text-left text-xs transition-all duration-200"
+                    style={format === f.v
+                      ? { borderColor: 'var(--accent)', background: 'rgba(124,106,255,0.12)', color: 'var(--text-primary)' }
+                      : { borderColor: 'rgba(255,255,255,0.08)', background: 'rgba(20,20,42,0.4)', color: 'var(--text-muted)' }}>
                     <div className="font-semibold">{f.label}</div>
                     <div className="text-[10px] opacity-70">{f.hint}</div>
                   </button>
@@ -114,7 +127,7 @@ export default function RemixEngine() {
                 {accounts.map((a) => <option key={a.id} value={a.id}>{a.display_name} ({a.platform})</option>)}
               </select>
             </div>
-            <button className="btn-primary w-full" onClick={create} disabled={creating}>{creating ? 'Criando…' : 'Gerar vídeo remixado'}</button>
+            <button className="btn-primary w-full" onClick={create} disabled={creating}>{creating ? '⏳ Criando…' : '🚀 Gerar vídeo remixado'}</button>
             <p className="text-[11px] text-text-muted">Será criado um job <code>from_remix</code> com este StyleDNA.</p>
           </div>
         </div>
