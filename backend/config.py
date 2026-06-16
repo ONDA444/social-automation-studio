@@ -11,6 +11,7 @@ import os
 from functools import lru_cache
 from pathlib import Path
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Repo root = parent of the backend/ package.
@@ -72,6 +73,10 @@ class Settings(BaseSettings):
     meta_redirect_uri: str = "http://localhost:8000/auth/instagram/callback"
 
     # ---- App ----
+    # Public base URL of this service (e.g. https://backend-production-d314e.up.railway.app).
+    # When set, redirect URIs default to this host and Instagram uses the app's
+    # own /files endpoint instead of transfer.sh to expose videos publicly.
+    app_base_url: str = ""
     secret_key: str = "dev-insecure-change-me"
     database_url: str = "sqlite:///./studio.db"
     redis_url: str = "redis://localhost:6379"
@@ -126,6 +131,21 @@ class Settings(BaseSettings):
 
     # CORS origins for the frontend (comma-separated in env, list in code).
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
+
+    @model_validator(mode="after")
+    def _derive_redirect_uris(self) -> "Settings":
+        """Auto-fill localhost redirect URIs using APP_BASE_URL when set."""
+        base = self.app_base_url.rstrip("/")
+        if not base:
+            return self
+        for attr, path in (
+            ("google_redirect_uri", "/auth/youtube/callback"),
+            ("tiktok_redirect_uri", "/auth/tiktok/callback"),
+            ("meta_redirect_uri", "/auth/instagram/callback"),
+        ):
+            if getattr(self, attr).startswith("http://localhost"):
+                setattr(self, attr, f"{base}{path}")
+        return self
 
     @property
     def is_production(self) -> bool:

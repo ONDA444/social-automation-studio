@@ -89,11 +89,26 @@ def _discover_ig_account(token: str) -> dict:
 
 
 def _to_public_url(video_path: str) -> str | None:
-    """Upload to a temporary public host so Graph can fetch the Reel."""
+    """Return a publicly reachable URL for the video.
+
+    When APP_BASE_URL is set (Railway) the app's own /files static mount is used
+    — the video is already on disk there, no external upload needed.
+    Falls back to transfer.sh only when no base URL is configured.
+    """
+    import os
+    from pathlib import Path
+
+    base_url = settings.app_base_url.rstrip("/")
+    if base_url:
+        output_root = settings.abs_path(settings.output_dir).resolve()
+        try:
+            rel = Path(video_path).resolve().relative_to(output_root)
+            return f"{base_url}/files/{rel.as_posix()}"
+        except ValueError:
+            pass  # video not under output_dir — fall through
+
     host = "https://transfer.sh"
     try:
-        import os
-
         name = os.path.basename(video_path)
         with open(video_path, "rb") as f:
             r = httpx.put(f"{host}/{name}", content=f.read(), timeout=300)
