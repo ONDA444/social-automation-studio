@@ -31,6 +31,12 @@ DEFAULT_TZ = "America/Sao_Paulo"
 # _smart_times() overrides these with the account's actually-best hours.
 BEST_TIMES_RANKED = ["19:00", "21:00", "12:00", "18:00", "20:00", "15:00", "13:00", "08:00", "22:00", "17:00"]
 
+# Minimum number of videos with real first-2h views before "smart" learning is
+# trusted over the general best-times spread. Below this the per-hour ranking is
+# noise (a single early view would peg a random hour). Mirrors the analytics
+# learning loop's gate so the system never steers on too little data.
+_SMART_MIN_MEASURED = 3
+
 
 def _utcnow() -> datetime:
     """Timezone-aware 'now' in UTC (replaces the old naive datetime.utcnow())."""
@@ -83,7 +89,14 @@ class ContentCalendarAgent:
         configured = list(cfg.post_times) if (cfg and cfg.post_times) else []
         if mode in ("smart", "trending_aware"):
             tz = _resolve_tz(cfg.timezone if cfg else None)
-            return self._smart_times(account_id, tz) or self.best_times(per_day)
+            learned = self._smart_times(account_id, tz)
+            # Always hand back a per_day-sized spread: learned good hours first, then
+            # fill from the general best-times so videos_per_day is ALWAYS honored even
+            # when analytics are sparse (e.g. learned=['06:00'] alone would post once,
+            # at a noise hour). dict.fromkeys dedups while preserving the learned-first
+            # priority.
+            spread = list(dict.fromkeys(learned + self.best_times(per_day)))[: max(1, per_day)]
+            return sorted(spread)
         return configured or self.best_times(per_day)
 
     @staticmethod
@@ -148,17 +161,23 @@ class ContentCalendarAgent:
         return slots
 
     def _smart_times(self, account_id: int, tz: "ZoneInfo | None" = None) -> list[str]:
-        """Top posting hours (in account LOCAL timezone) by avg first-2h views."""
+        """Top posting hours (in account LOCAL timezone) by avg first-2h views.
+
+        Returns [] until at least _SMART_MIN_MEASURED videos have real (>0) first-2h
+        views — below that the ranking is pure noise (one early view would peg a random
+        hour like 06:00). The caller falls back to the general best-times spread.
+        """
         rows = self.db.execute(
             select(VideoAnalytics.collected_at, VideoAnalytics.views)
             .join(VideoJob, VideoJob.id == VideoAnalytics.job_id)
             .where(VideoJob.account_id == account_id, VideoAnalytics.snapshot_type == "2h")
         ).all()
-        if not rows:
-            return []
+        measured = [(c, v) for c, v in rows if c and (v or 0) > 0]
+        if len(measured) < _SMART_MIN_MEASURED:
+            return []  # not enough signal — let best_times decide
         local_tz = tz or ZoneInfo(DEFAULT_TZ)
         by_hour: dict[int, list[int]] = {}
-        for collected_at, views in rows:
+        for collected_at, views in measured:
             if collected_at:
                 # collected_at is stored as naive UTC — attach UTC tzinfo so
                 # astimezone() converts correctly to the account's local timezone.
