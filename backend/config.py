@@ -31,8 +31,12 @@ class Settings(BaseSettings):
     # ---- LLMs ----
     groq_api_key: str = ""
     gemini_api_key: str = ""
-    anthropic_api_key: str = ""
     ollama_host: str = "http://localhost:11434"
+    # Free-tier pacing — minimum requests/min spacing so a video's burst of ~8
+    # LLM calls never trips the per-minute rate limit (429). Tune down if you hit
+    # limits, up if your tier is higher. Groq free ~30 RPM, Gemini free ~10-15 RPM.
+    groq_rpm: int = 25
+    gemini_rpm: int = 10
     # Ground factual topics (sports/news/events) in real web sources via Gemini +
     # Google Search before scripting, so narration states TRUE facts (real score,
     # date, names) instead of hallucinating. Needs GEMINI_API_KEY.
