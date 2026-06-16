@@ -35,11 +35,12 @@ def start_scheduler() -> None:
     sched.add_job(_job_collect_analytics, "interval", minutes=15, id="analytics", replace_existing=True)
     sched.add_job(_job_consume_themes, "interval", minutes=2, id="consume_themes", replace_existing=True)
     sched.add_job(_job_publish_due, "interval", minutes=1, id="publish_due", replace_existing=True)
+    sched.add_job(_job_retry_errored, "interval", minutes=20, id="retry_errored", replace_existing=True)
     sched.start()
     _scheduler = sched
     logger.info(
         "Scheduler started (trending, quota reset, heartbeat, analytics, "
-        "consume_themes, publish_due)."
+        "consume_themes, publish_due, retry_errored)."
     )
 
 
@@ -68,6 +69,67 @@ def _job_quota_reset() -> None:
         n = AccountProfileService(db).reset_daily_quota()
         logger.info("Daily quota reset for %s accounts.", n)
         publish_event({"type": "quota_reset", "accounts": n})
+    finally:
+        db.close()
+
+
+# Error messages that mean "a free LLM provider was momentarily exhausted" — a
+# TRANSIENT failure worth retrying (vs. a genuine bug we should leave alone). The
+# scriptwriter aborts here BEFORE rendering, so resurrecting these is cheap.
+_LLM_TRANSIENT_MARKERS = (
+    "LLM indisponível",
+    "roteiro real não pôde",
+    "LLM retornou roteiro inválido",
+    "esgotou tentativas",
+)
+
+
+def _job_retry_errored() -> None:
+    """Resurrect videos that died on a transient LLM failure (free-tier 429 / daily
+    quota window) so a scheduled post isn't lost forever. Resets them to QUEUED and
+    re-dispatches; per-provider pacing + a reopened quota window usually let them
+    through next time. Capped by retry_count (settings.llm_retry_max) so a genuinely
+    broken job doesn't loop, and bounded to the last 24h so we never wake old ghosts.
+    """
+    from sqlalchemy import select
+
+    from backend.config import settings
+    from backend.models import JobStatus, VideoJob
+    from backend.pipeline.dispatch import dispatch_job
+
+    cap = settings.llm_retry_max
+    if cap <= 0:
+        return  # resurrection disabled
+    cutoff = datetime.utcnow() - timedelta(hours=24)
+
+    db = SessionLocal()
+    try:
+        rows = db.execute(
+            select(VideoJob).where(
+                VideoJob.status == JobStatus.ERROR,
+                VideoJob.retry_count < cap,
+                VideoJob.updated_at >= cutoff,
+            )
+        ).scalars().all()
+        for job in rows:
+            msg = job.error_message or ""
+            if not any(m in msg for m in _LLM_TRANSIENT_MARKERS):
+                continue  # not a transient LLM failure — leave it for a human
+            job.retry_count = (job.retry_count or 0) + 1
+            job.status = JobStatus.QUEUED
+            job.error_message = None
+            job.current_agent = None
+            job.progress = 0
+            db.commit()
+            logger.info("Retry LLM-falho: job %s (tentativa %s/%s).", job.id, job.retry_count, cap)
+            publish_event({
+                "type": "job_update", "job_id": job.id, "status": "retry",
+                "message": f"Reprocessando após falha de LLM (tentativa {job.retry_count}/{cap})",
+            })
+            dispatch_job(job.id)
+    except Exception as exc:  # noqa: BLE001 — never let the scheduler die
+        db.rollback()
+        logger.warning("retry_errored job failed: %s", exc)
     finally:
         db.close()
 

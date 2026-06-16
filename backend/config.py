@@ -37,6 +37,12 @@ class Settings(BaseSettings):
     # limits, up if your tier is higher. Groq free ~30 RPM, Gemini free ~10-15 RPM.
     groq_rpm: int = 25
     gemini_rpm: int = 10
+    # Resilience: when ALL free LLM providers are momentarily exhausted (429 /
+    # daily quota), a scheduled video dies at the scriptwriter. Instead of losing
+    # it, _job_retry_errored resurrects it later (when a quota window reopens) up
+    # to this many times. The scriptwriter aborts in seconds when the LLM is down
+    # — BEFORE any render — so retries are cheap. Set 0 to disable resurrection.
+    llm_retry_max: int = 8
     # Ground factual topics (sports/news/events) in real web sources via Gemini +
     # Google Search before scripting, so narration states TRUE facts (real score,
     # date, names) instead of hallucinating. Needs GEMINI_API_KEY.

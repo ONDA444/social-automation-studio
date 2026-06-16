@@ -1,0 +1,13 @@
+# Keep CLI deploys lean — backend is Python-only; frontend/dist is prebuilt.
+.git
+.claude
+.agents
+node_modules
+frontend/node_modules
+frontend/src
+*.db
+tmp/
+output/
+cache/
+logs/
+*.log
