@@ -1,6 +1,5 @@
 import { createContext, useContext, useState, useEffect } from 'react'
 import { Routes, Route, Navigate } from 'react-router-dom'
-import Lenis from 'lenis'
 import Sidebar from './components/Sidebar.jsx'
 import TopBar from './components/TopBar.jsx'
 import { useWebSocket } from './useWebSocket.js'
@@ -21,17 +20,6 @@ export const useWs = () => useContext(WsContext)
 export default function App() {
   const ws = useWebSocket(250)
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
-
-  useEffect(() => {
-    const lenis = new Lenis({
-      duration: 1.2,
-      easing: (t) => Math.min(1, 1.001 - Math.pow(2, -10 * t)),
-      smooth: true,
-    })
-    const raf = (time) => { lenis.raf(time); requestAnimationFrame(raf) }
-    requestAnimationFrame(raf)
-    return () => lenis.destroy()
-  }, [])
 
   return (
     <WsContext.Provider value={ws}>

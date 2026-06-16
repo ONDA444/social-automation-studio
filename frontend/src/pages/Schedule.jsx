@@ -33,6 +33,7 @@ export default function Schedule() {
     timezone: 'America/Sao_Paulo', auto_shorts: true, shorts_formats: [1, 2, 4],
   })
   const [slots, setSlots]       = useState([])
+  const [slotsMeta, setSlotsMeta] = useState(null)
   const [saving, setSaving]     = useState(false)
 
   const [themesText, setThemesText]   = useState('')
@@ -60,7 +61,7 @@ export default function Schedule() {
     api.get(`/schedule/config/${sel}`)
       .then((c) => setCfg((p) => ({ ...p, ...c, post_times: c.post_times?.length ? c.post_times : p.post_times })))
       .catch(() => {})
-    api.get(`/schedule/${sel}/slots?count=6`).then((d) => setSlots(d.slots || [])).catch(() => {})
+    api.get(`/schedule/${sel}/slots?count=6`).then((d) => { setSlots(d.slots || []); setSlotsMeta(d) }).catch(() => {})
   }, [sel])
 
   const loadQueue = () => {
@@ -75,6 +76,7 @@ export default function Schedule() {
       await api.put(`/schedule/config/${sel}`, cfg)
       const d = await api.get(`/schedule/${sel}/slots?count=6&mode=${cfg.mode}`)
       setSlots(d.slots || [])
+      setSlotsMeta(d)
     } catch (e) { alert(e.message) } finally { setSaving(false) }
   }
 
@@ -223,8 +225,28 @@ export default function Schedule() {
 
               {/* Próximos slots */}
               {slots.length > 0 && (
-                <div className="pt-3 border-t border-border">
-                  <p className="text-xs text-text-muted mb-2">Próximos slots agendados:</p>
+                <div className="pt-3 border-t border-border space-y-2">
+                  {/* Smart mode feedback */}
+                  {cfg.mode === 'smart' && slotsMeta && (
+                    <div className="rounded-lg p-2.5 text-[11px]"
+                      style={{ background: slotsMeta.from_analytics ? 'rgba(0,245,160,0.06)' : 'rgba(124,106,255,0.06)',
+                               border: `1px solid ${slotsMeta.from_analytics ? 'rgba(0,245,160,0.2)' : 'rgba(124,106,255,0.2)'}` }}>
+                      {slotsMeta.from_analytics ? (
+                        <p style={{ color: 'var(--success)' }}>
+                          ✓ Horários aprendidos com seus dados: <b>{(slotsMeta.effective_times || []).join(', ')}</b>
+                        </p>
+                      ) : (
+                        <>
+                          <p style={{ color: 'var(--accent)' }}>
+                            🧠 Usando melhores horários padrão: <b>{(slotsMeta.effective_times || []).join(', ')}</b>
+                          </p>
+                          <p className="text-text-muted mt-0.5">Os horários vão se adaptar automaticamente conforme seu canal crescer.</p>
+                        </>
+                      )}
+                    </div>
+                  )}
+
+                  <p className="text-xs text-text-muted">Próximos slots agendados:</p>
                   <ul className="space-y-1.5">
                     {slots.map((s, i) => (
                       <li key={i} className="flex items-center gap-2 text-[12px]">
@@ -233,6 +255,13 @@ export default function Schedule() {
                       </li>
                     ))}
                   </ul>
+
+                  {/* Queue size hint */}
+                  {queue.length > 0 && (
+                    <p className="text-[11px] text-text-muted pt-1 border-t border-border">
+                      {queue.length} tema{queue.length !== 1 ? 's' : ''} na fila · geração automática a cada slot
+                    </p>
+                  )}
                 </div>
               )}
             </>

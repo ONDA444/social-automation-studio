@@ -15,7 +15,6 @@ body {
   text-rendering: optimizeLegibility;
   background-color: var(--bg-base);
   background-image: var(--grad-nebula);
-  background-attachment: fixed;
 }
 
 * { box-sizing: border-box; }

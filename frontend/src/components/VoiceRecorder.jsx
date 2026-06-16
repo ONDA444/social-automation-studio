@@ -1,18 +1,25 @@
 import { useRef, useState } from 'react'
 import { api } from '../api'
 
-// Record a voice sample with the mic and clone it (LMNT) as the channel's voice.
 export default function VoiceRecorder({ account, onClose, onCloned }) {
+  const [mode, setMode] = useState('record')
+
+  // ── Gravação ──
   const [recording, setRecording] = useState(false)
   const [seconds, setSeconds] = useState(0)
   const [recorded, setRecorded] = useState(false)
-  const [status, setStatus] = useState('')
-  const [busy, setBusy] = useState(false)
   const mediaRef = useRef(null)
   const chunksRef = useRef([])
   const timerRef = useRef(null)
 
-  const MAX = 30 // auto-stop seconds
+  // ── Upload ──
+  const [uploadFile, setUploadFile] = useState(null)
+  const fileInputRef = useRef(null)
+
+  // ── Shared ──
+  const [status, setStatus] = useState('')
+  const [busy, setBusy] = useState(false)
+  const MAX = 30
 
   const start = async () => {
     setStatus(''); setRecorded(false)
@@ -41,7 +48,7 @@ export default function VoiceRecorder({ account, onClose, onCloned }) {
     if (mr && mr.state !== 'inactive') mr.stop()
   }
 
-  const clone = async () => {
+  const cloneFromMic = async () => {
     if (!chunksRef.current.length) { setStatus('Grave sua voz primeiro.'); return }
     setBusy(true); setStatus('Clonando sua voz no LMNT…')
     try {
@@ -55,31 +62,111 @@ export default function VoiceRecorder({ account, onClose, onCloned }) {
     } finally { setBusy(false) }
   }
 
+  const cloneFromFile = async () => {
+    if (!uploadFile) { setStatus('Selecione um arquivo de áudio primeiro.'); return }
+    setBusy(true); setStatus('Enviando arquivo e clonando voz…')
+    try {
+      const r = await api.upload(`/accounts/${account.id}/clone-voice`, uploadFile)
+      setStatus('✓ Voz clonada e definida como a voz deste canal!')
+      onCloned?.(r)
+    } catch (e) {
+      setStatus('Erro ao clonar: ' + e.message)
+    } finally { setBusy(false) }
+  }
+
+  const pickFile = (e) => {
+    const f = e.target.files?.[0]
+    if (f) { setUploadFile(f); setStatus('') }
+  }
+
+  const fmtSize = (bytes) => bytes < 1024 * 1024
+    ? `${(bytes / 1024).toFixed(0)} KB`
+    : `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+
   return (
     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm grid place-items-center z-50 p-4 fade-in" onClick={onClose}>
       <div className="card p-6 w-full max-w-md" onClick={(e) => e.stopPropagation()}>
-        <h3 className="heading text-lg font-semibold mb-1">🎤 Gravar minha voz</h3>
+        <h3 className="heading text-lg font-semibold mb-1">🎙️ Voz do canal</h3>
         <p className="text-xs text-text-muted mb-4">
-          Fale de forma clara por <b>10 a 30 segundos</b> (pode ler um texto qualquer).
-          O sistema cria um clone da sua voz e passa a narrar <b>{account.display_name}</b> com ela.
+          Clone sua voz e use nas narrações de <b>{account.display_name}</b>.
+          Fale ou envie um áudio claro de <b>10 a 30 segundos</b>.
         </p>
 
-        <div className="grid place-items-center py-6">
-          <div className={`w-24 h-24 rounded-full grid place-items-center text-3xl transition-all ${recording ? 'bg-error/20 animate-pulse' : 'bg-elevated'}`}>
-            🎙️
-          </div>
-          <p className="text-2xl font-mono mt-3">{String(Math.floor(seconds / 60)).padStart(2, '0')}:{String(seconds % 60).padStart(2, '0')}</p>
-          <p className="text-[11px] text-text-muted">{recording ? 'Gravando… (para sozinho em 30s)' : recorded ? 'Gravação pronta' : 'Pronto pra gravar'}</p>
+        {/* Abas */}
+        <div className="flex gap-1 mb-4 p-1 rounded-xl" style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.06)' }}>
+          {[{ key: 'record', label: '🎤 Gravar' }, { key: 'upload', label: '📂 Enviar arquivo' }].map(({ key, label }) => (
+            <button
+              key={key}
+              className="flex-1 text-xs py-1.5 rounded-lg transition-all"
+              style={{
+                background: mode === key ? 'rgba(124,106,255,0.2)' : 'transparent',
+                color: mode === key ? 'var(--accent)' : 'var(--text-muted)',
+                border: mode === key ? '1px solid rgba(124,106,255,0.3)' : '1px solid transparent',
+              }}
+              onClick={() => { setMode(key); setStatus('') }}
+            >
+              {label}
+            </button>
+          ))}
         </div>
 
-        {status && <p className="text-xs mb-3 text-center" style={{ color: status.startsWith('✓') ? 'var(--success)' : status.startsWith('Erro') || status.includes('não') ? 'var(--error)' : 'var(--text-muted)' }}>{status}</p>}
+        {/* ── Aba Gravar ── */}
+        {mode === 'record' && (
+          <>
+            <div className="grid place-items-center py-6">
+              <div className={`w-24 h-24 rounded-full grid place-items-center text-3xl transition-all ${recording ? 'bg-error/20 animate-pulse' : 'bg-elevated'}`}>
+                🎙️
+              </div>
+              <p className="text-2xl font-mono mt-3">{String(Math.floor(seconds / 60)).padStart(2, '0')}:{String(seconds % 60).padStart(2, '0')}</p>
+              <p className="text-[11px] text-text-muted">{recording ? 'Gravando… (para sozinho em 30s)' : recorded ? 'Gravação pronta' : 'Pronto pra gravar'}</p>
+            </div>
 
-        <div className="flex items-center gap-2">
-          {!recording
-            ? <button className="btn-primary flex-1" onClick={start} disabled={busy}>{recorded ? '↻ Regravar' : '● Gravar'}</button>
-            : <button className="btn-ghost flex-1" style={{ color: 'var(--error)' }} onClick={stop}>■ Parar</button>}
-          <button className="btn-primary flex-1" onClick={clone} disabled={!recorded || busy || recording}>{busy ? 'Clonando…' : 'Usar esta voz'}</button>
-        </div>
+            {status && <p className="text-xs mb-3 text-center" style={{ color: status.startsWith('✓') ? 'var(--success)' : 'var(--error)' }}>{status}</p>}
+
+            <div className="flex items-center gap-2">
+              {!recording
+                ? <button className="btn-primary flex-1" onClick={start} disabled={busy}>{recorded ? '↻ Regravar' : '● Gravar'}</button>
+                : <button className="btn-ghost flex-1" style={{ color: 'var(--error)' }} onClick={stop}>■ Parar</button>}
+              <button className="btn-primary flex-1" onClick={cloneFromMic} disabled={!recorded || busy || recording}>
+                {busy ? 'Clonando…' : 'Usar esta voz'}
+              </button>
+            </div>
+          </>
+        )}
+
+        {/* ── Aba Upload ── */}
+        {mode === 'upload' && (
+          <>
+            <div
+              className="rounded-xl border-2 border-dashed grid place-items-center py-8 mb-4 cursor-pointer transition-colors"
+              style={{ borderColor: uploadFile ? 'rgba(0,245,160,0.5)' : 'rgba(255,255,255,0.12)', background: 'rgba(255,255,255,0.02)' }}
+              onClick={() => fileInputRef.current?.click()}
+            >
+              <input ref={fileInputRef} type="file" accept="audio/*,.mp3,.wav,.m4a,.ogg,.flac,.webm" className="hidden" onChange={pickFile} />
+              {uploadFile ? (
+                <div className="text-center px-4">
+                  <p className="text-2xl mb-2">🎵</p>
+                  <p className="text-sm font-medium truncate max-w-[240px]" title={uploadFile.name}>{uploadFile.name}</p>
+                  <p className="text-xs text-text-muted mt-1">{fmtSize(uploadFile.size)}</p>
+                  <p className="text-[10px] mt-2" style={{ color: 'var(--success)' }}>Clique para trocar o arquivo</p>
+                </div>
+              ) : (
+                <div className="text-center px-4">
+                  <p className="text-3xl mb-2">📂</p>
+                  <p className="text-sm font-medium">Clique para selecionar</p>
+                  <p className="text-xs text-text-muted mt-1">MP3, WAV, M4A, OGG, FLAC — 10 a 30 segundos</p>
+                </div>
+              )}
+            </div>
+
+            {status && <p className="text-xs mb-3 text-center" style={{ color: status.startsWith('✓') ? 'var(--success)' : status.startsWith('Erro') ? 'var(--error)' : 'var(--text-muted)' }}>{status}</p>}
+
+            <button className="btn-primary w-full" onClick={cloneFromFile} disabled={!uploadFile || busy}>
+              {busy ? 'Clonando…' : 'Clonar voz deste arquivo'}
+            </button>
+          </>
+        )}
+
         <button className="btn-ghost w-full text-xs mt-2" onClick={onClose}>Fechar</button>
       </div>
     </div>

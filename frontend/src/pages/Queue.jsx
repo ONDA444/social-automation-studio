@@ -104,7 +104,9 @@ function Row({ job, accounts, selected, onToggleSelect, onChannelChange, onRetry
       </div>
 
       {showPlayer && job.main_video_path && (
-        <video src={mediaUrl(job.main_video_path)} controls className="w-full rounded-xl mt-3" />
+        <div className="mt-3 rounded-xl overflow-hidden bg-black flex justify-center" style={{ maxHeight: '60vh' }}>
+          <video src={mediaUrl(job.main_video_path)} controls style={{ maxHeight: '60vh', width: 'auto', maxWidth: '100%' }} />
+        </div>
       )}
     </div>
   )

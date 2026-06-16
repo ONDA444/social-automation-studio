@@ -65,7 +65,7 @@ export default function Shorts() {
               {short.path
                 ? <video src={mediaUrl(short.path)} controls preload="metadata" className="w-full h-full object-contain" />
                 : <div className="grid place-items-center h-full text-text-muted text-xs">sem arquivo</div>}
-              <div className="absolute bottom-0 inset-x-0 h-16 bg-gradient-to-t from-black/60 to-transparent" />
+              <div className="absolute bottom-0 inset-x-0 h-16 bg-gradient-to-t from-black/60 to-transparent pointer-events-none" />
               {short.hook_overlay && (
                 <div className="absolute top-2 inset-x-2 text-center">
                   <span className="inline-block bg-black/70 text-white text-[11px] font-bold px-2 py-1 rounded">
