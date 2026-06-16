@@ -12,7 +12,14 @@ from backend.agents.base_agent import BaseAgent
 from backend.config import settings
 from backend import llm
 
-SYSTEM = "Você é um especialista em SEO e growth para YouTube, TikTok e Instagram. Responda só com JSON."
+SYSTEM = (
+    "Você é um especialista de SEO e Algoritmo de YouTube/TikTok/Instagram de nível mundial. "
+    "Você entende que existem TRÊS motores — Busca (keyword + CTR-na-query), "
+    "Browse/Suggested (CTR do par título+thumbnail × watch time) e FYP do TikTok/IG "
+    "(completion_rate × rewatch × save/share ratio × comment_velocity) — e otimiza para os "
+    "três sem sacrificar um pelo outro. NUNCA invente números/nomes/datas. "
+    "Responda SOMENTE com JSON válido."
+)
 
 YT_CATEGORY = {
     "film_recap_ai_images": "24",   # Entertainment
@@ -49,10 +56,13 @@ class SEOAgent(BaseAgent):
         except llm.LLMUnavailable:
             seo = self._offline(script, content_type)
 
-        # Always attach computed chapters + category, regardless of source.
+        # Normalise: ensure top-level "youtube" key (LLM may nest it under "feed" etc.)
+        if "youtube" not in seo and isinstance(seo.get("feed"), dict):
+            seo["youtube"] = {}
         seo.setdefault("youtube", {})
+        # Always attach computed chapters + category, regardless of source.
         seo["youtube"]["chapters"] = self._chapters(script, narration)
-        seo["youtube"]["category_id"] = YT_CATEGORY.get(content_type, "22")
+        seo["youtube"].setdefault("category_id", YT_CATEGORY.get(content_type, "22"))
         seo["youtube"]["description"] = self._with_chapters(
             seo["youtube"].get("description", ""), seo["youtube"]["chapters"]
         )
@@ -63,19 +73,81 @@ class SEOAgent(BaseAgent):
         return seo
 
     async def _via_llm(self, script, content_type, language) -> dict:
-        prompt = f"""Crie metadados de SEO em {language} para este vídeo.
-Título base: "{script.get('title')}"
-Tipo: {content_type}
-Palavras-chave: {script.get('seo_keywords', [])}
+        title = script.get("title", "")
+        keywords = script.get("seo_keywords", [])
+        packaging = self.ctx_get("packaging") or {}
+        recommended_title = title
+        if isinstance(packaging.get("youtube_titles"), list) and packaging.get("recommended_index") is not None:
+            idx = packaging["recommended_index"]
+            titles = packaging["youtube_titles"]
+            if isinstance(titles, list) and 0 <= idx < len(titles):
+                t = titles[idx]
+                recommended_title = t.get("text", t) if isinstance(t, dict) else t
+        target_platforms = self.ctx_get("target_platforms") or ["youtube"]
+        research = self.ctx_get("research") or {}
+        facts_snippet = (research.get("facts") or "")[:400]
 
-JSON EXATO:
+        fyp_block = ""
+        if any(p in target_platforms for p in ("tiktok", "instagram")):
+            fyp_block = (
+                "\n\nFYP (TikTok/IG): para cada plataforma não-YouTube, declare como o vídeo ataca "
+                "completion_rate (gancho ≤2s + loop), rewatch (loop_seam), save (utilidade), "
+                "share (identidade/moeda social) e comment_velocity (pergunta divisiva). "
+                "Proponha first_comment (comentário-semente fixado que gera debate)."
+            )
+
+        prompt = f"""Crie o pacote de SEO/Algoritmo em {language} para este vídeo.
+Título recomendado (Packaging — NÃO regere): "{recommended_title}"
+Tipo: {content_type}
+Keywords semente: {keywords}
+Plataformas: {target_platforms}
+Fatos verificados: {facts_snippet or 'N/A'}{fyp_block}
+
+JSON EXATO (preencha todos os campos, não omita plataformas):
 {{
-  "youtube": {{"title": "<=70 chars com keyword no início + 1 emoji", "description": "3 parágrafos", "tags": ["8-18 tags"]}},
+  "search": {{
+    "search_seed": "<termo que um humano DIGITARIA>",
+    "long_tail_variants": ["<pergunta>", "<sinônimo>", "<grafia alternativa>"],
+    "title_keyword": "<keyword principal no título>"
+  }},
+  "feed": {{
+    "entities": ["<5-10 nomes/lugares/obras/eventos reais>"],
+    "cluster_terms": ["<3-6 termos do nicho p/ suggested>"],
+    "suggested_next_to": ["<tipo de vídeo ao lado do qual este deveria aparecer>"],
+    "playlist_target": "<série/playlist do canal>"
+  }},
+  "fyp": {{
+    "tiktok": {{
+      "completion_play": "...", "rewatch_play": "...", "save_play": "...",
+      "share_play": "...", "comment_play": "...", "first_comment": "..."
+    }},
+    "instagram": {{
+      "completion_play": "...", "rewatch_play": "...", "save_play": "...",
+      "share_play": "...", "comment_play": "...", "first_comment": "..."
+    }}
+  }},
+  "youtube": {{
+    "title": "{recommended_title}",
+    "description": "<gancho 1-2 linhas com keyword → contexto+entidades → [CAPÍTULOS] → CTA>",
+    "tags": ["<12-20 tags, 1ª = keyword exata>"],
+    "category_id": "{YT_CATEGORY.get(content_type, '22')}",
+    "thumbnail_text": "<2-4 PALAVRAS MAIÚSCULAS que complementam o título>"
+  }},
   "tiktok": {{"caption": "<=150 chars com 3-5 hashtags de nicho + #fyp #foryou"}},
-  "instagram": {{"caption": "storytelling <=2200 chars", "hashtags": ["25-30 hashtags"]}}
+  "instagram": {{"caption": "storytelling <=2200 chars", "hashtags": ["20-30 mix nicho+alcance"]}},
+  "seo_score": {{
+    "value": 0,
+    "breakdown": {{
+      "title_ctr": 0, "keyword_match": 0, "entity_coverage": 0,
+      "description_structure": 0, "tags_quality": 0, "feed_signals": 0,
+      "fyp_signals": 0, "truth_safety": 0
+    }},
+    "verdict": "ok"
+  }},
+  "seo_notes": ["<o que falta para melhorar o score>"]
 }}"""
         from backend.agents.style_guide import with_style
-        return await llm.complete_json(prompt, system=with_style(SYSTEM), max_tokens=1500)
+        return await llm.complete_json(prompt, system=with_style(SYSTEM), max_tokens=2000)
 
     def _offline(self, script: dict, content_type: str) -> dict:
         title = script.get("title", "Vídeo")
@@ -83,8 +155,20 @@ JSON EXATO:
         tags = list(dict.fromkeys(kws + ["viral", "shorts", "brasil", content_type.split("_")[0]]))[:15]
         nicho_tags = " ".join(f"#{k.replace(' ', '')}" for k in kws[:4])
         return {
+            "search": {"search_seed": kws[0] if kws else title.lower(),
+                       "long_tail_variants": [], "title_keyword": kws[0] if kws else title.lower()},
+            "feed": {"entities": kws[:5], "cluster_terms": kws[:3],
+                     "suggested_next_to": [content_type], "playlist_target": ""},
+            "fyp": {
+                "tiktok": {"completion_play": "gancho no 1s", "rewatch_play": "loop fechado",
+                           "save_play": "utilidade", "share_play": "identidade",
+                           "comment_play": "pergunta divisiva", "first_comment": ""},
+                "instagram": {"completion_play": "gancho no 1s", "rewatch_play": "loop fechado",
+                              "save_play": "utilidade", "share_play": "identidade",
+                              "comment_play": "pergunta divisiva", "first_comment": ""},
+            },
             "youtube": {
-                "title": f"{title} 🔥"[:70],
+                "title": f"{title}"[:70],
                 "description": (
                     f"{title}\n\n"
                     f"Neste vídeo exploramos {title.lower()} em detalhes. "
@@ -92,6 +176,8 @@ JSON EXATO:
                     "👉 Inscreva-se para mais. Ative o sininho! 🔔"
                 ),
                 "tags": tags,
+                "category_id": YT_CATEGORY.get(content_type, "22"),
+                "thumbnail_text": " ".join(title.split()[:3]).upper()[:30],
             },
             "tiktok": {"caption": f"{title} {nicho_tags} #fyp #foryou"[:150]},
             "instagram": {
@@ -101,6 +187,8 @@ JSON EXATO:
                             + ["#viral", "#reels", "#fyp", "#brasil", "#explore", "#trending",
                                "#video", "#conteudo", "#shorts", "#instadaily"],
             },
+            "seo_score": {"value": 50, "breakdown": {}, "verdict": "ok"},
+            "seo_notes": [],
         }
 
     @staticmethod
@@ -143,6 +231,12 @@ JSON EXATO:
         ig = seo.setdefault("instagram", {})
         ig["caption"] = (ig.get("caption") or "")[:2200]
         ig["hashtags"] = (ig.get("hashtags") or [])[:30]
+        # Ensure new-schema keys exist at minimum (backward compat)
+        seo.setdefault("search", {})
+        seo.setdefault("feed", {})
+        seo.setdefault("fyp", {"tiktok": {}, "instagram": {}})
+        seo.setdefault("seo_score", {"value": 0, "breakdown": {}, "verdict": "ok"})
+        seo.setdefault("seo_notes", [])
         return seo
 
 

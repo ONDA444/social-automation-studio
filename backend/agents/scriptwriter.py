@@ -21,20 +21,247 @@ Output schema (stored on VideoContext['script']):
 from __future__ import annotations
 
 import asyncio
+import copy
+import re
 
 from backend.agents.base_agent import AgentError, BaseAgent
 from backend.config import settings
 from backend import llm
 
+# ── Channel Config v2.1 ─────────────────────────────────────────────────────
+CHANNEL_DEFAULTS: dict = {
+    "schema_version": "2.1", "platform": "youtube", "language": "pt-BR",
+    "channel_name": "",
+    "identity": {
+        "niche": "", "sub_niches": [], "content_pillars": [], "target_audience": "",
+        "persona": {"name": None, "pov": "narrator", "vocabulary_level": "popular",
+                    "energy": "medio", "signature_moves": []},
+    },
+    "voice": {"tone": ["energetico", "credivel"], "narrator_style": "conversacional",
+              "tts_voice": "pt-BR-AntonioNeural", "pacing": "medio"},
+    "format": {"video_format": "long", "long_duration_target": 360,
+               "shorts_duration_target": 35, "preferred_content_types": ["auto"],
+               "aspect_ratio_long": "16:9", "aspect_ratio_short": "9:16"},
+    "packaging": {
+        "title_style": {"mechanisms": ["curiosity_gap", "number", "contrarian"],
+                        "max_chars": 60, "must_include_number_when_possible": True,
+                        "emoji_policy": "one"},
+        "thumbnail_style": {
+            "text_overlay": {"max_words": 4, "case": "UPPER",
+                             "style": "bold sans, heavy stroke, high contrast"},
+            "palette": ["#FF2D2D", "#FFD400", "#0B0B12"],
+            "focal_subject": "auto", "emotion_default": "curiosidade",
+            "must_complement_title": True, "consistency_anchor": "",
+            "art_direction": "high-contrast cinematic, single clear subject, shallow depth of field",
+        },
+    },
+    "retention": {"hook_style": "auto", "retention_target": 0.45,
+                  "rehook_interval_hint_sec": 35, "open_loop_required": True,
+                  "payoff_required": True},
+    "audience_psychology": {
+        "emotional_intensity": 0.6, "hook_aggressiveness": 0.6,
+        "primary_emotions": ["curiosidade", "surpresa"], "core_desire": "",
+        "identification_anchor": "", "stakes_frame": "", "share_drivers": ["moeda_social"],
+        "controversy_tolerance": 0.3, "humor_level": 0.2, "forbidden_emotions": [],
+    },
+    "cta_style": {"profile": "follow_loop", "objective": "watch_next", "placement": "end",
+                  "template": "deixa uma pergunta aberta ligada ao tema",
+                  "cross_platform_pull": True},
+    "visual_style": {
+        "image_aesthetic": "", "footage_strategy": "auto", "stock_domains_hint": [],
+        "use_face": True, "safe_zone": "right",
+        "negative_prompt": "text, watermark, logo, distorted, low quality, extra fingers",
+        "color_grade": "alto_contraste", "mood": "epic_cinematic",
+        "thumbnail_archetype": "face_reaction", "accent_color": "#FFD400",
+        "typography": "heavy_condensed_sans", "face_emotion_bias": "shock",
+        "device_overlays": "arrows_circles",
+    },
+    "music": {"genre_hint": "cinematic_tension", "energy_curve": "build_to_climax",
+              "bpm_range": [70, 110], "drop_on_climax": True, "duck_under_voice_db": -12},
+    "captions": {"style": "karaoke", "burn_in": True, "max_chars_per_line": 24,
+                 "highlight_color": "#FFD400", "position_long": "lower_third",
+                 "position_short": "center_safe"},
+    "seo": {"primary_keywords": [], "search_angle": "", "tags_count": [15, 25],
+            "hashtag_policy": "nicho+amplo", "search_intent": "o que aconteceu",
+            "channel_brand_tag": ""},
+    "fyp_signals": {"target_completion_rate": 0.7, "rewatch_target": 1.1,
+                    "save_ratio_target": 0.02, "share_ratio_target": 0.015,
+                    "first_comment_seed": True},
+    "guardrails": {
+        "forbidden_topics": [], "claims_policy": "facts_only", "extra_instructions": "",
+        "banned_cliches": [
+            "olá pessoal", "você não vai acreditar", "prepare-se", "segura essa",
+            "presta atenção", "hoje eu vou te mostrar", "sem mais delongas",
+            "bem-vindos de volta", "você já parou para pensar",
+        ],
+    },
+    "experimentation": {"ab_test_policy": {"title_variants": 3, "thumbnail_variants": 2,
+                                           "test_axis": "mechanism",
+                                           "winner_metric": "ctr_then_retention"}},
+}
+
+
+def _deep_merge(base: dict, over: dict) -> dict:
+    out = copy.deepcopy(base)
+    for k, v in (over or {}).items():
+        if isinstance(v, dict) and isinstance(out.get(k), dict):
+            out[k] = _deep_merge(out[k], v)
+        else:
+            out[k] = copy.deepcopy(v)
+    return out
+
+
+def resolve_channel_config(channel: dict | None = None,
+                           per_job_override: dict | None = None) -> dict:
+    cfg = _deep_merge(CHANNEL_DEFAULTS, channel or {})
+    cfg = _deep_merge(cfg, per_job_override or {})
+    cfg = _deep_merge(CHANNEL_DEFAULTS, cfg)
+    return cfg
+
+
+def _band(x) -> str:
+    try:
+        x = float(x)
+    except (TypeError, ValueError):
+        x = 0.6
+    if x < 0.34:
+        return "BAIXA (contido, sóbrio; nada de sensacionalismo)"
+    if x < 0.67:
+        return "MÉDIA (firme, mas sem exagero; 1 pico controlado)"
+    return "ALTA (provocador e intenso, ainda dentro da verdade dos fatos)"
+
+
+def render_channel_block(cfg: dict | None = None) -> str:
+    g = resolve_channel_config(cfg)
+
+    def G(path, default=""):
+        cur = g
+        for key in path.split("."):
+            if not isinstance(cur, dict):
+                return default
+            cur = cur.get(key, None)
+            if cur is None:
+                return default
+        return cur
+
+    def line(label, val):
+        if val in (None, "", [], {}):
+            return ""
+        if isinstance(val, (list, tuple)):
+            val = ", ".join(map(str, val))
+        return f"- {label}: {val}\n"
+
+    pillars = ", ".join(
+        p.get("name", "") for p in G("identity.content_pillars", []) if p.get("name")
+    )
+    persona = (
+        f'{G("identity.persona.pov", "narrator")}, '
+        f'vocabulário {G("identity.persona.vocabulary_level", "popular")}, '
+        f'energia {G("identity.persona.energy", "medio")}'
+    )
+
+    block = "=== CHANNEL CONFIG (FONTE DE IDENTIDADE — OBEDEÇA) ===\n"
+    block += line("Canal", G("channel_name"))
+    block += line("Idioma de saída (OBRIGATÓRIO)", G("language", "pt-BR"))
+    block += line("Nicho", G("identity.niche"))
+    block += line("Pilares de conteúdo", pillars)
+    block += line("Público-alvo", G("identity.target_audience"))
+    block += line("Persona/POV", persona)
+    block += line("Bordões da persona", G("identity.persona.signature_moves"))
+    block += line("Tom", G("voice.tone"))
+    block += line("Estilo de narração", G("voice.narrator_style"))
+    block += line("Ritmo", G("voice.pacing"))
+    block += line("Estilo de gancho", G("retention.hook_style", "auto"))
+    hint = G("retention.rehook_interval_hint_sec", 35)
+    block += (
+        f"- Cadência de re-hook: CALCULE R = clamp(D/(n+1), 25, 60) a partir da "
+        f"duração-alvo D; n = max(1, round(D/45)). O valor {hint}s é apenas um HINT: "
+        f"use-o só se cair dentro de [25,60]; o R calculado sempre vence.\n"
+    )
+    block += line("Meta de retenção", G("retention.retention_target"))
+    block += line("Objetivo do CTA", G("cta_style.objective"))
+    block += line("Molde de CTA", G("cta_style.template"))
+    block += line("Mecanismos de título permitidos", G("packaging.title_style.mechanisms"))
+    block += line("Search angle", G("seo.search_angle"))
+    block += line("Intensidade emocional (alvo)",
+                  _band(G("audience_psychology.emotional_intensity", 0.6)))
+    block += line("Ousadia do gancho (teto)",
+                  _band(G("audience_psychology.hook_aggressiveness", 0.6)))
+    block += line("Emoções-alvo", G("audience_psychology.primary_emotions"))
+    fe = G("audience_psychology.forbidden_emotions")
+    if fe:
+        block += f"- EMOÇÕES PROIBIDAS (rejeição automática se evocadas): {', '.join(fe)}\n"
+    ft = G("guardrails.forbidden_topics")
+    if ft:
+        block += f"- PROIBIDO falar sobre: {', '.join(ft)}\n"
+    bc = G("guardrails.banned_cliches")
+    if bc:
+        block += f"- CLICHÊS PROIBIDOS (rejeição automática): {', '.join(bc)}\n"
+    block += line("Instruções extras", G("guardrails.extra_instructions"))
+    block += "=== FIM DO CHANNEL CONFIG ===\n"
+    return block
+
+
+_MARKERS_RE = re.compile(r"\[(RE-HOOK|PATTERN-INT|LOOP-OPEN:[^\]]+|LOOP-PAY:[^\]]+)\]")
+
+
+def build_tts_text(scenes: list) -> str:
+    """Strip inline direction markers, leaving only the speakable narration text."""
+    raw = " ".join(
+        s.get("narration", "")
+        for s in sorted(scenes, key=lambda s: s.get("index", 0))
+        if s.get("narration")
+    )
+    raw = _MARKERS_RE.sub("", raw)
+    raw = re.sub(r"\[PAUSA\]", " ... ", raw)
+    raw = re.sub(r"\[ENFASE\]\{([^}]*)\}", r"\1", raw)
+    raw = re.sub(r"\[[^\]]*\]", "", raw)
+    return re.sub(r"\s{2,}", " ", raw).strip()
+
+
+# ── System prompt (v2.1) ─────────────────────────────────────────────────────
 SYSTEM = (
-    "Você é um roteirista de ELITE de YouTube/TikTok/Instagram — referência em "
-    "RETENÇÃO de audiência, no nível dos canais que seguram o espectador até o fim. "
-    "Você pensa em retenção a cada frase: os 3 primeiros segundos decidem tudo, cada "
-    "frase existe pra fazer a próxima ser assistida, e o vídeo entrega no fim a "
-    "recompensa prometida no gancho. Conteúdo 100% original. "
-    "IDIOMA OBRIGATÓRIO: escreva TODA a narração, títulos, textos de tela e SEO em "
-    "{lang} — sem misturar idiomas. Soe nativo desse idioma. "
-    "Responda SEMPRE apenas com JSON válido, sem comentários."
+    "Você é o roteirista-chefe de um canal — referência mundial em RETENÇÃO. "
+    "Escreva na voz definida no CHANNEL CONFIG (persona, tom, ritmo, pilares). "
+    "Conteúdo 100% original. Idioma obrigatório: {lang}. Responda SOMENTE com JSON válido.\n\n"
+    "=== MOTOR DE GANCHO (COLD-OPEN) — OBRIGATÓRIO ===\n"
+    "A primeira cena (scenes[0]) é o gancho e decide o vídeo nos 3 primeiros segundos.\n"
+    "MECANISMO — use EXATAMENTE UM, ditado por hook_style do canal:\n"
+    "- curiosity_gap: nomeie o RESULTADO, esconda a CAUSA.\n"
+    "- bold_claim: afirmação contraintuitiva e específica.\n"
+    "- high_stakes: explicite o que está em jogo (valor, título, vida).\n"
+    "- negation: 'quase ninguém percebeu [detalhe concreto]'.\n"
+    "- numbered: promessa numerada ('3 coisas — a 3ª parece impossível').\n"
+    "- in_medias_res: abra no instante mais quente, sem contexto prévio.\n"
+    "Se hook_style='auto': film_recap→in_medias_res, sports→high_stakes, top_list→numbered, "
+    "explainer→curiosity_gap, true_crime→in_medias_res, reaction→bold_claim, "
+    "reddit→in_medias_res, motivational→bold_claim.\n"
+    "REGRAS DURAS DO GANCHO (vídeo LONG): 1ª frase falável = 8-14 palavras, ZERO aquecimento; "
+    ">=1 elemento CONCRETO dos fatos; abra loop que SÓ fecha no final; gancho visual (overlay) = "
+    "2-5 palavras MAIÚSCULAS, NUNCA repetindo o áudio; NÃO empilhe mecanismos; NÃO use saudações. "
+    "Respeite a OUSADIA DO GANCHO (teto) do CHANNEL CONFIG. Marque scenes[0].is_highlight=true.\n"
+    "=== FIM DO MOTOR DE GANCHO ===\n\n"
+    "=== ARQUITETURA DE RETENÇÃO (OBRIGATÓRIA) ===\n"
+    "Você projeta uma CURVA DE RETENÇÃO. Calcule a partir da duração-alvo D:\n"
+    "n_rehooks = max(1, round(D/45)); R = clamp(D/(n_rehooks+1), 25, 60); P ≈ R/2.\n"
+    "MAPA: (1) 0-3s GANCHO is_highlight=true; (2) 3-15s stakes + [LOOP-OPEN:1]; "
+    "(3) CORPO em ONDAS — a cada ~R s um [RE-HOOK], no ponto 50-65% o mais forte; "
+    "a cada ~P s um [PATTERN-INT]; cada onda traz >=1 fato NOVO; "
+    "(4) CLÍMAX (~15-20% finais) — pague o gancho com [LOOP-PAY:id], reserve o melhor fato; "
+    "(5) CTA-LOOP (~5-8% finais) — ligado à curiosidade do tema, NUNCA 'segue o canal' solto. "
+    "TODO [LOOP-OPEN:id] PRECISA de [LOOP-PAY:id] antes do CTA.\n"
+    "MARCADORES (em scenes[].narration, nunca falados): "
+    "[RE-HOOK] [PAUSA] [ENFASE]{texto} [LOOP-OPEN:id] [LOOP-PAY:id] [PATTERN-INT].\n"
+    "=== FIM DA ARQUITETURA DE RETENÇÃO ===\n\n"
+    "=== REGRA DE FONTE ÚNICA DA NARRAÇÃO ===\n"
+    "narration_text = concatenação de scenes[].narration COM marcadores (auditoria). "
+    "tts_text = mesma concatenação JÁ LIMPA: remove [RE-HOOK]/[PATTERN-INT]/[LOOP-OPEN/PAY]; "
+    "troca [PAUSA] por ' ... '; em [ENFASE]{x} mantém só x. NUNCA colchetes em tts_text.\n"
+    "=== FIM ===\n\n"
+    "CLICHÊS PROIBIDOS (rejeição automática): 'olá pessoal', 'você não vai acreditar', "
+    "'prepare-se', 'o que vem agora muda tudo', 'presta atenção', 'segura essa', "
+    "'hoje eu vou te mostrar', 'bem-vindos de volta', 'você já parou para pensar', "
+    "'espera você precisa ver'. Responda SOMENTE com JSON válido, sem comentários."
 )
 
 # Readable language name for the prompt (a channel may store en-US, es, etc.).
@@ -47,31 +274,8 @@ _LANG_NAMES = {
 def _lang_name(code: str) -> str:
     return _LANG_NAMES.get((code or "pt").lower().split("-")[0], code or "português do Brasil")
 
-# Injected into every narrated script (not quote_viral). This is the "cérebro" —
-# the retention discipline that separates a script people finish from filler.
-RETENTION_RULES = (
-    "\n=== REGRAS DE RETENÇÃO (OBRIGATÓRIAS) ===\n"
-    "1. GANCHO (1ª frase): ZERO aquecimento. Abra com a informação mais surpreendente/"
-    "específica OU uma lacuna de curiosidade concreta (um número, um nome, uma aposta "
-    "clara). O espectador tem que PRECISAR saber o que vem.\n"
-    "2. SEM ENROLAÇÃO: toda frase entrega informação, tensão ou avanço da história. "
-    "Nada de frase de encheção de linguiça.\n"
-    "3. ESPECÍFICO > genérico: use nomes, lugares e números CONCRETOS (somente os fatos "
-    "verificados — NUNCA invente). Detalhe concreto prende; vago faz pular o vídeo.\n"
-    "4. CICLOS ABERTOS: levante uma pergunta no começo e só responda mais pra frente; "
-    "encadeie com 'mas', 'então', 'até que' pra puxar a próxima cena.\n"
-    "5. RITMO: alterne frases curtas e médias, com viradas. Tom de quem conversa, não "
-    "de narração de enciclopédia.\n"
-    "6. RECOMPENSA + CTA: entregue o que o gancho prometeu e feche com um CTA ligado à "
-    "curiosidade do tema — nunca um 'segue o canal' solto.\n"
-    "7. PROIBIDO começar ou rechear com clichês vazios como: 'Espera, você precisa ver', "
-    "'Tudo começou de um jeito que ninguém esperava', 'isso é mais profundo do que "
-    "parece', 'as consequências foram imediatas', 'o que vem agora muda tudo', "
-    "'prepare-se', 'você não vai acreditar'.\n"
-    "8. TÍTULO: específico + lacuna de curiosidade (com número/aposta quando couber). "
-    "Nada de título genérico.\n"
-    "=== FIM DAS REGRAS ===\n"
-)
+# Kept for backward-compat imports from other modules; logic is now in SYSTEM (v2.1).
+RETENTION_RULES = ""
 
 # Per-content-type instructions injected into the LLM prompt.
 TEMPLATE_GUIDE = {
@@ -220,8 +424,15 @@ class ScriptwriterAgent(BaseAgent):
             sc.setdefault("ai_image", _prefer_ai)
         if content_type != "quote_viral":
             script["narration_text"] = " ".join(s["narration"] for s in scenes if s.get("narration")).strip()
+            # tts_text: clean version without inline markers — the only text the TTS speaks.
+            # If the LLM already generated it clean, validate; else derive it here.
+            tts = (script.get("tts_text") or "").strip()
+            if "[" in tts or not tts:
+                tts = build_tts_text(scenes)
+            script["tts_text"] = tts
         else:
             script["narration_text"] = ""
+            script["tts_text"] = ""
         script.setdefault("on_screen_text", script.get("on_screen_text", []))
         titles = script.get("title_options") or [title or theme]
         script["title_options"] = titles[:3]
@@ -262,7 +473,7 @@ class ScriptwriterAgent(BaseAgent):
                 f"\nAdapte ao estilo de referência (StyleDNA): "
                 f"pacing={style_dna.get('pacing', {}).get('style')}, "
                 f"mood={style_dna.get('audio', {}).get('music_mood')}, "
-                f"content_type={style_dna.get('content_type')}."
+                f"content_type={style_dna.get('content_type')}.\n"
             )
 
         facts = (research or {}).get("facts", "").strip()
@@ -283,52 +494,74 @@ class ScriptwriterAgent(BaseAgent):
                 "de forma geral e atemporal, deixando claro que o desfecho não é afirmado.\n"
             )
 
+        # Channel block — read from ctx if the orchestrator stored it; else minimal.
+        channel_cfg = self.ctx_get("channel_config") or {}
+        if language:
+            channel_cfg.setdefault("language", language)
+        channel_block = render_channel_block(channel_cfg)
+
         if video_format == "short":
             length_block = (
                 "FORMATO: SHORT VERTICAL 9:16. Seja MUITO conciso: 4 a 6 cenas, 25 a 45 "
-                "SEGUNDOS no total. Gancho imediato no 1º segundo, ritmo rápido, frases "
-                "curtas e punchy. Corte tudo que não prende. (Ignore a duração-alvo longa acima.)"
+                "SEGUNDOS no total. Gancho (≤8 palavras) imediato no 1º segundo, ritmo "
+                "rápido, frases curtas e punchy. Corte tudo que não prende."
             )
         else:
             length_block = (
                 "IMPORTANTE (duração): gere o roteiro COMPLETO atingindo a contagem de "
                 "palavras/cenas alvo do tipo acima — vídeos curtos demais são rejeitados. Não resuma."
             )
-        retention_block = RETENTION_RULES if content_type != "quote_viral" else ""
-        # The two coaches' accumulated knowledge (engagement + per-type/format tips).
         try:
             from backend.agents.coach import playbook_prompt_block
             coach_block = playbook_prompt_block(content_type, video_format)
         except Exception:
             coach_block = ""
-        prompt = f"""Tema: "{theme}"
-Modo: {mode}
 
-{guide}{style_hint}{retention_block}{coach_block}{facts_block}
+        is_narrated = content_type != "quote_viral"
+        schema_extra = (
+            '  "has_narration": true,\n'
+            '  "narration_text": "concatenação COM marcadores (auditoria)",\n'
+            '  "tts_text": "concatenação LIMPA sem colchetes — texto que o TTS fala",\n'
+            '  "retention_map": {\n'
+            '    "duration_target_s": 240, "n_rehooks": 5, "rehook_interval_s": 40,\n'
+            '    "rehook_scene_indices": [2,5,8,11,14], "valley_rehook_scene_index": 8,\n'
+            '    "loops": [{"id":1,"open_scene":0,"pay_scene":14,"promise":"..."}],\n'
+            '    "payoff_fact": "qual fato concreto paga o gancho no clímax"\n'
+            "  },\n"
+        ) if is_narrated else '  "has_narration": false,\n'
+
+        prompt = f"""{channel_block}
+
+=== TEMA DESTE VÍDEO ===
+Tema: "{theme}"
+Modo: {mode}
+content_type: {content_type}
+video_format: {video_format}
+
+{guide}{style_hint}{coach_block}{facts_block}
 {length_block}
 
 Responda com JSON neste formato EXATO:
 {{
   "title_options": ["...", "...", "..."],
   "tone": "...",
+  "content_type": "{content_type}",
   "estimated_duration": <segundos>,
-  "scenes": [
-    {{"narration": "...", "visual_prompt": "...", "visual_query": "...", "is_highlight": false}}
+{schema_extra}  "scenes": [
+    {{"index": 0, "narration": "...com marcadores inline...", "visual_prompt": "EN cinematic prompt", "visual_query": "2-5 EN stock keywords", "is_highlight": true}}
   ],
   "on_screen_text": ["..."],
   "seo_keywords": ["...", "..."]
 }}
-REGRA DOS VISUAIS (importante — o sistema usa VÍDEO real de stock):
-- Em TODA cena preencha "visual_query": 2-5 palavras-chave CONCRETAS em inglês de
-  algo REAL e filmável (lugares, objetos, ações, natureza), ex.: "soccer stadium
-  night crowd", "rain city street neon", "old book candle close up". Evite nomes
-  próprios/marcas e conceitos abstratos (eles não retornam stock footage).
-- Preencha também "visual_prompt" (descrição cinematográfica em inglês) — é o
-  fallback de imagem IA quando não houver clipe de vídeo para a cena.
-- quote_viral deixa "narration" vazio e usa "on_screen_text"."""
+REGRA DOS VISUAIS:
+- "visual_query": 2-5 palavras-chave CONCRETAS em inglês de algo REAL e filmável.
+  Evite nomes próprios/marcas (não retornam stock footage).
+- "visual_prompt": descrição cinematográfica em inglês — fallback de imagem IA.
+- quote_viral: "narration" vazio, conteúdo em "on_screen_text".
+GERE narration_text (COM marcadores) E tts_text (LIMPO, sem nenhum colchete)."""
         from backend.agents.style_guide import with_style
         system = with_style(SYSTEM.format(lang=_lang_name(language)))
-        return await llm.complete_json(prompt, system=system, max_tokens=4000)
+        return await llm.complete_json(prompt, system=system, max_tokens=4500)
 
     @classmethod
     def _detect_content_type(cls, theme: str) -> str:

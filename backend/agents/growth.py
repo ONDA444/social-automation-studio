@@ -30,12 +30,14 @@ _NO_NARRATION = {"quote_viral"}
 
 
 def _recompute_narration(script: dict) -> None:
-    """Keep narration_text in sync after a scene-narration rewrite."""
+    """Keep narration_text and tts_text in sync after a scene-narration rewrite."""
     if script.get("content_type") in _NO_NARRATION:
         return
     script["narration_text"] = " ".join(
         s.get("narration", "") for s in script.get("scenes", []) if s.get("narration")
     ).strip()
+    from backend.agents.scriptwriter import build_tts_text
+    script["tts_text"] = build_tts_text(script.get("scenes", []))
 
 
 class HookOptimizerAgent(BaseAgent):
@@ -69,26 +71,30 @@ class HookOptimizerAgent(BaseAgent):
 
     async def _via_llm(self, script, original, facts) -> dict:
         fact_note = f"\nFATOS REAIS (não contradiga, não invente):\n{facts[:800]}" if facts else ""
-        prompt = f"""Você é um editor viral (estilo MrBeast/criadores de topo). Reescreva o
-GANCHO de abertura deste vídeo do tipo "{script.get('content_type')}", título
-"{script.get('title')}".
+        video_format = script.get("format", "long")
+        word_limit = "até 8 palavras" if video_format == "short" else "8-14 palavras"
+        prompt = f"""Você é um editor viral especialista em gancho de abertura.
+Refine o GANCHO da 1ª cena do vídeo abaixo — SOMENTE se melhorar; preserve o mecanismo original.
 
+Tipo: "{script.get('content_type')}"  Título: "{script.get('title')}"
 Gancho atual: "{original}"
 
-Regras do gancho (primeiros 3 segundos decidem tudo):
-- 1 a 2 frases, faladas em até ~10s, em português coloquial e ENÉRGICO.
-- Use quebra de padrão, lacuna de curiosidade ou afirmação ousada/contraintuitiva.
-- Crie tensão/promessa que só se resolve assistindo. NUNCA seja genérico ("hoje vamos falar...").
-- Verdadeiro: não invente fatos.{fact_note}
+REGRAS (não viole — são duras):
+- 1ª frase falável: {word_limit}, ZERO aquecimento, ZERO saudação.
+- >=1 elemento CONCRETO (número/nome/data/valor). NUNCA invente fatos.
+- Use UM mecanismo (curiosity_gap|bold_claim|high_stakes|negation|numbered|in_medias_res).
+- O overlay NUNCA repete a fala; é 2-5 PALAVRAS MAIÚSCULAS com dado/curiosidade.
+- PROIBIDO: 'olá pessoal', 'você não vai acreditar', 'prepare-se', 'segura essa',
+  'presta atenção', 'hoje eu vou te mostrar', 'você já parou para pensar'.{fact_note}
 
-Responda SÓ JSON: {{"hook": "<nova narração da 1a cena>", "overlay": "<texto curto p/ tela, 2-5 palavras MAIÚSCULAS>"}}"""
+Responda SÓ JSON: {{"hook": "<narração nova da 1ª cena>", "overlay": "<2-5 PALAVRAS MAIÚSCULAS>"}}"""
         return await llm.complete_json(prompt, system=with_style("Responda só com JSON válido."), max_tokens=400)
 
     @staticmethod
     def _offline(script: dict, original: str) -> tuple[str, str]:
         title = script.get("title", "isso")
-        hook = f"Espera — você precisa ver o que rolou em {title} antes de qualquer coisa."
-        return hook, "VOCÊ VIU ISSO?"
+        hook = f"{title} — tem um detalhe que quase ninguém percebeu nisso."
+        return hook, title.split()[0].upper()[:20] if title.split() else "REVELADO"
 
 
 class RetentionEngineerAgent(BaseAgent):
@@ -160,29 +166,77 @@ class PackagingStrategistAgent(BaseAgent):
         return pkg
 
     async def _via_llm(self, script, platforms, facts) -> dict:
-        fact_note = f"\nFATOS REAIS (base p/ títulos verdadeiros):\n{facts[:600]}" if facts else ""
-        prompt = f"""Você é estrategista de crescimento (YouTube/TikTok/Instagram). Crie o
-PACOTE de alto CTR para "{script.get('title')}" ({script.get('content_type')}),
-plataformas: {platforms}.{fact_note}
+        fact_note = f"\nFATOS REAIS (base p/ títulos verdadeiros — não contradiga):\n{facts[:600]}" if facts else ""
+        hook_spoken = ""
+        scenes = script.get("scenes", [])
+        if scenes:
+            hook_spoken = scenes[0].get("narration", "")[:200]
+        prompt = f"""Você é o PACKAGING STRATEGIST — fonte única de verdade do título e thumbnail.
+Crie o pacote de alto CTR para "{script.get('title')}" ({script.get('content_type')}),
+plataformas: {platforms}.
+Gancho falado (scenes[0]): "{hook_spoken}"{fact_note}
+
+7 FÓRMULAS (use fórmulas DIFERENTES nos 3 títulos):
+F1 curiosity_gap : nomeia resultado, esconde causa. ("O detalhe que mudou tudo em X")
+F2 number+stakes : número concreto + o que está em jogo. ("3 erros que custaram X")
+F3 contrarian    : quebra senso comum com afirmação específica. ("X não é o que te contaram")
+F4 detail_hook   : detalhe inquietante e concreto vira título.
+F5 question_open : pergunta que SÓ o vídeo responde (sem ser vaga).
+F6 negation      : "quase ninguém percebeu [detalhe]" / "ninguém te contou [fato]".
+F7 listicle_rank : ranking/numerado com gap na ponta.
+
+REGRAS: <=60 chars cada; sem clickbait falso (a promessa PRECISA ser verdadeira);
+sem caps-lock integral; sem mais de 1 emoji; recommended_index = o de maior CTR esperado
+no FEED deste público (não o mais completo).
 
 JSON EXATO:
 {{
-  "youtube_titles": ["<=60 chars, curiosidade/emoção, sem clickbait falso", "...", "..."],
+  "youtube_titles": [
+    {{"text": "título 1", "formula": "F1", "char_count": 0}},
+    {{"text": "título 2", "formula": "F3", "char_count": 0}},
+    {{"text": "título 3", "formula": "F5", "char_count": 0}}
+  ],
+  "recommended_index": 0,
+  "why_recommended": "1-2 frases: público + mecanismo + por que ganha CTR no feed",
   "tiktok_title": "<curto, gancho + 2-3 hashtags de nicho>",
-  "thumbnail": {{"text": "2-4 PALAVRAS gigantes", "emotion": "<choque/curiosidade/raiva/euforia>", "visual": "<elemento visual principal em inglês p/ imagem>"}}
+  "thumbnail": {{
+    "text": "2-4 PALAVRAS MAIÚSCULAS",
+    "emotion": "curiosidade|choque|medo|euforia|indignacao",
+    "visual": "EN: cena/objeto herói da capa, sem texto/logo",
+    "composition": "posição do sujeito + lado do texto + contraste"
+  }},
+  "coherence_check": "1 frase: título+thumb+gancho prometem a MESMA recompensa, paga em X"
 }}"""
-        return await llm.complete_json(prompt, system=with_style("Responda só com JSON válido."), max_tokens=600)
+        result = await llm.complete_json(prompt, system=with_style("Responda só com JSON válido."), max_tokens=800)
+        # Flatten youtube_titles to strings for backward compat
+        raw_titles = result.get("youtube_titles", [])
+        flat = []
+        for t in raw_titles:
+            if isinstance(t, dict):
+                flat.append(t.get("text", ""))
+            elif isinstance(t, str):
+                flat.append(t)
+        if flat:
+            result["youtube_titles"] = [t for t in flat if t]
+        return result
 
     @staticmethod
     def _offline(script: dict) -> dict:
         title = script.get("title", "Vídeo")
+        words = title.split()
+        thumb_text = " ".join(words[:3]).upper() if words else "REVELADO"
         return {
-            "youtube_titles": [f"{title}: o que ninguém te contou"[:60],
-                               f"A verdade sobre {title}"[:60],
-                               f"{title} mudou tudo 😱"[:60]],
+            "youtube_titles": [
+                f"{title}: o que ninguém te contou"[:60],
+                f"A verdade sobre {title}"[:60],
+                f"Quase ninguém percebeu isso em {title}"[:60],
+            ],
+            "recommended_index": 0,
+            "why_recommended": "curiosity_gap com fato não revelado funciona bem no feed.",
             "tiktok_title": f"{title} 👀 #fyp #viral",
-            "thumbnail": {"text": title.split()[0:3] and " ".join(title.split()[:3]).upper() or "VEJA ISSO",
-                          "emotion": "curiosidade", "visual": "dramatic close up face"},
+            "thumbnail": {"text": thumb_text, "emotion": "curiosidade",
+                          "visual": "dramatic close up scene", "composition": "subject left, text right"},
+            "coherence_check": "título e gancho prometem o fato principal do vídeo.",
         }
 
 

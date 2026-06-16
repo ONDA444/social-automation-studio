@@ -60,7 +60,13 @@ class NarratorAgent(BaseAgent):
         audio_path = out_dir / "narration.mp3"
         ts_path = out_dir / "narration_timestamps.json"
 
-        narration_text = (script.get("narration_text") or "").strip()
+        # Prefer tts_text (already stripped of direction markers) over narration_text.
+        # If tts_text is absent or still contains brackets, fall back to narration_text.
+        tts_candidate = (script.get("tts_text") or "").strip()
+        if tts_candidate and "[" not in tts_candidate:
+            narration_text = tts_candidate
+        else:
+            narration_text = (script.get("narration_text") or "").strip()
 
         # No voice-over when: quote_viral, empty text, OR a remix whose reference
         # had no narration (narrate=False) — the remix follows that music-driven
