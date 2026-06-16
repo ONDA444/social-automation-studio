@@ -218,6 +218,7 @@ def _job_consume_themes() -> None:
     from sqlalchemy import func, select
 
     from backend.agents.content_calendar import ContentCalendarAgent
+    from backend.config import settings
     from backend.models import JobStatus, PlatformAccount, ScheduleConfig, ThemeQueue, VideoJob
     from backend.pipeline.dispatch import dispatch_job
 

@@ -37,6 +37,9 @@ GEMINI_MODEL = "gemini-2.5-flash"
 # Tried in order for grounded research: the free tier rate-limits (429) per model,
 # so falling through to sibling models keeps grounding working under load.
 GEMINI_GROUNDED_MODELS = ["gemini-2.5-flash", "gemini-flash-latest", "gemini-2.0-flash", "gemini-2.5-flash-lite"]
+# Fallback order for completion (no grounding): try cheaper/faster models when the
+# primary is rate-limited (429) so a burst of LLM calls doesn't all fail together.
+GEMINI_COMPLETION_MODELS = ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash"]
 GEMINI_URL = (
     "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 )
@@ -101,19 +104,24 @@ async def _try_gemini(system: str | None, prompt: str, json_mode: bool, max_toke
     if json_mode:
         gen_cfg["responseMimeType"] = "application/json"
     payload = {"contents": [{"parts": [{"text": full}]}], "generationConfig": gen_cfg}
-    try:
-        async with httpx.AsyncClient(timeout=60) as client:
-            r = await client.post(
-                GEMINI_URL.format(model=GEMINI_MODEL),
-                params={"key": settings.gemini_api_key},
-                json=payload,
-            )
-            r.raise_for_status()
-            data = r.json()
-            return data["candidates"][0]["content"]["parts"][0]["text"]
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("Gemini failed: %s", exc)
-        return None
+    for model in GEMINI_COMPLETION_MODELS:
+        try:
+            async with httpx.AsyncClient(timeout=60) as client:
+                r = await client.post(
+                    GEMINI_URL.format(model=model),
+                    params={"key": settings.gemini_api_key},
+                    json=payload,
+                )
+                if r.status_code == 429:
+                    logger.info("Gemini %s 429 — tentando próximo modelo.", model)
+                    continue
+                r.raise_for_status()
+                data = r.json()
+                return data["candidates"][0]["content"]["parts"][0]["text"]
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Gemini %s failed: %s", model, exc)
+            continue
+    return None
 
 
 async def _try_ollama(system: str | None, prompt: str, json_mode: bool, max_tokens: int) -> str | None:
