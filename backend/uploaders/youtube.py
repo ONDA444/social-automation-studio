@@ -166,5 +166,10 @@ def upload_video(
                 "url": f"https://youtu.be/{video_id}", "status": "published"}
     except Exception as exc:  # noqa: BLE001
         msg = str(exc)
-        status = "quota_exceeded" if "quota" in msg.lower() else "error"
+        if "quota" in msg.lower():
+            status = "quota_exceeded"
+        elif any(k in msg.lower() for k in ("refresherror", "invalid_grant", "token has been expired", "token_revoked")):
+            status = "auth_error"
+        else:
+            status = "error"
         return {"ok": False, "platform": "youtube", "error": msg, "status": status}

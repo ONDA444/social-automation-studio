@@ -89,10 +89,16 @@ async def run_publish(job_id: int) -> dict:
         # model the slot has already arrived (scheduled_at <= now), so a past value
         # would make the API error or ignore the schedule — publish immediately
         # instead. Only defer when the slot is genuinely still ahead.
-        from datetime import datetime as _dt
+        from datetime import datetime as _dt, timezone as _tz
         publish_at = None
-        if job.scheduled_at and job.scheduled_at > _dt.utcnow():
-            publish_at = job.scheduled_at.isoformat() + "Z"
+        sa = job.scheduled_at
+        if sa:
+            # Normalize to naive UTC — SQLite stores naive, but an in-memory
+            # object set from a Pydantic payload may carry tzinfo.
+            if sa.tzinfo is not None:
+                sa = sa.astimezone(_tz.utc).replace(tzinfo=None)
+            if sa > _dt.utcnow():
+                publish_at = sa.isoformat() + "Z"
         # Privacy chosen for the job (default 'private' = nothing goes public
         # until the user explicitly opts in). STUDIO_TEST_MODE forces private.
         privacy = _resolve_privacy(job)
