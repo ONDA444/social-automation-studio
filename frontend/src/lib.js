@@ -16,6 +16,20 @@ export const PLATFORM_META = {
   instagram: { label: 'Instagram', color: 'var(--accent-ig)', icon: '◎' },
 }
 
+// Idiomas suportados por canal. O valor (BCP-47) é gravado em content_language
+// e o backend gera roteiro, título, descrição e voz nesse idioma.
+export const LANGUAGES = [
+  { code: 'pt-BR', label: '🇧🇷 Português' },
+  { code: 'en-US', label: '🇺🇸 English' },
+  { code: 'es-ES', label: '🇪🇸 Español' },
+  { code: 'fr-FR', label: '🇫🇷 Français' },
+  { code: 'de-DE', label: '🇩🇪 Deutsch' },
+  { code: 'it-IT', label: '🇮🇹 Italiano' },
+  { code: 'ja-JP', label: '🇯🇵 日本語' },
+  { code: 'hi-IN', label: '🇮🇳 हिन्दी' },
+  { code: 'ar-SA', label: '🇸🇦 العربية' },
+]
+
 export function statusMeta(s) {
   return STATUS_META[s] || { label: s, color: 'var(--text-muted)' }
 }

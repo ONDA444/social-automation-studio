@@ -1,10 +1,12 @@
 import { useState } from 'react'
 import { api } from '../api'
-import { PLATFORM_META } from '../lib'
+import { PLATFORM_META, LANGUAGES } from '../lib'
 import VoiceRecorder from './VoiceRecorder.jsx'
 
 export default function PlatformCard({ account, onChange, onChanged, onDone }) {
   const [recording, setRecording] = useState(false)
+  const [lang, setLang] = useState(account.content_language || 'pt-BR')
+  const [savingLang, setSavingLang] = useState(false)
   const m = PLATFORM_META[account.platform] || { label: account.platform, color: 'var(--accent)', icon: '●' }
   const quotaPct = account.quota_limit ? Math.round((account.quota_used_today / account.quota_limit) * 100) : 0
   const refresh = onChange || onChanged || onDone
@@ -33,6 +35,19 @@ export default function PlatformCard({ account, onChange, onChanged, onDone }) {
   const remove = async () => {
     if (confirm('Remover esta conta?')) { await api.del(`/accounts/${account.id}`); refresh?.() }
   }
+  const changeLang = async (code) => {
+    setLang(code)
+    setSavingLang(true)
+    try {
+      await api.patch(`/accounts/${account.id}`, { content_language: code })
+      refresh?.()
+    } catch (e) {
+      alert('Falha ao salvar idioma: ' + e.message)
+      setLang(account.content_language || 'pt-BR')  // revert on error
+    } finally {
+      setSavingLang(false)
+    }
+  }
 
   const statusColor = { active: 'var(--success)', paused: 'var(--text-muted)', quota_exceeded: 'var(--warning)', auth_error: 'var(--error)' }[account.status] || 'var(--text-muted)'
 
@@ -60,6 +75,25 @@ export default function PlatformCard({ account, onChange, onChanged, onDone }) {
         <div className="h-1.5 rounded-full bg-elevated overflow-hidden">
           <div className="h-full" style={{ width: `${quotaPct}%`, background: quotaPct > 90 ? 'var(--error)' : m.color }} />
         </div>
+      </div>
+
+      {/* Idioma do canal — roteiro, título, descrição e voz saem neste idioma */}
+      <div className="mb-2">
+        <label className="flex items-center justify-between text-[11px] text-text-muted mb-1">
+          <span>🌐 Idioma do canal</span>
+          {savingLang && <span className="opacity-70">salvando…</span>}
+        </label>
+        <select
+          className="input w-full text-sm"
+          value={lang}
+          disabled={savingLang}
+          onChange={(e) => changeLang(e.target.value)}
+          title="O conteúdo deste canal é gerado neste idioma"
+        >
+          {LANGUAGES.map((l) => (
+            <option key={l.code} value={l.code}>{l.label}</option>
+          ))}
+        </select>
       </div>
 
       {/* CTA dedicado de voz — alvo grande e rotulado */}

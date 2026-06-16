@@ -59,6 +59,24 @@ async def run_publish(job_id: int) -> dict:
         if job.status not in (JobStatus.APPROVED, JobStatus.PUBLISHING):
             return {"error": f"job não aprovado (status={job.status})"}
 
+        # Idempotency guard — NEVER upload the same job to YouTube twice.
+        # In schedule mode the orchestrator dispatches the publish itself; if a
+        # restart, retry, or a stray publish_due tick re-enters here, an already
+        # uploaded video (publish_status.youtube.ok + video_id) must NOT be
+        # re-sent — that is exactly what produced the duplicate videos on the
+        # channel. Mark it PUBLISHED and bail.
+        prior = job.publish_status or {}
+        if isinstance(prior, dict):
+            yt_prior = prior.get("youtube") or {}
+            if yt_prior.get("ok") and yt_prior.get("video_id"):
+                if job.status != JobStatus.PUBLISHED:
+                    job.status = JobStatus.PUBLISHED
+                    db.commit()
+                logger.info("Publicação ignorada (idempotente): job %s já tem vídeo %s.",
+                            job_id, yt_prior.get("video_id"))
+                return {"status": JobStatus.PUBLISHED.value, "results": prior,
+                        "note": "já publicado — upload duplicado evitado"}
+
         svc = AccountProfileService(db)
         seo = job.seo_metadata or {}
         platforms = job.target_platforms or ["youtube"]
