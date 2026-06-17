@@ -126,23 +126,27 @@ class NarratorAgent(BaseAgent):
         edge-tts voice — otherwise the pt clone would speak English with a pt accent.
         """
         lang = (getattr(self, "_language", None) or settings.default_language or "pt-BR").lower()
-        # An account that recorded its own voice stores an LMNT id ("v_...") in
-        # preferred_voice — use that clone (any language). Otherwise the global MATEUS
-        # clone, but only for pt (it's a pt voice). Non-pt without a clone -> edge-tts.
         explicit_clone = bool(voice) and voice.startswith("v_")
-        lmnt_voice_id = voice if explicit_clone else settings.lmnt_voice
-        use_lmnt = (settings.lmnt_api_key and lmnt_voice_id
-                    and (settings.tts_provider or "auto").lower() in ("auto", "lmnt")
-                    and (explicit_clone or lang.startswith("pt")))
-        if use_lmnt:
+
+        # FREE per-channel preset voice (an edge-tts voice NAME, e.g. pt-BR-FabioNeural)
+        # is authoritative — synthesize it DIRECTLY. No LMNT round-trip (LMNT is paid /
+        # often out of credits), and each channel can sound distinct for $0.
+        if voice and not explicit_clone:
+            return await self._synthesize_edge(text, voice, rate, audio_path)
+
+        # Cloned "v_..." voice -> LMNT (paid). If LMNT is unavailable / out of credits,
+        # fall back to a language-matched FREE edge voice so a video still gets a voice
+        # (degrade gracefully instead of failing the job).
+        if (explicit_clone and settings.lmnt_api_key
+                and (settings.tts_provider or "auto").lower() in ("auto", "lmnt")):
             try:
-                self.emit("progress", f"Sintetizando voz LMNT ({lmnt_voice_id})", progress=45)
-                return await self._synthesize_lmnt(text, rate, audio_path, lang, lmnt_voice_id)
+                self.emit("progress", f"Sintetizando voz clonada LMNT ({voice})", progress=45)
+                return await self._synthesize_lmnt(text, rate, audio_path, lang, voice)
             except Exception as exc:  # noqa: BLE001
-                self.emit("progress", f"LMNT falhou ({exc}); usando edge-tts", progress=45)
-        # edge fallback needs a real voice name (not an LMNT id).
-        edge_voice = voice if (voice and not voice.startswith("v_")) else self._default_voice_for(lang)
-        return await self._synthesize_edge(text, edge_voice, rate, audio_path)
+                self.emit("progress", f"LMNT indisponível ({exc}); voz padrão grátis", progress=45)
+
+        # No voice set / clone unavailable -> language-matched free edge voice.
+        return await self._synthesize_edge(text, self._default_voice_for(lang), rate, audio_path)
 
     async def _synthesize_lmnt(self, text: str, rate: str, audio_path: Path,
                                language: str = "pt-BR", voice_id: str | None = None):

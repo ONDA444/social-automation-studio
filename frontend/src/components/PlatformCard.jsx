@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { api } from '../api'
-import { PLATFORM_META, LANGUAGES } from '../lib'
+import { PLATFORM_META, LANGUAGES, voicesForLang } from '../lib'
 import VoiceRecorder from './VoiceRecorder.jsx'
 
 export default function PlatformCard({ account, onChange, onChanged, onDone }) {
@@ -8,6 +8,9 @@ export default function PlatformCard({ account, onChange, onChanged, onDone }) {
   const [expanded, setExpanded] = useState(false)
   const [lang, setLang] = useState(account.content_language || 'pt-BR')
   const [savingLang, setSavingLang] = useState(false)
+  const isClone = account.preferred_voice?.startsWith('v_')
+  const [voice, setVoice] = useState(isClone ? '' : (account.preferred_voice || ''))
+  const [savingVoice, setSavingVoice] = useState(false)
   const m = PLATFORM_META[account.platform] || { label: account.platform, color: 'var(--accent)', icon: '●' }
   const quotaPct = account.quota_limit ? Math.round((account.quota_used_today / account.quota_limit) * 100) : 0
   const refresh = onChange || onChanged || onDone
@@ -35,6 +38,12 @@ export default function PlatformCard({ account, onChange, onChanged, onDone }) {
     try { await api.patch(`/accounts/${account.id}`, { content_language: code }); refresh?.() }
     catch (e) { alert('Falha ao salvar idioma: ' + e.message); setLang(account.content_language || 'pt-BR') }
     finally { setSavingLang(false) }
+  }
+  const changeVoice = async (vid) => {
+    setVoice(vid); setSavingVoice(true)
+    try { await api.patch(`/accounts/${account.id}`, { preferred_voice: vid }); refresh?.() }
+    catch (e) { alert('Falha ao salvar voz: ' + e.message); setVoice(isClone ? '' : (account.preferred_voice || '')) }
+    finally { setSavingVoice(false) }
   }
 
   const statusColor = { active: 'var(--success)', paused: 'var(--text-muted)', quota_exceeded: 'var(--warning)', auth_error: 'var(--error)' }[account.status] || 'var(--text-muted)'
@@ -127,14 +136,32 @@ export default function PlatformCard({ account, onChange, onChanged, onDone }) {
             </select>
           </div>
 
-          {/* Voz */}
+          {/* Voz (grátis, edge-tts) */}
+          <div>
+            <label className="flex items-center justify-between text-[11px] text-text-muted mb-1">
+              <span>🔊 Voz do canal</span>
+              {savingVoice && <span className="opacity-60">salvando…</span>}
+            </label>
+            <select
+              className="input w-full text-xs"
+              value={isClone ? '' : voice}
+              disabled={savingVoice}
+              onChange={(e) => changeVoice(e.target.value)}
+            >
+              {isClone && <option value="">● voz clonada (LMNT)</option>}
+              {voicesForLang(lang).map((v) => <option key={v.id} value={v.id}>{v.label}</option>)}
+            </select>
+            <p className="text-[10px] text-text-muted mt-1">Vozes prontas grátis — escolha uma diferente por canal.</p>
+          </div>
+
+          {/* Clonar a própria voz (LMNT) */}
           <button
-            className={`${account.preferred_voice?.startsWith('v_') ? 'btn-ghost' : 'btn-primary'} w-full text-xs`}
+            className={`${isClone ? 'btn-ghost' : 'btn-ghost'} w-full text-xs`}
             onClick={() => setRecording(true)}
           >
             <span>🎤</span>
-            <span className="flex-1 text-left">{account.preferred_voice?.startsWith('v_') ? 'Regravar voz' : 'Gravar voz'}</span>
-            {account.preferred_voice?.startsWith('v_') && (
+            <span className="flex-1 text-left">{isClone ? 'Regravar voz clonada' : 'Clonar minha voz (LMNT)'}</span>
+            {isClone && (
               <span className="badge text-[10px]" style={{ background: 'rgba(0,245,160,0.15)', color: 'var(--success)' }}>● clonada</span>
             )}
           </button>
