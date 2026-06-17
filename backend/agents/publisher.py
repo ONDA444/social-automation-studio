@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import datetime
 
 from backend.database import SessionLocal
 from backend.events import publish_event
@@ -136,9 +137,20 @@ async def run_publish(job_id: int) -> dict:
                 creds = svc.get_credentials(acct.id)
 
                 if platform == "youtube":
+                    # Durable "upload in progress" marker committed BEFORE the upload.
+                    # If the process restarts mid-upload (redeploy / OOM), the video may
+                    # already be on the channel even though we never recorded its id —
+                    # orphan recovery reads this and HOLDS the job instead of blindly
+                    # republishing it, which is exactly how the duplicate videos happened.
+                    job.publish_status = {**results, "youtube": {
+                        "status": "uploading",
+                        "started_at": datetime.utcnow().isoformat() + "Z",
+                        "account_id": acct.id,
+                    }}
+                    db.commit()
                     results["youtube"] = await self_publish_youtube(job, seo, creds, publish_at, shorts, privacy)
                 elif platform == "tiktok":
-                    results["tiktok"] = await self_publish_tiktok(seo, creds, shorts)
+                    results["tiktok"] = await self_publish_tiktok(seo, creds, shorts, privacy)
                 elif platform == "instagram":
                     results["instagram"] = await self_publish_instagram(seo, creds, shorts)
                 else:
@@ -205,12 +217,12 @@ async def self_publish_youtube(job, seo, creds, publish_at, shorts, privacy="pri
     return {**main, "shorts": short_results}
 
 
-async def self_publish_tiktok(seo, creds, shorts) -> dict:
+async def self_publish_tiktok(seo, creds, shorts, privacy="private") -> dict:
     caption = seo.get("tiktok", {}).get("caption", "")
     target = _pick_short(shorts, prefer=4) or _pick_short(shorts, prefer=2)
     if not target:
         return {"ok": False, "platform": "tiktok", "status": "no_short", "error": "Sem Short para TikTok."}
-    return await _with_retry(tk.upload_video, target, caption, creds, label="tiktok")
+    return await _with_retry(tk.upload_video, target, caption, creds, privacy=privacy, label="tiktok")
 
 
 async def self_publish_instagram(seo, creds, shorts) -> dict:

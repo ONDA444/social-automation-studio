@@ -234,6 +234,12 @@ async def run_pipeline(job_id: int) -> dict:
                 if (settings.publish_mode or "schedule").lower() == "schedule":
                     try:
                         from backend.pipeline.dispatch import dispatch_publish
+                        # Claim the job (PUBLISHING) BEFORE dispatching so _job_publish_due
+                        # cannot also grab this still-APPROVED job and publish it a 2nd
+                        # time. The publisher accepts PUBLISHING; orphan recovery handles
+                        # it safely on restart.
+                        job.status = JobStatus.PUBLISHING
+                        db.commit()
                         dispatch_publish(job_id)
                     except Exception as exc:  # noqa: BLE001
                         logger.warning("auto dispatch_publish (schedule) falhou: %s", exc)

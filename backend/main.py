@@ -111,8 +111,12 @@ def _recover_orphan_jobs() -> None:
     In-process pipeline (no Redis): any job left in PUBLISHING/PROCESSING when
     the server starts is an ORPHAN — its task died on the restart.
 
-    - PUBLISHING (or approval_status == 'approved') -> APPROVED (ready to republish).
-    - PROCESSING interrupted -> ERROR with an actionable message (use Retry).
+    - PROCESSING interrupted -> ERROR (render half-done; use Retry).
+    - PUBLISHING: decided by publish_status.youtube to AVOID DUPLICATE uploads:
+        * already has ok+video_id   -> PUBLISHED (it's on the channel; never resend).
+        * was mid-upload ("uploading") -> ERROR + "verifique o canal" (the video MAY
+          already be up; do NOT auto-republish — that's how duplicates happened).
+        * upload never started      -> APPROVED (safe to publish on the next tick).
 
     Wrapped in try/except so a recovery failure never blocks boot.
     """
@@ -129,13 +133,24 @@ def _recover_orphan_jobs() -> None:
             )
             recovered = 0
             for job in orphans:
-                if job.status == JobStatus.PUBLISHING or job.approval_status == "approved":
-                    job.status = JobStatus.APPROVED
-                else:
+                if job.status == JobStatus.PROCESSING:
                     job.status = JobStatus.ERROR
                     job.error_message = (
                         "Interrompido por reinicialização do servidor — use Retry"
                     )
+                else:  # PUBLISHING orphan — never blindly republish (duplicate risk)
+                    ps = job.publish_status if isinstance(job.publish_status, dict) else {}
+                    yt = ps.get("youtube") or {}
+                    if yt.get("ok") and yt.get("video_id"):
+                        job.status = JobStatus.PUBLISHED  # already live — never resend
+                    elif yt.get("status") == "uploading":
+                        job.status = JobStatus.ERROR
+                        job.error_message = (
+                            "Publicação interrompida por reinício — o vídeo PODE já estar no "
+                            "canal. Verifique o YouTube antes de usar Retry (evita duplicar)."
+                        )
+                    else:
+                        job.status = JobStatus.APPROVED  # upload never started — safe
                 recovered += 1
             if recovered:
                 db.commit()
@@ -322,6 +337,61 @@ async def websocket_endpoint(ws: WebSocket):
         events.manager.disconnect(ws)
     except Exception:
         events.manager.disconnect(ws)
+
+
+@app.get("/terms")
+async def terms_of_service():
+    from fastapi.responses import HTMLResponse
+    return HTMLResponse("""<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">
+<title>Terms of Service – SAS Automation</title>
+<style>body{font-family:sans-serif;max-width:800px;margin:60px auto;padding:0 20px;line-height:1.6}h1{font-size:1.8rem}</style>
+</head><body>
+<h1>Terms of Service</h1>
+<p><strong>Last updated: June 2026</strong></p>
+<p>SAS Automation ("Service") is a social media content management platform that allows users to schedule and publish videos to TikTok, Instagram, and YouTube via their official APIs.</p>
+<h2>1. Use of the Service</h2>
+<p>By using this Service, you agree to comply with the Terms of Service of all connected platforms (TikTok, Instagram, YouTube). The Service acts on your behalf using OAuth authorization — your credentials are never stored.</p>
+<h2>2. Content</h2>
+<p>You are solely responsible for the content you publish through this Service. You must own or have the rights to any content submitted.</p>
+<h2>3. API Usage</h2>
+<p>This Service uses the TikTok Content Posting API, Meta Graph API, and YouTube Data API solely to post content authorized by you via OAuth.</p>
+<h2>4. Limitation of Liability</h2>
+<p>The Service is provided "as is". We are not liable for any damages arising from use of the Service.</p>
+<h2>5. Contact</h2>
+<p>For questions, contact: orionreidas@proton.me</p>
+</body></html>""")
+
+
+@app.get("/privacy")
+async def privacy_policy():
+    from fastapi.responses import HTMLResponse
+    return HTMLResponse("""<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">
+<title>Privacy Policy – SAS Automation</title>
+<style>body{font-family:sans-serif;max-width:800px;margin:60px auto;padding:0 20px;line-height:1.6}h1{font-size:1.8rem}</style>
+</head><body>
+<h1>Privacy Policy</h1>
+<p><strong>Last updated: June 2026</strong></p>
+<p>SAS Automation respects your privacy. This policy explains what data we collect and how we use it.</p>
+<h2>1. Data We Collect</h2>
+<p>We collect only the OAuth tokens necessary to post content on your behalf to TikTok, Instagram, and YouTube. No personal data beyond platform usernames and access tokens is stored.</p>
+<h2>2. How We Use Data</h2>
+<p>OAuth tokens are used exclusively to publish content you have scheduled through the Service. We do not share your data with third parties.</p>
+<h2>3. Data Retention</h2>
+<p>OAuth tokens are stored encrypted and can be revoked at any time from the connected platform's settings or within this Service.</p>
+<h2>4. Third-Party APIs</h2>
+<p>This Service integrates with TikTok, Meta (Instagram), and Google (YouTube) APIs. Their respective privacy policies apply to data processed by their platforms.</p>
+<h2>5. Contact</h2>
+<p>For privacy requests, contact: orionreidas@proton.me</p>
+</body></html>""")
+
+
+@app.get("/tiktok{token}.txt")
+async def tiktok_site_verification(token: str):
+    """TikTok URL-prefix ownership check. TikTok serves a file named
+    tiktok<token>.txt whose body is `tiktok-developers-site-verification=<token>`.
+    Reconstructing it from the path means any current/future token verifies."""
+    from fastapi.responses import PlainTextResponse
+    return PlainTextResponse(f"tiktok-developers-site-verification={token}")
 
 
 # SPA catch-all — MUST be last so real API/util routes match first. Serves a built

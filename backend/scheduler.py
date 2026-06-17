@@ -385,7 +385,7 @@ def _job_publish_due() -> None:
     each to dispatch_publish. Jobs still AWAITING_APPROVAL are intentionally
     skipped (the human gate is sacred).
     """
-    from sqlalchemy import select
+    from sqlalchemy import select, update
 
     from backend.models import JobStatus, VideoJob
     from backend.pipeline.dispatch import dispatch_publish
@@ -394,25 +394,32 @@ def _job_publish_due() -> None:
     try:
         now = datetime.utcnow()  # naive UTC, matches the stored scheduled_at column
         due = db.execute(
-            select(VideoJob).where(
+            select(VideoJob.id, VideoJob.scheduled_at).where(
                 VideoJob.status == JobStatus.APPROVED,
                 VideoJob.scheduled_at.isnot(None),
                 VideoJob.scheduled_at <= now,
             )
-        ).scalars().all()
-        for job in due:
+        ).all()
+        for job_id, sched in due:
             try:
-                # Flip to PUBLISHING *before* dispatching so the next tick (60s) does
-                # NOT re-select this still-APPROVED job while it sits in the serial
-                # worker queue — that caused the same video to publish 2x+. run_publish
-                # accepts PUBLISHING; orphan recovery resets it to APPROVED on restart.
-                job.status = JobStatus.PUBLISHING
+                # ATOMIC claim: flip APPROVED -> PUBLISHING only if STILL APPROVED.
+                # If another path (the orchestrator's auto-publish, a previous tick, or
+                # a second process) already claimed/published it, rowcount==0 and we
+                # skip — so the same video can never be published twice. run_publish
+                # accepts PUBLISHING; orphan recovery handles it safely on restart.
+                claimed = db.execute(
+                    update(VideoJob)
+                    .where(VideoJob.id == job_id, VideoJob.status == JobStatus.APPROVED)
+                    .values(status=JobStatus.PUBLISHING)
+                ).rowcount
                 db.commit()
-                dispatch_publish(job.id)
-                logger.info("Publishing due job %s (scheduled %s UTC).", job.id, job.scheduled_at)
+                if not claimed:
+                    continue  # someone else owns this publish — do not double-dispatch
+                dispatch_publish(job_id)
+                logger.info("Publishing due job %s (scheduled %s UTC).", job_id, sched)
             except Exception as exc:  # noqa: BLE001 — isolate per job
                 db.rollback()
-                logger.warning("publish_due failed for job %s: %s", job.id, exc)
+                logger.warning("publish_due failed for job %s: %s", job_id, exc)
     except Exception as exc:  # noqa: BLE001 — never let the scheduler die
         logger.warning("publish_due job failed: %s", exc)
     finally:
