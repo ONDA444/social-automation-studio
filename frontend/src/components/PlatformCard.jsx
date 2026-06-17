@@ -84,7 +84,13 @@ export default function PlatformCard({ account, onChange, onChanged, onDone }) {
       <div className="flex items-center gap-1 px-3 pb-3">
         {connected
           ? <button className="btn-ghost flex-1 text-[11px] py-1.5" style={{ color: 'var(--error)' }} onClick={disconnect}>Desconectar</button>
-          : <button className="btn-primary flex-1 text-[11px] py-1.5" onClick={connect}>🔗 Conectar</button>
+          : <button
+              className="flex-1 inline-flex items-center justify-center gap-1.5 text-xs font-semibold text-white rounded-btn py-2 transition-all hover:brightness-110"
+              style={{ background: m.color, boxShadow: `0 1px 10px ${m.color}55` }}
+              onClick={connect}>
+              <span>{m.icon}</span>
+              <span>{account.platform === 'youtube' ? 'Entrar com Google' : `Conectar ${m.label}`}</span>
+            </button>
         }
         <button
           className="btn-ghost text-xs px-2 py-1.5"

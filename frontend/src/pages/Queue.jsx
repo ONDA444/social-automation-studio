@@ -24,47 +24,69 @@ function Row({ job, accounts, selected, onToggleSelect, onChannelChange, onRetry
     <div
       ref={setNodeRef}
       style={{ transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.5 : 1 }}
-      className="card p-3 fade-in">
-      {/* Linha principal: seleção, título e status */}
-      <div className="flex items-start gap-2 sm:gap-3">
-        <input type="checkbox" className="shrink-0 accent-accent mt-1 w-4 h-4" checked={selected} onChange={() => onToggleSelect(job.id)} />
-        <span {...attributes} {...listeners} className="cursor-grab text-text-muted px-1 select-none text-lg leading-none mt-0.5 shrink-0">⠿</span>
+      className="card px-3 py-2 fade-in">
+      {/* Uma linha só no desktop; empilha no mobile (flex-wrap). */}
+      <div className="flex items-center gap-2 sm:gap-3 flex-wrap">
+        <input type="checkbox" className="shrink-0 accent-accent w-4 h-4" checked={selected} onChange={() => onToggleSelect(job.id)} />
+        <span {...attributes} {...listeners} className="cursor-grab text-text-muted select-none text-lg leading-none shrink-0">⠿</span>
 
-        <div className="flex-1 min-w-0">
-          <p className="font-medium truncate">{job.title}</p>
-          <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+        <div className="flex-1 min-w-0" style={{ flexBasis: '180px' }}>
+          <p className="font-medium truncate text-sm leading-tight">{job.title}</p>
+          <div className="flex items-center gap-1.5 flex-wrap text-[11px] text-text-muted leading-tight">
             {(job.target_platforms || []).map((p) => {
               const m = PLATFORM_META[p]
-              return m ? <span key={p} className="text-[10px]" style={{ color: m.color }}>{m.icon}</span> : null
+              return m ? <span key={p} style={{ color: m.color }}>{m.icon}</span> : null
             })}
-            <span className="text-[11px] text-text-muted">{job.content_type} · {fmtDate(job.created_at)}</span>
+            <span>{job.content_type} · {fmtDate(job.created_at)}</span>
           </div>
-
-          {/* Mensagem de erro expansível */}
-          {job.status === 'error' && errMsg && (
-            <button
-              className="text-left mt-1 w-full"
-              onClick={() => setShowFullError((v) => !v)}
-              title={showFullError ? 'Clique para recolher' : 'Clique para ver completo'}>
-              <p className="text-[11px] leading-snug" style={{ color: 'var(--error)' }}>
-                {showFullError ? errMsg : errShort}
-              </p>
-              {errMsg.length > 90 && (
-                <span className="text-[10px]" style={{ color: 'var(--error)', opacity: 0.7 }}>
-                  {showFullError ? '▲ recolher' : '▼ ver mais'}
-                </span>
-              )}
-            </button>
-          )}
         </div>
 
-        {/* Badge de status — sempre visível na linha de cima */}
         <span className="badge shrink-0" style={{ background: s.color + '22', color: s.color }}>{s.label}</span>
+
+        <select
+          className="input text-xs py-1.5 px-2 w-full sm:w-36 shrink-0 order-last sm:order-none"
+          value={job.account_id ?? ''}
+          disabled={!canEditChannel}
+          title={canEditChannel ? 'Trocar canal' : 'Canal não editável neste status'}
+          onChange={(e) => onChannelChange(job.id, e.target.value)}>
+          <option value="">— sem canal —</option>
+          {accounts.map((a) => (
+            <option key={a.id} value={a.id}>{a.display_name}{a.platform ? ` (${a.platform})` : ''}</option>
+          ))}
+        </select>
+
+        <div className="flex items-center gap-1 shrink-0">
+          {job.main_video_path && (
+            <button className="btn-ghost btn-sm" onClick={() => setShowPlayer((v) => !v)} title={showPlayer ? 'Ocultar player' : 'Ver vídeo'}>
+              {showPlayer ? 'Ocultar' : '▶ Ver'}
+            </button>
+          )}
+          {canRepublish && (
+            <button className="btn-ghost btn-sm" onClick={() => onRepublish(job.id)} title="Republicar">⤴</button>
+          )}
+          {job.status === 'error' && (
+            <button className="btn-ghost btn-sm" onClick={() => onRetry(job.id)} title="Tentar novamente">↻</button>
+          )}
+          <button className="btn-ghost btn-sm" onClick={() => onDelete(job.id)} title="Excluir">🗑</button>
+        </div>
       </div>
 
-      {/* Barra de progresso (full width no mobile) */}
+      {/* Mensagem de erro expansível (largura total, abaixo da linha) */}
+      {job.status === 'error' && errMsg && (
+        <button
+          className="text-left mt-1.5 w-full"
+          onClick={() => setShowFullError((v) => !v)}
+          title={showFullError ? 'Clique para recolher' : 'Clique para ver completo'}>
+          <p className="text-[11px] leading-snug" style={{ color: 'var(--error)' }}>
+            {showFullError ? errMsg : errShort}
+            {errMsg.length > 90 && <span className="opacity-70">{showFullError ? '  ▲' : '  ▼'}</span>}
+          </p>
+        </button>
+      )}
+
+      {/* Barra de progresso */}
       {job.status === 'processing' && (
-        <div className="mt-2.5">
+        <div className="mt-2">
           <div className="h-1.5 rounded-full bg-elevated overflow-hidden">
             <div className="h-full rounded-full transition-all duration-500"
               style={{ width: `${job.progress || 0}%`, background: 'var(--grad-accent)' }} />
@@ -72,42 +94,6 @@ function Row({ job, accounts, selected, onToggleSelect, onChannelChange, onRetry
           <p className="text-[10px] text-text-muted mt-0.5 truncate">{job.current_agent}</p>
         </div>
       )}
-
-      {/* Linha de controles: canal + ações — empilha/encolhe no mobile */}
-      <div className="flex flex-wrap items-center gap-2 mt-3 pt-2.5 border-t" style={{ borderColor: 'rgba(255,255,255,0.06)' }}>
-        {/* Seletor de canal */}
-        <select
-          className="input text-xs py-1.5 px-2 w-full sm:w-40 shrink-0"
-          value={job.account_id ?? ''}
-          disabled={!canEditChannel}
-          title={canEditChannel ? 'Trocar canal' : 'Canal não editável neste status'}
-          onChange={(e) => onChannelChange(job.id, e.target.value)}>
-          <option value="">-- sem conta --</option>
-          {accounts.map((a) => (
-            <option key={a.id} value={a.id}>{a.display_name}{a.platform ? ` (${a.platform})` : ''}</option>
-          ))}
-        </select>
-
-        <div className="flex-1 hidden sm:block" />
-
-        {/* Ações */}
-        {job.main_video_path && (
-          <button className="btn-ghost text-xs shrink-0 min-h-[34px]" onClick={() => setShowPlayer((v) => !v)}>
-            {showPlayer ? 'Ocultar' : '▶ Ver'}
-          </button>
-        )}
-        {canRepublish && (
-          <button className="btn-ghost text-xs shrink-0 min-h-[34px]" onClick={() => onRepublish(job.id)} title="Republicar">
-            ⤴ Republicar
-          </button>
-        )}
-        {job.status === 'error' && (
-          <button className="btn-ghost text-xs shrink-0 min-h-[34px] px-3" onClick={() => onRetry(job.id)} title="Tentar novamente">
-            ↻
-          </button>
-        )}
-        <button className="btn-ghost text-xs shrink-0 min-h-[34px] px-3" onClick={() => onDelete(job.id)} title="Excluir">🗑</button>
-      </div>
 
       {showPlayer && job.main_video_path && (
         <div className="mt-3 rounded-xl overflow-hidden bg-black flex justify-center" style={{ maxHeight: '60vh' }}>
@@ -274,7 +260,7 @@ export default function Queue() {
       ) : (
         <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
           <SortableContext items={jobs.map((j) => j.id)} strategy={verticalListSortingStrategy}>
-            <div className="space-y-2">
+            <div className="space-y-1.5">
               {jobs.map((j) => (
                 <Row
                   key={j.id}

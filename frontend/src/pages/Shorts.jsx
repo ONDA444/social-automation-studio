@@ -45,8 +45,8 @@ export default function Shorts() {
       </div>
 
       {loading && (
-        <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-4">
-          {[1,2,3,4].map(i => <div key={i} className="card skeleton aspect-[9/16]" />)}
+        <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(165px, 1fr))' }}>
+          {[1,2,3,4,5,6,7,8].map(i => <div key={i} className="card skeleton aspect-[9/16]" />)}
         </div>
       )}
 
@@ -58,9 +58,9 @@ export default function Shorts() {
         </div>
       )}
 
-      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-4">
+      <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(165px, 1fr))' }}>
         {cards.map(({ job, short }, idx) => (
-          <div key={`${job.id}-${short.num}-${idx}`} className="card p-3 flex flex-col gap-2">
+          <div key={`${job.id}-${short.num}-${idx}`} className="card p-2 flex flex-col gap-1.5">
             <div className="relative rounded-card overflow-hidden bg-black aspect-[9/16] group">
               {short.path
                 ? <video src={mediaUrl(short.path)} controls preload="metadata" className="w-full h-full object-contain" />
