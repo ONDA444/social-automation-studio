@@ -30,6 +30,11 @@ FPS = 30
 _LH = max(360, min(1080, settings.video_resolution))
 H = _LH
 W = (round(_LH * 16 / 9)) & ~1  # even width for yuv420p
+# At Full HD a multi-clip xfade graph decodes every clip at once and OOM-kills a
+# small container. Above this height we FORCE hard cuts regardless of the
+# VIDEO_TRANSITIONS flag — concat streams one clip at a time, so 1080p stays
+# memory-flat (each clip is still rendered in its own ffmpeg pass, one at a time).
+_FORCE_HARD_CUT = _LH >= 1080
 TRANSITION_DUR = 0.4  # seconds of xfade overlap
 # Beyond this many clips, a single all-inputs xfade graph decodes too many videos
 # at once and OOM-kills the container — fall back to (memory-light) hard cuts.
@@ -190,7 +195,7 @@ class VideoEditorAgent(BaseAgent):
         # with all inputs) — the memory spike that OOM-kills a small container. Use it
         # only when explicitly enabled AND the clip count is small; otherwise hard cuts
         # (concat demuxer, one clip at a time) keep memory flat.
-        if soft is not None and (not settings.video_transitions or n > MAX_XFADE_CLIPS):
+        if soft is not None and (_FORCE_HARD_CUT or not settings.video_transitions or n > MAX_XFADE_CLIPS):
             soft = None
 
         if n == 1:

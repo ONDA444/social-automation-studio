@@ -30,8 +30,10 @@ from backend.config import settings
 POLLINATIONS = "https://image.pollinations.ai/prompt/{prompt}"
 PEXELS_VIDEO = "https://api.pexels.com/videos/search"
 
-# 16:9 working resolution for image-driven scenes (upscaled by the editor).
-SCENE_W, SCENE_H = 1280, 720
+# 16:9 source resolution for AI image scenes. 1600x900 upscales cleanly to a 1080p
+# render (only ~1.2x) for near-Full-HD sharpness, while staying much lighter to
+# generate than native 1920x1080 (honours the "don't make it heavy" constraint).
+SCENE_W, SCENE_H = 1600, 900
 
 
 class VisualsAgent(BaseAgent):
