@@ -30,6 +30,20 @@ def configured() -> bool:
     return bool(settings.tiktok_client_key and settings.tiktok_client_secret)
 
 
+def _privacy_level(internal: str) -> str:
+    """Map the studio's internal privacy ('public'/'unlisted'/'private') to a
+    TikTok privacy_level enum. TikTok has no 'unlisted', so it collapses to
+    private. While the app is unaudited (settings.tiktok_sandbox), TikTok only
+    accepts SELF_ONLY — anything else is rejected — so we force it."""
+    if settings.tiktok_sandbox:
+        return "SELF_ONLY"
+    return {
+        "public": "PUBLIC_TO_EVERYONE",
+        "unlisted": "SELF_ONLY",
+        "private": "SELF_ONLY",
+    }.get((internal or "private").lower(), "SELF_ONLY")
+
+
 def build_auth_url(state: str = "") -> dict:
     if not configured():
         return {"ok": False, "error": "TIKTOK_CLIENT_KEY/SECRET não configurados",
@@ -70,7 +84,7 @@ def exchange_code(code: str) -> dict:
         return {"ok": False, "error": str(exc), "status": "error"}
 
 
-def upload_video(video_path: str, caption: str, credentials: dict, privacy: str = "PUBLIC_TO_EVERYONE") -> dict:
+def upload_video(video_path: str, caption: str, credentials: dict, privacy: str = "private") -> dict:
     if not configured():
         return {"ok": False, "platform": "tiktok", "status": "tiktok_pending_approval",
                 "error": "App TikTok não aprovado / não configurado — publicação adiada."}
@@ -84,7 +98,7 @@ def upload_video(video_path: str, caption: str, credentials: dict, privacy: str 
         init_body = {
             "post_info": {
                 "title": caption[:150],
-                "privacy_level": privacy,
+                "privacy_level": _privacy_level(privacy),
                 "disable_duet": False, "disable_comment": False, "disable_stitch": False,
             },
             "source_info": {
@@ -115,5 +129,29 @@ def upload_video(video_path: str, caption: str, credentials: dict, privacy: str 
 
         return {"ok": True, "platform": "tiktok", "video_id": publish_id,
                 "status": "published", "note": "Processamento final no app TikTok."}
+    except httpx.HTTPStatusError as exc:
+        # Surface TikTok's REAL reason (it lives in the JSON body, not the generic
+        # httpx message) so failures are diagnosable instead of a mystery "error".
+        sc = exc.response.status_code
+        try:
+            body = exc.response.json()
+            code = ((body.get("error") or {}).get("code") or "")
+            detail = str(body)[:200]
+        except Exception:  # noqa: BLE001
+            code, detail = "", exc.response.text[:200]
+        logger.warning("TikTok recusou publicação (HTTP %s, code=%s): %s", sc, code, detail)
+        if sc == 401 or code == "access_token_invalid":
+            return {"ok": False, "platform": "tiktok", "status": "auth_error",
+                    "error": "Token TikTok inválido — reconecte a conta em Plataformas."}
+        if sc == 403:
+            # Unaudited app / scope not granted / account not allow-listed. Retrying
+            # never fixes this — mark terminal (no-retry) and tell the user what to do.
+            return {"ok": False, "platform": "tiktok", "status": "tiktok_pending_approval",
+                    "error": ("TikTok recusou a publicação (403). O app ainda não foi auditado, "
+                              "ou a conta não está liberada no portal TikTok (adicione-a em "
+                              "Target Users e garanta o escopo video.publish). "
+                              f"Detalhe: {code or detail}")}
+        return {"ok": False, "platform": "tiktok", "status": "error",
+                "error": f"TikTok HTTP {sc}: {detail}"}
     except Exception as exc:  # noqa: BLE001
         return {"ok": False, "platform": "tiktok", "status": "error", "error": str(exc)}
