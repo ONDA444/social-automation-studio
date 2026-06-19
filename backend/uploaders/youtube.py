@@ -151,9 +151,15 @@ def upload_video(
         media = MediaFileUpload(video_path, chunksize=-1, resumable=True)
         request = yt.videos().insert(part="snippet,status", body=body, media_body=media)
 
+        # num_retries lets googleapiclient retry transient (5xx / connection-reset)
+        # failures with exponential backoff instead of bubbling a one-off blip up as
+        # a hard publish failure. NOTE (follow-up, needs review/test): a true TCP
+        # stall can still hang next_chunk — set an httplib2 socket timeout on the
+        # transport in _service() to bound it. Not done here to avoid aborting slow
+        # large-video uploads on an unverifiable change to the publish path.
         response = None
         while response is None:
-            _, response = request.next_chunk()
+            _, response = request.next_chunk(num_retries=3)
         video_id = response["id"]
 
         if thumbnail_path:

@@ -10,24 +10,44 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
+import re
 from pathlib import Path
 
 from backend.agents.base_agent import BaseAgent
 from backend.config import settings
 
+logger = logging.getLogger(__name__)
+
 MUSIC_DIR = settings.abs_path(settings.assets_dir) / "music"
 CATALOG = MUSIC_DIR / "music_catalog.json"
 
-# Map editing-plan moods to catalog moods.
+# Map editing-plan / LLM moods to catalog moods (catalog tags: action, ambient,
+# calm, dramatic, energetic, epic, lofi, melancholic, suspense, tense, upbeat,
+# uplifting). Every catalog tag is also a key here so a direct request resolves to
+# itself + neighbours; LLM-invented moods (curious/playful/cinematic…) map to the
+# nearest beds so they never silently fall through to a wrong-mood global pick.
 MOOD_ALIASES = {
     "dramatic": ["dramatic", "epic", "suspense"],
     "energetic": ["energetic", "action", "upbeat"],
     "upbeat": ["upbeat", "energetic", "uplifting"],
+    "uplifting": ["uplifting", "upbeat", "calm"],
     "ambient": ["ambient", "calm", "lofi"],
-    "suspense": ["suspense", "dramatic"],
-    "epic": ["epic", "dramatic"],
-    "melancholic": ["melancholic", "ambient"],
-    "lofi": ["lofi", "ambient"],
+    "calm": ["calm", "ambient", "lofi"],
+    "suspense": ["suspense", "tense", "dramatic"],
+    "tense": ["tense", "suspense", "dramatic"],
+    "epic": ["epic", "dramatic", "action"],
+    "action": ["action", "energetic", "epic"],
+    "melancholic": ["melancholic", "ambient", "lofi"],
+    "lofi": ["lofi", "ambient", "calm"],
+    # Not catalog tags — nearest-bed mappings.
+    "curious": ["ambient", "calm", "uplifting"],
+    "playful": ["upbeat", "uplifting", "energetic"],
+    "happy": ["uplifting", "upbeat"],
+    "sad": ["melancholic", "ambient"],
+    "cinematic": ["epic", "dramatic"],
+    "inspirational": ["uplifting", "epic"],
+    "relaxed": ["calm", "ambient", "lofi"],
 }
 
 
@@ -83,10 +103,25 @@ class MusicCuratorAgent(BaseAgent):
                 return []
         return []
 
+    @staticmethod
+    def _mood_group(mood: str) -> list[str]:
+        """Resolve a requested mood to a catalog-mood group, tolerating case and
+        compound moods like 'epic_cinematic' / 'calm ambient' (first known token)."""
+        m = (mood or "").strip().lower()
+        if m in MOOD_ALIASES:
+            return MOOD_ALIASES[m]
+        for tok in re.split(r"[_\s/+-]+", m):
+            if tok in MOOD_ALIASES:
+                return MOOD_ALIASES[tok]
+        return [m] if m else ["dramatic"]
+
     def _select(self, catalog: list[dict], mood: str, bpm_target: int) -> dict:
-        moods = MOOD_ALIASES.get(mood, [mood])
+        moods = self._mood_group(mood)
         candidates = [t for t in catalog if t.get("mood") in moods]
         if not candidates:
+            logger.warning(
+                "music_curator: mood %r did not match any catalog track — "
+                "falling back to full catalog by BPM", mood)
             candidates = catalog
         # Closest BPM within the mood group.
         return min(candidates, key=lambda t: abs(t.get("bpm", 100) - bpm_target))

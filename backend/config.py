@@ -7,6 +7,7 @@ an empty .env (publishing features simply stay disabled until keys are added).
 """
 from __future__ import annotations
 
+import logging
 import os
 from functools import lru_cache
 from pathlib import Path
@@ -18,6 +19,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 ROOT_DIR = Path(__file__).resolve().parent.parent
 
 IS_PRODUCTION = os.getenv("RAILWAY_ENVIRONMENT") == "production"
+
+logger = logging.getLogger(__name__)
 
 
 class Settings(BaseSettings):
@@ -179,6 +182,33 @@ class Settings(BaseSettings):
         ):
             if getattr(self, attr).startswith("http://localhost"):
                 setattr(self, attr, f"{base}{path}")
+        return self
+
+    @model_validator(mode="after")
+    def _warn_production_risks(self) -> "Settings":
+        """Loud warnings (never aborts) when prod boots with unsafe defaults.
+
+        Aborting would risk taking down a healthy deploy, so these only WARN — but
+        the risks are real and otherwise SILENT:
+        - the default SECRET_KEY derives the Fernet key that encrypts every OAuth
+          token; the default is public (anyone can decrypt) AND changing it later
+          makes all stored tokens undecryptable (InvalidToken) — accounts go dark.
+        - a SQLite database_url on Railway's ephemeral filesystem wipes all
+          jobs/accounts/tokens on every redeploy.
+        """
+        if IS_PRODUCTION:
+            if self.secret_key == "dev-insecure-change-me":
+                logger.critical(
+                    "SECRET_KEY is the INSECURE DEFAULT in production — set a strong, "
+                    "STABLE SECRET_KEY on Railway (OAuth tokens are encrypted with a key "
+                    "derived from it; keep it constant or all stored tokens are orphaned)."
+                )
+            if self.sqlalchemy_url.startswith("sqlite"):
+                logger.critical(
+                    "DATABASE_URL is SQLite in production — Railway's filesystem is "
+                    "ephemeral, so jobs/accounts/tokens are WIPED on every redeploy. "
+                    "Attach Postgres and set DATABASE_URL."
+                )
         return self
 
     @property

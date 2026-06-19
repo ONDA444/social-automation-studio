@@ -197,7 +197,7 @@ async def run_publish(job_id: int) -> dict:
         logger.exception("run_publish failed for job %s", job_id)
         if job is not None:
             try:
-                job.publish_status = results or None
+                job.publish_status = results or {}
                 job.status = JobStatus.ERROR
                 job.error_message = f"Falha na publicação: {exc}"[:500]
                 db.commit()

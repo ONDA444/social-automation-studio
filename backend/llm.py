@@ -1,5 +1,5 @@
 """
-Unified LLM client with automatic fallback: Groq -> Gemini -> Ollama.
+Unified LLM client with automatic fallback: Groq -> Gemini -> OpenRouter -> Ollama.
 
 Uses plain HTTP (httpx) so we don't depend on three SDKs staying in sync.
 Every call returns text; `complete_json` additionally parses a JSON object out
