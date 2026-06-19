@@ -86,16 +86,6 @@ def _job_quota_reset() -> None:
         db.close()
 
 
-# Error messages that mean "a free LLM provider was momentarily exhausted" — a
-# TRANSIENT failure worth retrying (vs. a genuine bug we should leave alone). The
-# scriptwriter aborts here BEFORE rendering, so resurrecting these is cheap.
-_LLM_TRANSIENT_MARKERS = (
-    "LLM indisponível",
-    "roteiro real não pôde",
-    "LLM retornou roteiro inválido",
-    "esgotou tentativas",
-)
-
 # The ONLY failures we must NOT auto-retry: a publish interrupted mid-upload. The
 # video may already be on the channel, so re-dispatching risks a DUPLICATE upload.
 # These are parked in ERROR for a human (orphan recovery sets this message).

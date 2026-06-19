@@ -224,11 +224,12 @@ async def _on_startup() -> None:
     except Exception as exc:  # noqa: BLE001
         logger.warning("create_all falhou: %s", exc)
     try:
-        from backend.database import ensure_columns
+        from backend.database import ensure_columns, ensure_indexes
 
         ensure_columns()  # idempotent: adds new columns (e.g. video_format) to old DBs
+        ensure_indexes()  # idempotent: indexes the scheduler's hot query paths
     except Exception as exc:  # noqa: BLE001
-        logger.warning("ensure_columns falhou: %s", exc)
+        logger.warning("ensure_columns/indexes falhou: %s", exc)
     _recover_orphan_jobs()
     _redispatch_queued_jobs()
     events.set_main_loop(asyncio.get_running_loop())
@@ -284,7 +285,10 @@ async def media(path: str):
         settings.abs_path(settings.cache_dir).resolve(),
         settings.abs_path(settings.assets_dir).resolve(),
     ]
-    if not any(str(target).startswith(str(root)) for root in allowed):
+    # Path-segment containment (NOT string prefix): str.startswith would let a
+    # sibling dir with a shared prefix ('/app/output-secret' vs '/app/output')
+    # escape the allow-list.
+    if not any(target == root or root in target.parents for root in allowed):
         raise HTTPException(403, "caminho não permitido")
     if not target.is_file():
         raise HTTPException(404, "arquivo não encontrado")

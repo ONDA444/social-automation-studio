@@ -87,6 +87,28 @@ def ensure_columns() -> None:
         logger.warning("ensure_columns falhou (ignorada): %s", exc)
 
 
+def ensure_indexes() -> None:
+    """Idempotent index creation for the scheduler's hot query paths.
+
+    `(status, scheduled_at)` is scanned by _job_publish_due every minute and
+    `(account_id, created_at)` by the list/analytics endpoints; create_all() never
+    adds indexes to a pre-existing table, so as video_jobs grows these become full
+    scans. CREATE INDEX IF NOT EXISTS is a no-op once present (Postgres + SQLite)."""
+    indexes = [
+        ("ix_jobs_status_sched", "video_jobs", "status, scheduled_at"),
+        ("ix_jobs_account_created", "video_jobs", "account_id, created_at"),
+    ]
+    try:
+        with engine.begin() as conn:
+            for name, table, cols in indexes:
+                try:
+                    conn.execute(text(f"CREATE INDEX IF NOT EXISTS {name} ON {table} ({cols})"))
+                except Exception as exc:  # noqa: BLE001  (e.g. table not created yet)
+                    logger.debug("ensure_indexes skip %s: %s", name, exc)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("ensure_indexes falhou (ignorada): %s", exc)
+
+
 def reset_db() -> None:
     import backend.models  # noqa: F401
 
