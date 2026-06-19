@@ -70,6 +70,9 @@ def ensure_columns() -> None:
     additions = [
         ("video_jobs", "video_format", "VARCHAR(20) DEFAULT 'long'"),
         ("theme_queue", "video_format", "VARCHAR(20) DEFAULT 'long'"),
+        ("platform_accounts", "music_style", "VARCHAR(20) DEFAULT 'balanced'"),
+        ("platform_accounts", "ride_trends", "BOOLEAN DEFAULT false"),
+        ("platform_accounts", "trends_per_cycle", "INTEGER DEFAULT 1"),
     ]
     try:
         with engine.begin() as conn:

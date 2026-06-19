@@ -37,9 +37,13 @@ export default function TopBar({ connected, onMenuClick = () => {} }) {
     let t
     const poll = async () => {
       try {
-        const d = await api.get('/dashboard')
+        // Fire both in parallel — the old sequential await chained two round-trips
+        // every 8s, doubling the status-bar latency.
+        const [d, h] = await Promise.all([
+          api.get('/dashboard'),
+          api.get('/dashboard/health'),
+        ])
         setActive(d.active_jobs || 0)
-        const h = await api.get('/dashboard/health')
         setHealth(h.status)
       } catch { /* backend offline */ setHealth('red') }
       t = setTimeout(poll, 8000)

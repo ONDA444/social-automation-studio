@@ -1,6 +1,15 @@
 // API client. Dev: requests go to /api (Vite proxy -> backend:8000).
-// Prod: set VITE_API_URL to the Railway backend URL.
-const BASE = import.meta.env.VITE_API_URL || '/api'
+// Prod on Railway (same origin): the backend serves the bundled SPA, so the
+// relative '/api' default works. Prod on Vercel (different origin): a relative
+// '/api' would hit Vercel's static host — the SPA catch-all returns index.html
+// (HTML, not JSON), so every page stalls on its skeleton loader. Fall back to
+// the Railway backend by absolute URL there (CORS already allows *.vercel.app).
+// Override either case with VITE_API_URL.
+const RAILWAY_BACKEND = 'https://backend-production-d314e.up.railway.app'
+const _envBase = (import.meta.env.VITE_API_URL || '').trim()
+const _onVercel = typeof location !== 'undefined' && location.hostname.endsWith('.vercel.app')
+export const API_BASE = _envBase || (_onVercel ? RAILWAY_BACKEND : '/api')
+const BASE = API_BASE
 
 async function req(method, path, body) {
   const opts = { method, headers: {} }
@@ -57,8 +66,8 @@ export function mediaUrl(absPath) {
 
 // WebSocket URL for the live AgentLog.
 export function wsUrl() {
-  if (import.meta.env.VITE_API_URL) {
-    return import.meta.env.VITE_API_URL.replace(/^http/, 'ws') + '/ws'
+  if (API_BASE.startsWith('http')) {
+    return API_BASE.replace(/^http/, 'ws') + '/ws'
   }
   const proto = location.protocol === 'https:' ? 'wss' : 'ws'
   return `${proto}://${location.host}/ws`

@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from backend.agents.analytics import AnalyticsAgent
@@ -16,23 +16,27 @@ router = APIRouter(prefix="/analytics", tags=["analytics"])
 
 @router.get("/overview")
 def overview(db: Session = Depends(get_db)):
-    agg = db.execute(
-        select(
-            func.coalesce(func.sum(VideoAnalytics.views), 0),
-            func.coalesce(func.sum(VideoAnalytics.likes), 0),
-            func.coalesce(func.sum(VideoAnalytics.comments), 0),
-            func.coalesce(func.sum(VideoAnalytics.shares), 0),
-        )
-    ).one()
-    by_platform = db.execute(
-        select(VideoAnalytics.platform, func.coalesce(func.sum(VideoAnalytics.views), 0))
-        .group_by(VideoAnalytics.platform)
-    ).all()
-    return {
-        "totals": {"views": int(agg[0]), "likes": int(agg[1]),
-                   "comments": int(agg[2]), "shares": int(agg[3])},
-        "by_platform": {p: int(v) for p, v in by_platform},
-    }
+    """Totals across all videos.
+
+    Counts ONLY the latest snapshot per (job, platform). Summing every snapshot row
+    would triple-count each video (its 2h + 24h + 7d + live rows are the SAME video),
+    so totals must collapse to one row per video per platform first."""
+    totals = {"views": 0, "likes": 0, "comments": 0, "shares": 0}
+    by_platform: dict[str, int] = {}
+    for job in db.execute(select(VideoJob)).scalars().all():
+        latest: dict[str, VideoAnalytics] = {}
+        for r in (job.analytics or []):
+            cur = latest.get(r.platform)
+            if cur is None or (r.collected_at and (cur.collected_at is None
+                               or r.collected_at > cur.collected_at)):
+                latest[r.platform] = r
+        for plat, r in latest.items():
+            totals["views"] += int(r.views or 0)
+            totals["likes"] += int(r.likes or 0)
+            totals["comments"] += int(r.comments or 0)
+            totals["shares"] += int(getattr(r, "shares", 0) or 0)
+            by_platform[plat] = by_platform.get(plat, 0) + int(r.views or 0)
+    return {"totals": totals, "by_platform": by_platform}
 
 
 @router.get("/videos")

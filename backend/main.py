@@ -13,6 +13,7 @@ import shutil
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from backend import events
@@ -34,6 +35,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+# Compress JSON responses — list endpoints (jobs/dashboard) are mostly text and
+# shrink ~5-10x over the wire, a big win for the cross-origin Vercel frontend.
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 
 class _StripApiPrefix:
@@ -131,13 +135,26 @@ def _recover_orphan_jobs() -> None:
                 .filter(VideoJob.status.in_([JobStatus.PUBLISHING, JobStatus.PROCESSING]))
                 .all()
             )
+            cap = settings.llm_retry_max
             recovered = 0
             for job in orphans:
                 if job.status == JobStatus.PROCESSING:
-                    job.status = JobStatus.ERROR
-                    job.error_message = (
-                        "Interrompido por reinicialização do servidor — use Retry"
-                    )
+                    # A deploy/restart shouldn't cost the video: auto-requeue the
+                    # interrupted render so _redispatch_queued_jobs() (runs right
+                    # after) picks it up — no manual Retry needed. Capped by
+                    # retry_count so a job that keeps dying on boot eventually parks
+                    # in ERROR for a human instead of looping forever.
+                    if (job.retry_count or 0) < cap:
+                        job.retry_count = (job.retry_count or 0) + 1
+                        job.status = JobStatus.QUEUED
+                        job.error_message = None
+                        job.current_agent = None
+                        job.progress = 0
+                    else:
+                        job.status = JobStatus.ERROR
+                        job.error_message = (
+                            "Interrompido por reinicialização do servidor — use Retry"
+                        )
                 else:  # PUBLISHING orphan — never blindly republish (duplicate risk)
                     ps = job.publish_status if isinstance(job.publish_status, dict) else {}
                     yt = ps.get("youtube") or {}

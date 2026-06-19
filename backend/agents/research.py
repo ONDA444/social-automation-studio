@@ -30,11 +30,17 @@ class ResearchAgent(BaseAgent):
         title: str = "",
         topic: str | None = None,
         content_type: str = "film_recap_ai_images",
+        trend_evidence: str = "",
         **_,
     ) -> dict:
-        theme = (topic or title or "").strip()
+        # For a "momento em alta" video the real headline (trend_evidence) is the most
+        # specific, factual anchor — far better than the LLM's 1-line angle (topic).
+        # Grounding the REAL headline is what keeps the script on the actual event
+        # instead of a vague, off-topic expansion of a generic title.
+        theme = (trend_evidence or topic or title or "").strip()
         if not theme or content_type in SKIP_TYPES or not settings.research_enabled:
-            payload = {"facts": "", "sources": [], "grounded": False, "skipped": True}
+            payload = {"facts": "", "sources": [], "grounded": False,
+                       "unavailable": False, "skipped": True}
             self.ctx_set("research", payload)
             return payload
 
@@ -46,6 +52,9 @@ class ResearchAgent(BaseAgent):
         if res.get("grounded"):
             self.emit("progress",
                       f"Fatos confirmados em {len(res.get('sources', []))} fonte(s)", progress=18)
+        elif res.get("unavailable"):
+            self.emit("progress",
+                      "Grounding indisponível (cota esgotada) — tema factual será re-tentado", progress=18)
         else:
             self.emit("progress",
                       "Sem grounding — roteiro em modo cauteloso (não afirma resultados)", progress=18)

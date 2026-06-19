@@ -29,6 +29,16 @@ class PlatformAccount(Base):
     content_tone: Mapped[str] = mapped_column(String(60), default="neutral")
     avoid_topics: Mapped[list] = mapped_column(JSON, default=list)
     content_language: Mapped[str] = mapped_column(String(10), default="pt-BR")
+    # Music vibe for this channel's videos: calm | balanced | energetic.
+    # "energetic" = punchy highlight beats (TikTok/Reels style); "calm" = mellow
+    # beds. Applied on top of the per-content-type mood in EditingDirector.
+    music_style: Mapped[str] = mapped_column(String(20), default="balanced")
+
+    # --- "Momento em alta": opt-in trending-moment videos for this channel ---
+    # When ON, the system catches what's hot in this niche RIGHT NOW (e.g. a World
+    # Cup moment for a football channel) and generates 1–2 approval-gated videos.
+    ride_trends: Mapped[bool] = mapped_column(default=False)
+    trends_per_cycle: Mapped[int] = mapped_column(Integer, default=1)  # 1..2 (capped)
 
     # --- Scheduling (denormalised convenience copy; canonical config in ScheduleConfig) ---
     schedule: Mapped[dict] = mapped_column(JSON, default=dict)
@@ -69,6 +79,9 @@ class PlatformAccount(Base):
             "content_tone": self.content_tone,
             "avoid_topics": self.avoid_topics or [],
             "content_language": self.content_language,
+            "music_style": getattr(self, "music_style", None) or "balanced",
+            "ride_trends": bool(getattr(self, "ride_trends", False)),
+            "trends_per_cycle": int(getattr(self, "trends_per_cycle", 1) or 1),
             "schedule": self.schedule or {},
             "linked_accounts": self.linked_accounts or {},
             "mirror_to_linked": self.mirror_to_linked,

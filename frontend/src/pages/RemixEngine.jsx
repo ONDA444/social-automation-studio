@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../api'
 import StyleDNACard from '../components/StyleDNACard.jsx'
+import { PageHeader } from '../components/ui.jsx'
 
 const FALLBACK_CONTENT_TYPES = [
   { value: 'film_recap_ai_images', label: 'Recap (narrado)' },
@@ -59,13 +60,9 @@ export default function RemixEngine() {
 
   return (
     <div className="space-y-6 max-w-4xl fade-in">
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <h2 className="heading text-2xl text-gradient font-bold">Remix Engine</h2>
-          <p className="text-text-muted text-sm mt-1">Analise um vídeo de referência para extrair o StyleDNA (apenas o estilo).</p>
-        </div>
-        <span className="badge text-[10px] shrink-0 mt-1" style={{ background: 'rgba(124,106,255,0.15)', color: 'var(--accent)', border: '1px solid rgba(124,106,255,0.3)' }}>100% original</span>
-      </div>
+      <PageHeader title="Remix Engine" sub="Analise um vídeo de referência para extrair o StyleDNA (apenas o estilo).">
+        <span className="badge text-[10px]" style={{ background: 'var(--accent-dim)', color: 'var(--accent)', border: '1px solid var(--border)' }}>100% original</span>
+      </PageHeader>
 
       <div className="card p-4 flex items-start gap-3" style={{ borderColor: 'rgba(0,245,160,0.2)', background: 'rgba(0,245,160,0.04)' }}>
         <span className="text-lg shrink-0 mt-0.5">🛡️</span>

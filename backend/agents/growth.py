@@ -88,6 +88,8 @@ REGRAS (não viole — são duras):
   'presta atenção', 'hoje eu vou te mostrar', 'você já parou para pensar'.{fact_note}
 
 Responda SÓ JSON: {{"hook": "<narração nova da 1ª cena>", "overlay": "<2-5 PALAVRAS MAIÚSCULAS>"}}"""
+        # Context-dependent rewrite (needs the channel's facts/identity) — use the
+        # stronger tier, not the 3B 'fast' models that emit generic/invalid JSON.
         return await llm.complete_json(prompt, system=with_style("Responda só com JSON válido."), max_tokens=400)
 
     @staticmethod

@@ -1,6 +1,8 @@
 """Dashboard API — summary metrics, system health, trending suggestions."""
 from __future__ import annotations
 
+import time
+
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -23,7 +25,7 @@ def overview(db: Session = Depends(get_db)):
     accounts = db.execute(select(func.count()).select_from(PlatformAccount)).scalar() or 0
     return {
         "status_counts": {(k.value if hasattr(k, "value") else k): v for k, v in status_counts.items()},
-        "recent_jobs": [j.to_dict() for j in recent],
+        "recent_jobs": [j.to_dict_slim() for j in recent],
         "total_views": int(total_views),
         "accounts": accounts,
         "active_jobs": sum(v for k, v in status_counts.items()
@@ -31,9 +33,21 @@ def overview(db: Session = Depends(get_db)):
     }
 
 
+# The top-bar status indicator polls this every ~8s. get_system_health() pings
+# Redis (2s timeout) + the DB + disk, so calling it on every poll stalls the API.
+# Cache it for 10s — fresh enough for a status dot, cheap enough to never block.
+_health_cache: dict = {"data": None, "at": 0.0}
+
+
 @router.get("/health")
 def health():
-    return get_system_health()
+    now = time.monotonic()
+    if _health_cache["data"] is not None and (now - _health_cache["at"]) < 10:
+        return _health_cache["data"]
+    data = get_system_health()
+    _health_cache["data"] = data
+    _health_cache["at"] = now
+    return data
 
 
 @router.get("/trending")

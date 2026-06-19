@@ -25,16 +25,25 @@ from backend.config import settings
 
 LMNT_BYTES_URL = "https://api.lmnt.com/v1/ai/speech/bytes"
 
-# rate per template family
+# rate per template family (fallback for unlisted types is settings.tts_rate)
 RATE_BY_CONTENT = {
     "sports_highlights": "+15%",
-    "film_recap_ai_images": "+0%",
+    "film_recap_ai_images": "+8%",
     "quote_viral": "-10%",
 }
 
 VOICES = {
     "male": "pt-BR-AntonioNeural",
     "female": "pt-BR-FranciscaNeural",
+}
+
+# Same-gender, same-language edge-tts alternates. Microsoft's throttling of a Railway
+# datacenter IP is often per-request/transient, so when the configured voice fails we
+# try a SIBLING voice of the SAME gender before surrendering to gTTS — which has NO
+# gender control and turns a male channel generic/female. Order = preference.
+_EDGE_ALTS = {
+    "pt-BR-AntonioNeural": ["pt-BR-FabioNeural", "pt-BR-DonatoNeural", "pt-BR-JulioNeural", "pt-BR-HumbertoNeural"],
+    "pt-BR-FranciscaNeural": ["pt-BR-BrendaNeural", "pt-BR-GiovannaNeural", "pt-BR-LeticiaNeural", "pt-BR-YaraNeural"],
 }
 
 
@@ -52,9 +61,16 @@ class NarratorAgent(BaseAgent):
         script = script or self.ctx_get("script") or {}
         content_type = script.get("content_type", content_type)
         language = language or self.ctx_get("language") or settings.default_language
-        voice = voice or self._default_voice_for(language)
-        rate = RATE_BY_CONTENT.get(content_type, "+0%")
+        # Honour the channel's configured voice: explicit param > ctx > language default.
+        voice = voice or self.ctx_get("voice") or self._default_voice_for(language)
+        rate = RATE_BY_CONTENT.get(content_type, settings.tts_rate or "+8%")
         self._language = language
+        # Voice-integrity tracking — which provider actually spoke, and whether we had to
+        # fall back to a path that DROPS the requested voice/gender (gTTS / clone-failed).
+        # The orchestrator reads these to avoid auto-publishing a wrong-voice video.
+        self._tts_provider = "edge-tts"
+        self._voice_fallback_used = False
+        self._voice_requested = voice
 
         out_dir = self.job_dir(self.job_id, settings.abs_path(settings.output_dir))
         audio_path = out_dir / "narration.mp3"
@@ -100,6 +116,9 @@ class NarratorAgent(BaseAgent):
             "audio_path": str(audio_path),
             "silent": False,
             "voice": voice,
+            "voice_requested": voice,
+            "tts_provider": self._tts_provider,
+            "voice_fallback_used": self._voice_fallback_used,
             "rate": rate,
         }
         ts_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -112,11 +131,17 @@ class NarratorAgent(BaseAgent):
         """edge-tts voice matching the channel language (used when LMNT doesn't apply,
         e.g. English/foreign channels). The account's preferred_voice overrides this."""
         lang = (language or "pt-BR").lower()
+        root = lang.split("-")[0]
+        # For the default (pt) language, honour the configured DEFAULT_TTS_VOICE so the
+        # operator can set e.g. a female default without touching code. Other languages
+        # use a sensible matched voice (the configured default may be pt-only).
+        if root == "pt":
+            return settings.default_tts_voice or "pt-BR-AntonioNeural"
         table = {
-            "pt": "pt-BR-AntonioNeural", "en": "en-US-GuyNeural", "es": "es-ES-AlvaroNeural",
+            "en": "en-US-GuyNeural", "es": "es-ES-AlvaroNeural",
             "fr": "fr-FR-HenriNeural", "de": "de-DE-ConradNeural", "it": "it-IT-DiegoNeural",
         }
-        return table.get(lang.split("-")[0], settings.default_tts_voice)
+        return table.get(root, settings.default_tts_voice)
 
     async def _synthesize(self, text: str, voice: str, rate: str, audio_path: Path):
         """Provider chain: LMNT cloned voice -> edge-tts fallback.
@@ -141,9 +166,15 @@ class NarratorAgent(BaseAgent):
                 and (settings.tts_provider or "auto").lower() in ("auto", "lmnt")):
             try:
                 self.emit("progress", f"Sintetizando voz clonada LMNT ({voice})", progress=45)
-                return await self._synthesize_lmnt(text, rate, audio_path, lang, voice)
+                result = await self._synthesize_lmnt(text, rate, audio_path, lang, voice)
+                self._tts_provider = "lmnt"
+                return result
             except Exception as exc:  # noqa: BLE001
-                self.emit("progress", f"LMNT indisponível ({exc}); voz padrão grátis", progress=45)
+                # The cloned voice could NOT be produced; the language-default edge voice
+                # below is a different person (possibly a different gender). Flag it so the
+                # job goes to Approval instead of auto-publishing the wrong voice.
+                self._voice_fallback_used = True
+                self.emit("progress", f"LMNT indisponível ({exc}); voz padrão grátis (voz clonada NÃO usada)", progress=45)
 
         # No voice set / clone unavailable -> language-matched free edge voice.
         return await self._synthesize_edge(text, self._default_voice_for(lang), rate, audio_path)
@@ -216,6 +247,45 @@ class NarratorAgent(BaseAgent):
         return words
 
     async def _synthesize_edge(self, text: str, voice: str, rate: str, audio_path: Path):
+        """edge-tts with a gTTS safety net.
+
+        Microsoft frequently blocks / throttles datacenter IPs (Railway) and the
+        edge-tts client then raises "No audio was received" — which used to kill the
+        whole video. gTTS (Google Translate TTS) is also free and keyless, served from
+        a different provider, so when Microsoft refuses we still get a voice instead of
+        failing the job. gTTS has no word boundaries, so its timings are distributed
+        proportionally (same approach as the LMNT path).
+
+        Microsoft's throttling of datacenter IPs is usually TRANSIENT and often
+        per-voice/per-request, so we try the requested voice AND same-gender sibling
+        voices (preserving the channel's gender/identity) with backoff BEFORE giving up.
+        Only when EVERY edge voice fails do we fall back to gTTS — which has no gender
+        control, so a male channel would come out generic/female; that path is FLAGGED
+        (voice_fallback_used) so the orchestrator won't auto-publish it unattended."""
+        candidates = [voice] + [v for v in _EDGE_ALTS.get(voice, []) if v and v != voice]
+        last_exc: Exception | None = None
+        for cand in candidates:
+            for attempt in range(2):
+                try:
+                    result = await self._edge_stream(text, cand, rate, audio_path)
+                    self._tts_provider = "edge-tts"
+                    if cand != voice:
+                        self.emit("progress",
+                                  f"Voz preferida indisponível; usando voz do MESMO gênero ({cand})", progress=45)
+                    return result
+                except Exception as exc:  # noqa: BLE001
+                    last_exc = exc
+                    if attempt < 1:
+                        await asyncio.sleep(1.2 * (attempt + 1))
+        # Every edge voice failed → gTTS (genderless). Flag the loss of voice identity.
+        self.emit("progress",
+                  f"edge-tts indisponível ({last_exc}); reserva gTTS — voz GENÉRICA pt-BR, "
+                  "gênero/voz configurada NÃO preservada", progress=45)
+        self._tts_provider = "gtts"
+        self._voice_fallback_used = True
+        return await self._synthesize_gtts(text, voice, audio_path)
+
+    async def _edge_stream(self, text: str, voice: str, rate: str, audio_path: Path):
         # edge-tts >=7 defaults to SentenceBoundary; we need word-level for captions.
         communicate = edge_tts.Communicate(text, voice, rate=rate, boundary="WordBoundary")
         words: list[dict] = []
@@ -234,13 +304,41 @@ class NarratorAgent(BaseAgent):
                     })
         # edge-tts can silently yield no audio bytes (network blip / throttling).
         # An empty MP3 would pass as "success" and produce a silent video — raise so
-        # BaseAgent.execute retries instead.
+        # the gTTS fallback (or BaseAgent.execute retry) kicks in.
         if not audio_path.exists() or audio_path.stat().st_size < 1024:
             raise RuntimeError("edge-tts retornou áudio vazio")
         total = words[-1]["end"] if words else self._probe_duration(audio_path)
         if total <= 0:
             raise RuntimeError("edge-tts: duração inválida (áudio sem conteúdo)")
         return words, round(total, 3)
+
+    async def _synthesize_gtts(self, text: str, voice: str, audio_path: Path):
+        """Free, keyless fallback (Google Translate TTS). Runs in a worker thread —
+        gTTS is synchronous — and estimates word timings proportionally."""
+        from gtts import gTTS
+
+        lang = self._gtts_lang(voice)
+        tld = "com.br" if lang == "pt" else "com"
+
+        def _write() -> None:
+            gTTS(text=text, lang=lang, tld=tld, slow=False).save(str(audio_path))
+
+        await asyncio.to_thread(_write)
+        if not audio_path.exists() or audio_path.stat().st_size < 1024:
+            raise RuntimeError("gTTS retornou áudio vazio")
+        total = self._probe_duration(audio_path)
+        if total <= 0:
+            total = max(1.0, len(text.split()) / 2.5)
+        return self._proportional_words(text, total), round(total, 3)
+
+    @staticmethod
+    def _gtts_lang(voice: str) -> str:
+        """Derive a gTTS language code from the edge voice name (pt-BR-Antonio -> pt)."""
+        v = (voice or "pt-BR").lower()
+        for code in ("pt", "en", "es", "fr", "de", "it"):
+            if v.startswith(code):
+                return code
+        return "pt"
 
     @staticmethod
     def _derive_markers(script: dict, words: list[dict]) -> list[dict]:

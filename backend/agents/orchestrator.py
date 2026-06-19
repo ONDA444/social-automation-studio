@@ -49,6 +49,34 @@ def _emit_job(job_id: int, **fields) -> None:
     publish_event({"type": "job_update", "job_id": job_id, **fields})
 
 
+def _channel_config_from_account(acct) -> dict:
+    """Map a PlatformAccount → the scriptwriter's CHANNEL CONFIG shape.
+
+    Without this the scriptwriter ran on bare defaults — the channel's niche,
+    audience, tone and (critically) `avoid_topics` never reached the script, so a
+    video never honoured "don't talk about X". Only meaningful values are set so the
+    scriptwriter's CHANNEL_DEFAULTS still fill the rest."""
+    cfg: dict = {}
+    if getattr(acct, "display_name", None):
+        cfg["channel_name"] = acct.display_name
+    if getattr(acct, "content_language", None):
+        cfg["language"] = acct.content_language
+    identity: dict = {}
+    if getattr(acct, "niche", None) and acct.niche.strip():
+        identity["niche"] = acct.niche.strip()
+    if getattr(acct, "target_audience", None):
+        identity["target_audience"] = acct.target_audience
+    if identity:
+        cfg["identity"] = identity
+    tone = getattr(acct, "content_tone", None)
+    if tone and tone != "neutral":
+        cfg["voice"] = {"tone": tone}
+    avoid = [t for t in (getattr(acct, "avoid_topics", None) or []) if t]
+    if avoid:
+        cfg["guardrails"] = {"forbidden_topics": avoid}
+    return cfg
+
+
 async def run_pipeline(job_id: int) -> dict:
     """Execute the pipeline for a job. Safe to call from Celery or in-process."""
     db = SessionLocal()
@@ -58,18 +86,39 @@ async def run_pipeline(job_id: int) -> dict:
             return {"error": "job not found"}
 
         ctx: dict = dict(job.video_context or {})
+        # Human-initiated jobs (the "Novo vídeo" form / CSV import) are flagged so
+        # they always stop at the approval gate — the user decides whether to post.
+        # Only the scheduler's hands-off automation auto-publishes. Captured BEFORE
+        # video_context is rebuilt below (the rebuild would otherwise drop it).
+        require_approval = bool(ctx.get("require_approval"))
+        # Trending freshness guard: a moment that took too long to render (stuck behind
+        # retries past its window) is stale — force it through human Approval instead of
+        # auto-publishing an out-of-date "moment".
+        if ctx.get("is_trending") and not require_approval and job.created_at:
+            age_h = (datetime.utcnow() - job.created_at).total_seconds() / 3600
+            if age_h > settings.trending_freshness_ttl_h:
+                require_approval = True
+                logger.info("Trending job %s stale (%.1fh) -> approval, not auto-publish.", job_id, age_h)
         voice = None
         language = settings.default_language
+        music_style = "balanced"  # calm | balanced | energetic (per-channel music vibe)
         if job.account_id:
             acct = db.get(PlatformAccount, job.account_id)
             if acct:
                 voice = acct.preferred_voice or None
                 language = acct.content_language or language
+                music_style = getattr(acct, "music_style", None) or "balanced"
+                # Feed the channel's identity (niche, audience, tone, avoid_topics)
+                # to the scriptwriter — was never populated, so the script ignored
+                # the channel's rules (incl. "don't talk about X").
+                ctx["channel_config"] = _channel_config_from_account(acct)
         # Foreign-language channel but the voice is still the pt-BR default? Let the
         # narrator pick a language-matched voice (the pt clone/voice can't speak English).
         if voice == "pt-BR-AntonioNeural" and not (language or "").lower().startswith("pt"):
             voice = None
         ctx["language"] = language  # narrator/agents read the channel language from here
+        ctx["voice"] = voice        # channel's configured voice, available to all agents
+        ctx["music_style"] = music_style  # editing_director adapts the music vibe per channel
         ctx["target_platforms"] = job.target_platforms or ["youtube", "tiktok", "instagram"]
         ctx["format"] = getattr(job, "video_format", "long") or "long"  # long(16:9) | short(9:16)
         if job.style_dna:
@@ -95,6 +144,10 @@ async def run_pipeline(job_id: int) -> dict:
             # states true facts instead of hallucinating (e.g. a fake match result).
             research = await ResearchAgent(job_id, ctx).execute(
                 title=job.title, topic=job.topic, content_type=job.content_type,
+                # The real headline of a trending moment (stored at creation) is the
+                # strongest factual anchor — pass it so grounding targets the actual
+                # event, not the LLM's vague 1-line angle.
+                trend_evidence=ctx.get("trend_evidence", ""),
             )
             # Learning loop: distill what's actually worked on THIS channel from
             # real analytics and feed it to the scriptwriter + SEO, so each new
@@ -197,6 +250,17 @@ async def run_pipeline(job_id: int) -> dict:
             thumbs = ctx.get("visuals", {}).get("thumbnails", {})
             job.thumbnail_path = thumbs.get("A", {}).get("landscape")
 
+            # Voice integrity is now best-effort at SYNTHESIS time (narrator tries same-
+            # gender edge voices before any gTTS fallback). We do NOT force a fallback
+            # render into Approval: on Railway edge-tts is routinely blocked, so gating on
+            # it would send EVERY automated video to Approval — the opposite of what the
+            # operator wants. The fallback is still recorded in video_context below for
+            # visibility, and only logged as a warning here.
+            narration = ctx.get("narration", {}) or {}
+            if narration.get("voice_fallback_used"):
+                logger.warning("Job %s: voz em fallback (%s) — publicando mesmo assim (auto).",
+                               job_id, narration.get("tts_provider"))
+
             # Keep stored context lean (heavy arrays live in their JSON files on disk).
             research = ctx.get("research", {}) or {}
             job.video_context = {
@@ -205,7 +269,11 @@ async def run_pipeline(job_id: int) -> dict:
                 "music": ctx.get("music", {}).get("track", {}).get("file"),
                 "caption_style": cap_style,
                 "narration_duration": ctx.get("narration", {}).get("total_duration"),
+                "tts_provider": narration.get("tts_provider"),
+                "voice_fallback_used": bool(narration.get("voice_fallback_used")),
+                "voice": narration.get("voice"),
                 "scene_sources": [a.get("source") for a in ctx.get("visuals", {}).get("scene_assets", [])],
+                "require_approval": require_approval,  # persist for restart/re-run
                 "research_grounded": research.get("grounded", False),
                 "research_sources": research.get("sources", [])[:6],
                 "packaging": ctx.get("packaging", {}),
@@ -219,10 +287,11 @@ async def run_pipeline(job_id: int) -> dict:
             }
             # Auto-publish (hands-off): a video tied to a channel skips the human
             # gate and goes straight to APPROVED. _job_publish_due then publishes it
-            # (it needs scheduled_at <= now, so stamp one if the job has none — e.g.
-            # a manual video with a channel selected). Without a channel, or with
-            # AUTO_PUBLISH off, the approval gate stays.
-            if settings.auto_publish and job.account_id is not None:
+            # (it needs scheduled_at <= now, so stamp one if the job has none). This
+            # is ONLY for the scheduler's automation — a manually created video
+            # (require_approval) always stops at the gate so the user can choose to
+            # post or not. Without a channel, or with AUTO_PUBLISH off, the gate stays.
+            if settings.auto_publish and job.account_id is not None and not require_approval:
                 if job.scheduled_at is None:
                     job.scheduled_at = datetime.utcnow()
                 upd(status=JobStatus.APPROVED, progress=100, agent=None, approval_status="approved")

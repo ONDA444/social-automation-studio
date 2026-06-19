@@ -18,6 +18,8 @@ import logging
 from datetime import datetime
 from typing import Any
 
+from backend.config import settings
+
 logger = logging.getLogger("studio.events")
 
 EVENT_CHANNEL = "studio:events"
@@ -75,10 +77,25 @@ def _get_redis():
 
 
 def publish_event(event: dict) -> None:
-    """Fire-and-forget. Adds a timestamp, tries Redis, falls back to in-process."""
+    """Fire-and-forget. Adds a timestamp and delivers to connected WS clients.
+
+    Single-process deploy (the Railway default: API + scheduler + in-process
+    pipeline all in ONE process, no Celery worker) → broadcast STRAIGHT to the
+    WebSocket clients. We deliberately skip the Redis pub/sub round-trip here:
+    it only exists to bridge a SEPARATE Celery worker process back to the API,
+    and when Redis is up `publish_event` used to `return` right after publishing
+    — so a single hiccup in the relay silently swallowed EVERY live event (the
+    AgentLog stuck on "Sem eventos ainda" while jobs were clearly running).
+    In-process delivery has no relay to break and no network hop.
+    """
     event.setdefault("ts", datetime.utcnow().isoformat())
 
-    # Cross-process path (Celery worker -> API).
+    if not settings.use_celery:
+        _broadcast_threadsafe(event)
+        return
+
+    # Cross-process path (Celery worker -> API): publish to Redis; redis_listener
+    # on the API side relays to WS clients.
     r = _get_redis()
     if r is not None:
         try:
@@ -87,7 +104,7 @@ def publish_event(event: dict) -> None:
         except Exception:
             pass  # fall through to in-process
 
-    # In-process path.
+    # In-process fallback.
     _broadcast_threadsafe(event)
 
 

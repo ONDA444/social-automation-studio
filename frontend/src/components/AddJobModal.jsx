@@ -18,7 +18,12 @@ export default function AddJobModal({ open, onClose, onCreated }) {
 
   useEffect(() => {
     if (!open) return
-    api.get('/accounts').then((d) => setAccounts(d.accounts)).catch(() => {})
+    api.get('/accounts').then((d) => {
+      setAccounts(d.accounts)
+      // Pre-bind to the first channel so the video uses THAT channel's voice/language.
+      // Leaving it unset made narration fall back to the generic default voice.
+      setForm((f) => (f.account_id || !d.accounts?.length) ? f : { ...f, account_id: String(d.accounts[0].id) })
+    }).catch(() => {})
     api.get('/jobs/content-types')
       .then((d) => { const list = Array.isArray(d) ? d : d?.content_types; if (Array.isArray(list) && list.length) setContentTypes(list) })
       .catch(() => setContentTypes(FALLBACK_CONTENT_TYPES))
@@ -90,11 +95,12 @@ export default function AddJobModal({ open, onClose, onCreated }) {
             </div>
           </div>
           <div>
-            <label className="text-xs text-text-muted">Conta (workspace) — opcional</label>
+            <label className="text-xs text-text-muted">Canal (define a voz e o idioma)</label>
             <select className="input mt-1" value={form.account_id} onChange={(e) => setForm({ ...form, account_id: e.target.value })}>
-              <option value="">— nenhuma —</option>
+              <option value="">— nenhum (voz padrão) —</option>
               {accounts.map((a) => <option key={a.id} value={a.id}>{a.display_name} ({a.platform})</option>)}
             </select>
+            <p className="text-[11px] text-text-muted mt-1">A narração usa a voz configurada nesse canal. Sem canal, usa a voz padrão genérica.</p>
           </div>
         </div>
         <div className="flex flex-col-reverse sm:flex-row gap-2 sm:justify-end mt-5">

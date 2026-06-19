@@ -47,7 +47,12 @@ class AccountProfileService:
         if not acct:
             raise ValueError("account not found")
         acct.credentials_encrypted = encrypt_credentials(creds)
-        if acct.status == "auth_error":
+        # A successful (re)connect means the account is usable again. Reactivate
+        # from any connection-blocking state — not just "auth_error". Otherwise a
+        # channel that was "disconnected" (via the Disconnect button) would store
+        # fresh tokens but stay "disconnected", so the pipeline would never
+        # auto-publish to it (get_active_account / can_upload require "active").
+        if acct.status in ("auth_error", "disconnected", "paused"):
             acct.status = "active"
         self.db.commit()
 

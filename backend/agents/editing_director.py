@@ -159,7 +159,38 @@ class EditingDirectorAgent(BaseAgent):
         # pacing, music mood) — extracted style only, never its footage/audio.
         plan = self._apply_dna(plan, style_dna)
 
+        # Per-channel music vibe (calm | balanced | energetic) overrides the
+        # content-type default — the user's "highlight" toggle lives here.
+        plan = self._apply_music_style(plan, self.ctx_get("music_style") or "balanced")
+
         self.ctx_set("editing_plan", plan)
+        return plan
+
+    @staticmethod
+    def _apply_music_style(plan: dict, style: str) -> dict:
+        """Bend the music toward the channel's chosen vibe.
+
+        "energetic" = punchy highlight beats (high BPM, louder, swell on beat) —
+        the modern TikTok/Reels sound the user asked for. "calm" = mellow bed
+        (lower BPM, quieter, no swell). "balanced" leaves the per-type default.
+        """
+        style = (style or "balanced").lower()
+        if style == "balanced":
+            return plan
+        music = plan.setdefault("music", {})
+        if style == "energetic":
+            # Push to the most energetic mood family + a driving tempo, and lift
+            # the bed so the beat is felt under the narration (still ducked).
+            music["mood"] = "energetic"
+            music["bpm_target"] = max(int(music.get("bpm_target", 120) or 120), 130)
+            music["volume_db"] = max(int(music.get("volume_db", -18) or -18), -15)
+            music["swell_at_highlights"] = True
+            plan["beat_sync"] = True
+        elif style in ("calm", "chill"):
+            music["mood"] = "ambient"
+            music["bpm_target"] = min(int(music.get("bpm_target", 90) or 90), 80)
+            music["volume_db"] = min(int(music.get("volume_db", -20) or -20), -21)
+            music["swell_at_highlights"] = False
         return plan
 
     @staticmethod

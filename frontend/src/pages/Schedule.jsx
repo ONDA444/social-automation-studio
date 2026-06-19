@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react'
-import { api } from '../api'
+import { api, API_BASE } from '../api'
 import CalendarView from '../components/CalendarView.jsx'
+import { PageHeader } from '../components/ui.jsx'
 import { fmtDate, PLATFORM_META } from '../lib'
 
-const BASE_API = import.meta.env.VITE_API_URL || '/api'
+const BASE_API = API_BASE
 
 const FALLBACK_CONTENT_TYPES = [
   { value: 'film_recap_ai_images', label: 'Recap (imagens IA)' },
@@ -113,7 +114,7 @@ export default function Schedule() {
 
   return (
     <div className="space-y-6 fade-in">
-      <h2 className="heading text-2xl font-semibold">Agenda</h2>
+      <PageHeader title="Agenda" sub="Horários de publicação, modo inteligente e automação por temas." />
 
       <div className="grid lg:grid-cols-3 gap-6">
         {/* Calendário */}

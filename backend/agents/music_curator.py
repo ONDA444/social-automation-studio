@@ -104,6 +104,9 @@ class MusicCuratorAgent(BaseAgent):
                 out = out.append(seg, crossfade=min(3000, len(seg) // 2))
             seg = out
         seg = seg[:need_ms].fade_in(1500).fade_out(2500)
+        # Normalise rate/channels so the downstream mux mixes at a single rate
+        # (avoids implicit mid-graph resampling artifacts).
+        seg = seg.set_frame_rate(44100).set_channels(2)
         seg.export(dst, format="mp3", bitrate="192k")
 
     def _beats(self, processed: Path, bpm: int, target_len: float) -> dict:
