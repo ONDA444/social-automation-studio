@@ -26,7 +26,7 @@ export default function RemixEngine() {
   const nav = useNavigate()
 
   useEffect(() => {
-    api.get('/accounts').then((d) => setAccounts(d.accounts)).catch(() => {})
+    api.get('/accounts').then((d) => setAccounts(d.accounts || [])).catch(() => {})
     api.get('/jobs/content-types')
       .then((d) => { const list = Array.isArray(d) ? d : d?.content_types; if (Array.isArray(list) && list.length) setContentTypes(list) })
       .catch(() => setContentTypes(FALLBACK_CONTENT_TYPES))

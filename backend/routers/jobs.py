@@ -67,6 +67,19 @@ class BulkDelete(BaseModel):
 # Per-platform publish states that count as "already done" — never re-sent.
 _PUBLISHED_STATES = {"ok", "published"}
 
+
+def _platform_published(st) -> bool:
+    """True if a per-platform publish_status entry counts as already published.
+
+    publish_status[platform] is a dict like {"ok": True, "status": "ok", ...}. The
+    old check compared str(dict) against _PUBLISHED_STATES and never matched, so an
+    already-published platform looked 'pending' and got needlessly re-dispatched
+    (a duplicate-upload risk on TikTok/IG, which lack the YouTube-specific guard).
+    """
+    if isinstance(st, dict):
+        return bool(st.get("ok")) or st.get("status") in _PUBLISHED_STATES
+    return str(st) in _PUBLISHED_STATES
+
 # Statuses for which a job may still be edited (channel/platforms/schedule/title).
 _EDITABLE_STATES = {
     JobStatus.QUEUED,
@@ -396,7 +409,7 @@ def publish_job(job_id: int, db: Session = Depends(get_db)):
 
     pub = job.publish_status or {}
     targets = job.target_platforms or []
-    pending = [p for p in targets if str(pub.get(p)) not in _PUBLISHED_STATES]
+    pending = [p for p in targets if not _platform_published(pub.get(p))]
 
     # Everything already published — nothing to do (idempotent no-op).
     if targets and not pending:

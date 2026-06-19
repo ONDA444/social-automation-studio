@@ -19,7 +19,7 @@ export default function AddJobModal({ open, onClose, onCreated }) {
   useEffect(() => {
     if (!open) return
     api.get('/accounts').then((d) => {
-      setAccounts(d.accounts)
+      setAccounts(d.accounts || [])
       // Pre-bind to the first channel so the video uses THAT channel's voice/language.
       // Leaving it unset made narration fall back to the generic default voice.
       setForm((f) => (f.account_id || !d.accounts?.length) ? f : { ...f, account_id: String(d.accounts[0].id) })

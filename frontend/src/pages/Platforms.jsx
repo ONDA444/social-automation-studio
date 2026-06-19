@@ -16,7 +16,7 @@ export default function Platforms() {
   const [adding, setAdding] = useState(false)
   const [form, setForm] = useState({ platform: 'youtube', display_name: '', niche: '' })
 
-  const load = () => api.get('/accounts').then((d) => setAccounts(d.accounts)).catch(() => {})
+  const load = () => api.get('/accounts').then((d) => setAccounts(d.accounts || [])).catch(() => {})
   useEffect(() => { load() }, [])
 
   const create = async () => {

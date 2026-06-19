@@ -52,8 +52,22 @@ class FFmpegError(RuntimeError):
     pass
 
 
-def _run(cmd: list[str], cwd: str | None = None) -> None:
-    proc = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, encoding="utf-8", errors="replace")
+# Hard ceiling per ffmpeg invocation. A healthy encode of one clip/segment is far
+# under this; the point is that a HUNG ffmpeg (stalled filter, bad input) can never
+# hold the single render slot forever — it's killed and surfaced as a retryable error.
+_FFMPEG_TIMEOUT = 1200  # 20 min
+
+
+def _run(cmd: list[str], cwd: str | None = None, timeout: int = _FFMPEG_TIMEOUT) -> None:
+    try:
+        proc = subprocess.run(
+            cmd, cwd=cwd, capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        # subprocess.run already killed the child; turn the stall into a retryable
+        # FFmpegError so BaseAgent can retry/ERROR and the render semaphore is freed.
+        raise FFmpegError(f"ffmpeg timed out after {timeout}s (killed): {' '.join(cmd[:3])}…")
     if proc.returncode != 0:
         tail = (proc.stderr or "")[-1500:]
         raise FFmpegError(f"ffmpeg failed (rc={proc.returncode}):\n{tail}")
@@ -300,7 +314,7 @@ class VideoEditorAgent(BaseAgent):
             out = subprocess.run(
                 ["ffprobe", "-v", "error", "-show_entries", "format=duration",
                  "-of", "default=nw=1:nk=1", str(path)],
-                capture_output=True, text=True,
+                capture_output=True, text=True, timeout=30,
             )
             return float(out.stdout.strip())
         except Exception:
