@@ -453,7 +453,20 @@ class ScriptwriterAgent(BaseAgent):
         # Native short: keep it tight (vertical <60s). Cap scenes and recompute.
         script["format"] = video_format
         if video_format == "short" and len(scenes) > 6:
-            scenes = scenes[:6]
+            # Trim to a Short WITHOUT decapitating the payoff: a blind scenes[:6]
+            # drops the ending (payoff + CTA) — the completion-rate signal that most
+            # drives the Shorts feed. Keep the hook (first) + resolution (last two),
+            # then fill the middle preferring is_highlight scenes, preserving order.
+            n = len(scenes)
+            keep = {0, n - 2, n - 1}
+            middle = list(range(1, n - 2))
+            ordered = ([i for i in middle if scenes[i].get("is_highlight")]
+                       + [i for i in middle if not scenes[i].get("is_highlight")])
+            for i in ordered:
+                if len(keep) >= 6:
+                    break
+                keep.add(i)
+            scenes = [scenes[i] for i in sorted(keep)]
             script["scenes"] = scenes
             if content_type != "quote_viral":
                 script["narration_text"] = " ".join(

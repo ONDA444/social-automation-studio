@@ -159,7 +159,13 @@ class PackagingStrategistAgent(BaseAgent):
 
         yt_titles = [t for t in (pkg.get("youtube_titles") or []) if t][:3]
         if yt_titles:
-            script["title"] = yt_titles[0]
+            # Publish the title the strategist flagged as highest expected CTR in the
+            # feed — not just the first one. The index was computed and then thrown
+            # away; clamp it to the available range as a safety net.
+            idx = pkg.get("recommended_index", 0)
+            if not isinstance(idx, int) or not (0 <= idx < len(yt_titles)):
+                idx = 0
+            script["title"] = yt_titles[idx]
             script["title_options"] = yt_titles
         script["packaging"] = pkg
         self.ctx_set("packaging", pkg)

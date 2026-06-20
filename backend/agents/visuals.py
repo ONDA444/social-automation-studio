@@ -306,25 +306,30 @@ class VisualsAgent(BaseAgent):
     # ---- Thumbnails ----
     async def _thumbnails(self, title: str, script: dict, assets_dir: Path) -> dict:
         base = assets_dir / "thumb_base.jpg"
-        # label="" so a placeholder fallback stays clean (title is drawn on top).
-        await self._generate_image(
-            self._enhance(f"{title}, bold poster, high contrast, eye-catching"),
-            base, 1792, 1024, label="",
-        )
+        # Use the packaging strategist's hero-shot concept + punchy 2-4 word overlay
+        # (packaging.thumbnail) instead of a generic poster with the whole title
+        # stamped on top. Falls back to title-derived values when packaging is absent.
+        pkg = (script.get("packaging") or {}).get("thumbnail") or {}
+        visual = (pkg.get("visual") or "").strip()
+        img_prompt = self._enhance(visual or f"{title}, bold poster, high contrast, eye-catching")
+        overlay = (pkg.get("text") or "").strip() or " ".join(title.split()[:3])
+        overlay = overlay.upper()[:24]
+        # label="" so a placeholder fallback stays clean (text is drawn on top).
+        await self._generate_image(img_prompt, base, 1792, 1024, label="")
         out = {}
-        # Variant A: red/yellow bottom title.  Variant B: top, white-on-dark.
+        # Variant A: red/yellow bottom text.  Variant B: top, white-on-dark.
         for variant, cfg in {
             "A": {"pos": "bottom", "fill": (255, 221, 0), "stroke": (200, 0, 0)},
             "B": {"pos": "top", "fill": (255, 255, 255), "stroke": (10, 10, 10)},
         }.items():
             land = assets_dir / f"thumb_{variant}.png"
             vert = assets_dir / f"thumb_{variant}_vertical.png"
-            self._compose_thumb(base, land, title, 1792, 1024, cfg)
-            self._compose_thumb(base, vert, title, 1080, 1920, cfg)
+            self._compose_thumb(base, land, overlay, 1792, 1024, cfg)
+            self._compose_thumb(base, vert, overlay, 1080, 1920, cfg)
             out[variant] = {"landscape": str(land), "vertical": str(vert)}
         return out
 
-    def _compose_thumb(self, base: Path, dst: Path, title: str, w: int, h: int, cfg: dict) -> None:
+    def _compose_thumb(self, base: Path, dst: Path, text: str, w: int, h: int, cfg: dict) -> None:
         try:
             img = Image.open(base).convert("RGB")
         except Exception:
@@ -332,17 +337,26 @@ class VisualsAgent(BaseAgent):
         # Cover-crop to target aspect.
         img = self._cover(img, w, h)
         draw = ImageDraw.Draw(img)
-        font = self._font(int(h * 0.085))
-        text = title.upper()[:60]
-        lines = self._wrap(text, font, draw, int(w * 0.9))
-        line_h = int(h * 0.1)
+        # Big, punchy overlay (2-4 words) — readable at feed thumbnail size, not the
+        # tiny whole-title band the old code stamped.
+        font = self._font(int(h * 0.14))
+        text = (text or "").upper()[:24]
+        lines = self._wrap(text, font, draw, int(w * 0.9))[:2]
+        line_h = int(h * 0.155)
         total = line_h * len(lines)
         y = int(h * 0.06) if cfg["pos"] == "top" else h - total - int(h * 0.08)
+        # Semi-transparent scrim behind the text so it reads over any image.
+        try:
+            band_top = max(0, y - int(h * 0.03))
+            scrim = Image.new("RGBA", (w, total + int(h * 0.06)), (0, 0, 0, 130))
+            img.paste(scrim, (0, band_top), scrim)
+        except Exception:
+            pass
         for ln in lines:
             tw = draw.textlength(ln, font=font)
             x = (w - tw) / 2
             draw.text((x, y), ln, font=font, fill=cfg["fill"],
-                      stroke_width=max(3, w // 300), stroke_fill=cfg["stroke"])
+                      stroke_width=max(4, w // 220), stroke_fill=cfg["stroke"])
             y += line_h
         img.save(dst, "PNG")
 

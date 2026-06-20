@@ -7,6 +7,7 @@ YouTube description gets auto chapters built from narration scene markers.
 from __future__ import annotations
 
 import asyncio
+import re
 
 from backend.agents.base_agent import BaseAgent
 from backend.config import settings
@@ -213,15 +214,24 @@ JSON EXATO (preencha todos os campos, não omita plataformas):
         # YouTube requires >= 3 chapters and first at 0:00.
         return chapters if len(chapters) >= 3 else []
 
+    _CHAPTERS_MARKER = re.compile(r"\[CAP[IÍ]TULOS\]")
+
     @staticmethod
     def _with_chapters(description: str, chapters: list[dict]) -> str:
+        desc = description or ""
         if not chapters:
-            return description
-        lines = ["", "⏱️ Capítulos:"]
-        for ch in chapters:
-            m, s = divmod(int(ch["time"]), 60)
-            lines.append(f"{m}:{s:02d} {ch['title']}")
-        return description + "\n" + "\n".join(lines)
+            # No chapters → strip the marker so the literal "[CAPÍTULOS]" never
+            # leaks into the published description.
+            return SEOAgent._CHAPTERS_MARKER.sub("", desc).strip()
+        block = "⏱️ Capítulos:\n" + "\n".join(
+            f"{divmod(int(ch['time']), 60)[0]}:{divmod(int(ch['time']), 60)[1]:02d} {ch['title']}"
+            for ch in chapters
+        )
+        # Substitute the [CAPÍTULOS] marker IN PLACE (the LLM places it mid-description
+        # for session-time); fall back to appending if the marker is absent.
+        if SEOAgent._CHAPTERS_MARKER.search(desc):
+            return SEOAgent._CHAPTERS_MARKER.sub(lambda _: block, desc, count=1).strip()
+        return (desc + "\n\n" + block).strip()
 
     @staticmethod
     def _clamp(seo: dict) -> dict:
