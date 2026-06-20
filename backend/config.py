@@ -7,6 +7,7 @@ an empty .env (publishing features simply stay disabled until keys are added).
 """
 from __future__ import annotations
 
+import logging
 import os
 from functools import lru_cache
 from pathlib import Path
@@ -18,6 +19,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 ROOT_DIR = Path(__file__).resolve().parent.parent
 
 IS_PRODUCTION = os.getenv("RAILWAY_ENVIRONMENT") == "production"
+
+logger = logging.getLogger(__name__)
 
 
 class Settings(BaseSettings):
@@ -31,6 +34,11 @@ class Settings(BaseSettings):
     # ---- LLMs ----
     groq_api_key: str = ""
     gemini_api_key: str = ""
+    # OpenRouter aggregates DOZENS of free models on a quota INDEPENDENT of Groq's
+    # and Gemini's. It's the safety net: when both of those daily free tiers are
+    # exhausted (the recurring "LLM indisponível" failure), OpenRouter keeps scripts
+    # flowing so jobs don't die. Free key (email signup, no phone): openrouter.ai/keys.
+    openrouter_api_key: str = ""
     ollama_host: str = "http://localhost:11434"
     # Free-tier pacing — minimum requests/min spacing so a video's burst of ~8
     # LLM calls never trips the per-minute rate limit (429). Tune down if you hit
@@ -42,7 +50,10 @@ class Settings(BaseSettings):
     # it, _job_retry_errored resurrects it later (when a quota window reopens) up
     # to this many times. The scriptwriter aborts in seconds when the LLM is down
     # — BEFORE any render — so retries are cheap. Set 0 to disable resurrection.
-    llm_retry_max: int = 8
+    # 12 (with the growing back-off in _job_retry_errored) spreads the attempts
+    # across ~37h so a job that errors in the evening survives past the 00:05 daily
+    # quota reset and catches the fresh window instead of dying first.
+    llm_retry_max: int = 12
     # Ground factual topics (sports/news/events) in real web sources via Gemini +
     # Google Search before scripting, so narration states TRUE facts (real score,
     # date, names) instead of hallucinating. Needs GEMINI_API_KEY.
@@ -67,6 +78,10 @@ class Settings(BaseSettings):
     lmnt_api_key: str = ""
     lmnt_voice: str = ""                 # LMNT voice id (Voices tab in app.lmnt.com)
     tts_provider: str = "auto"           # auto = LMNT when configured, else edge-tts
+    # Default narration pace for free voices. pt-BR neural voices at +0% sound
+    # slow/dragged; a slight boost reads as natural & energetic. Per-content
+    # overrides live in NarratorAgent.RATE_BY_CONTENT; this is the fallback.
+    tts_rate: str = "+8%"
 
     # ---- YouTube ----
     google_client_id: str = ""
@@ -77,6 +92,13 @@ class Settings(BaseSettings):
     tiktok_client_key: str = ""
     tiktok_client_secret: str = ""
     tiktok_redirect_uri: str = "http://localhost:8000/auth/tiktok/callback"
+    # Until the app is APPROVED for the Content Posting API (it starts in
+    # sandbox / "unaudited"), TikTok REJECTS public posts — an unaudited client
+    # may only post SELF_ONLY (private, visible to the authorizing user). While
+    # True, every TikTok post is forced to SELF_ONLY regardless of the job's
+    # privacy, so the upload actually succeeds. Set TIKTOK_SANDBOX=0 after the
+    # production app is approved to allow real public posting.
+    tiktok_sandbox: bool = True
 
     # ---- Meta / Instagram ----
     meta_app_id: str = ""
@@ -106,6 +128,10 @@ class Settings(BaseSettings):
     # approval. Off by default (the approval gate stays). Set AUTO_PUBLISH=1 to
     # enable hands-off posting.
     auto_publish: bool = False
+    # --- "Momento em alta" (trending) safety knobs ---
+    trending_enabled: bool = True          # global kill-switch for trending auto-publish
+    max_trending_per_day: int = 4          # hard cap of trending videos per channel/day
+    trending_freshness_ttl_h: int = 12     # a moment older than this won't auto-publish
     # ffmpeg/x264 thread cap. x264 auto-detects the HOST's core count (60+ on
     # Railway), spawns that many threads, and the per-thread memory overhead OOM-kills
     # the container (ffmpeg rc=-9). Cap it low to fit the container's RAM. Override
@@ -156,6 +182,33 @@ class Settings(BaseSettings):
         ):
             if getattr(self, attr).startswith("http://localhost"):
                 setattr(self, attr, f"{base}{path}")
+        return self
+
+    @model_validator(mode="after")
+    def _warn_production_risks(self) -> "Settings":
+        """Loud warnings (never aborts) when prod boots with unsafe defaults.
+
+        Aborting would risk taking down a healthy deploy, so these only WARN — but
+        the risks are real and otherwise SILENT:
+        - the default SECRET_KEY derives the Fernet key that encrypts every OAuth
+          token; the default is public (anyone can decrypt) AND changing it later
+          makes all stored tokens undecryptable (InvalidToken) — accounts go dark.
+        - a SQLite database_url on Railway's ephemeral filesystem wipes all
+          jobs/accounts/tokens on every redeploy.
+        """
+        if IS_PRODUCTION:
+            if self.secret_key == "dev-insecure-change-me":
+                logger.critical(
+                    "SECRET_KEY is the INSECURE DEFAULT in production — set a strong, "
+                    "STABLE SECRET_KEY on Railway (OAuth tokens are encrypted with a key "
+                    "derived from it; keep it constant or all stored tokens are orphaned)."
+                )
+            if self.sqlalchemy_url.startswith("sqlite"):
+                logger.critical(
+                    "DATABASE_URL is SQLite in production — Railway's filesystem is "
+                    "ephemeral, so jobs/accounts/tokens are WIPED on every redeploy. "
+                    "Attach Postgres and set DATABASE_URL."
+                )
         return self
 
     @property

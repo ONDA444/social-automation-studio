@@ -125,3 +125,17 @@ class VideoJob(Base):
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }
+
+    # Heavy per-agent artifacts (~30–80 KB each). List views never need them — only
+    # the detail view GET /jobs/{id} does. Dropping them from list responses cuts
+    # the payload ~95% with NO feature loss (status, the trending badge in
+    # video_context, publish_status and thumbnail are all kept).
+    _HEAVY_FIELDS = ("style_dna", "script", "editing_plan", "seo_metadata")
+
+    def to_dict_slim(self) -> dict:
+        """Lightweight serialization for LIST endpoints (full dict minus the heavy
+        JSON blobs)."""
+        d = self.to_dict()
+        for k in self._HEAVY_FIELDS:
+            d.pop(k, None)
+        return d

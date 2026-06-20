@@ -17,8 +17,29 @@ instead of shipping garbage. Real, specific scripts pass untouched.
 from __future__ import annotations
 
 import re
+import unicodedata
 
 from backend.agents.style_guide import BANNED_PHRASES
+
+# Portuguese/English stopwords — ignored when measuring topic↔script relevance so the
+# overlap test keys off meaningful words (entities/nouns), not glue words.
+_STOPWORDS = {
+    "de", "da", "do", "das", "dos", "que", "com", "para", "por", "uma", "um", "uns",
+    "umas", "os", "as", "na", "no", "nas", "nos", "em", "se", "sua", "seu", "suas",
+    "seus", "mais", "como", "ele", "ela", "eles", "isso", "esse", "essa", "este",
+    "esta", "the", "of", "and", "for", "with", "this", "that",
+}
+
+
+def _norm(s: str) -> str:
+    """Lowercase + strip accents so 'Seleção' and 'selecao' compare equal."""
+    s = unicodedata.normalize("NFKD", (s or "").lower())
+    return "".join(c for c in s if not unicodedata.combining(c))
+
+
+def _sig_words(s: str) -> set[str]:
+    return {w for w in re.sub(r"[^\w\s]", " ", _norm(s)).split()
+            if len(w) > 3 and w not in _STOPWORDS}
 
 # Distinctive fragments of the offline template + generic AI filler. A real,
 # fact-grounded script does not lean on these.
@@ -75,9 +96,14 @@ def _has_concrete_anchor(raw_text: str) -> bool:
     return bool(_NUMBER_RE.search(raw_text) or _ENTITY_RE.search(raw_text))
 
 
-def assess(script: dict) -> tuple[bool, str]:
-    """Return (ok, reason). ok=False means the script is generic/vague/stunted and
-    must not proceed (the caller should retry to get real content)."""
+def assess(script: dict, topic: str | None = None,
+           forbidden_topics: list[str] | None = None) -> tuple[bool, str]:
+    """Return (ok, reason). ok=False means the script is generic/vague/stunted/off-theme
+    and must not proceed (the caller should retry to get real content).
+
+    `topic` enables a RELEVANCE check (does the script actually talk about its subject?)
+    and `forbidden_topics` enforces the channel's avoid-list as a HARD block, not just a
+    prompt hint — both added to stop off-topic 'momento' videos from shipping."""
     if not isinstance(script, dict):
         return False, "roteiro ausente"
     if script.get("_offline"):
@@ -86,6 +112,13 @@ def assess(script: dict) -> tuple[bool, str]:
     text = raw.lower()
     if not text:
         return True, "ok"  # e.g. quote_viral has no narration — handled elsewhere
+
+    # 0) Channel guardrails: avoid_topics as a HARD gate. If the narration actually
+    #    mentions a forbidden subject, reject (retry) instead of publishing it.
+    for ft in (forbidden_topics or []):
+        fn = _norm(str(ft)).strip()
+        if fn and fn in _norm(raw):
+            return False, f"roteiro toca em tema proibido do canal: '{ft}'"
 
     # 1) Offline-template / banned clichés.
     hits = sum(1 for m in _ALL_MARKERS if m in text)
@@ -107,6 +140,17 @@ def assess(script: dict) -> tuple[bool, str]:
     if vague >= 2 and not _has_concrete_anchor(raw):
         return False, (f"roteiro vago sem âncora concreta ({vague} termos de elogio "
                        "genérico, nenhum nome/número real)")
+
+    # 4) Relevance: an off-theme script (the "futebol americano" video that talked about
+    #    something else) shares ZERO significant words with its own topic. Conservative
+    #    on purpose — only fires when the topic is SPECIFIC (>=4 significant words) and
+    #    NOT ONE appears in the narration, so paraphrases (which still name the subject)
+    #    pass untouched and false-positives stay near zero.
+    if topic:
+        topic_words = _sig_words(topic)
+        if len(topic_words) >= 4 and not (topic_words & _sig_words(raw)):
+            return False, ("roteiro desconectado do tema — nenhuma palavra do tópico "
+                           f"({', '.join(sorted(topic_words))}) aparece na narração")
 
     return True, "ok"
 

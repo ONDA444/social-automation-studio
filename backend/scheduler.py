@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from apscheduler.schedulers.background import BackgroundScheduler
 
@@ -33,9 +33,22 @@ def start_scheduler() -> None:
     sched.add_job(_job_quota_reset, "cron", hour=0, minute=5, id="quota_reset", replace_existing=True)
     sched.add_job(_job_heartbeat, "interval", seconds=30, id="heartbeat", replace_existing=True)
     sched.add_job(_job_collect_analytics, "interval", minutes=15, id="analytics", replace_existing=True)
+    # Near-real-time refresh: overwrite each published video's "live" snapshot with the
+    # platform's CURRENT numbers so the Analytics tab matches YouTube/etc., not a frozen
+    # 7-day count. Fires ~20s after boot, then every 8 min.
+    # NOTE: next_run_time must be timezone-AWARE. A naive datetime is interpreted in the
+    # scheduler's tz (America/Sao_Paulo), which would push the first run ~3h into the
+    # future. An aware UTC datetime fires correctly ~20s after boot regardless of tz.
+    sched.add_job(_job_refresh_live, "interval", minutes=8, id="analytics_live",
+                  replace_existing=True,
+                  next_run_time=datetime.now(timezone.utc) + timedelta(seconds=20))
     sched.add_job(_job_consume_themes, "interval", minutes=2, id="consume_themes", replace_existing=True)
     sched.add_job(_job_publish_due, "interval", minutes=1, id="publish_due", replace_existing=True)
     sched.add_job(_job_retry_errored, "interval", minutes=20, id="retry_errored", replace_existing=True)
+    # "Momento em alta": for opted-in channels, catch what's hot in the niche now and
+    # enqueue 1–2 approval-gated videos. Every 3h (low/non-spammy); first run ~2min after boot.
+    sched.add_job(_job_ride_trends, "interval", hours=3, id="ride_trends", replace_existing=True,
+                  next_run_time=datetime.now(timezone.utc) + timedelta(minutes=2))
     sched.start()
     _scheduler = sched
     logger.info(
@@ -73,14 +86,12 @@ def _job_quota_reset() -> None:
         db.close()
 
 
-# Error messages that mean "a free LLM provider was momentarily exhausted" — a
-# TRANSIENT failure worth retrying (vs. a genuine bug we should leave alone). The
-# scriptwriter aborts here BEFORE rendering, so resurrecting these is cheap.
-_LLM_TRANSIENT_MARKERS = (
-    "LLM indisponível",
-    "roteiro real não pôde",
-    "LLM retornou roteiro inválido",
-    "esgotou tentativas",
+# The ONLY failures we must NOT auto-retry: a publish interrupted mid-upload. The
+# video may already be on the channel, so re-dispatching risks a DUPLICATE upload.
+# These are parked in ERROR for a human (orphan recovery sets this message).
+_NO_AUTO_RETRY_MARKERS = (
+    "PODE já estar no canal",
+    "Verifique o YouTube",
 )
 
 
@@ -100,7 +111,11 @@ def _job_retry_errored() -> None:
     cap = settings.llm_retry_max
     if cap <= 0:
         return  # resurrection disabled
-    cutoff = datetime.utcnow() - timedelta(hours=24)
+    # 72h window so an evening failure stays alive across the providers' real daily
+    # quota reset (Groq/Gemini reset on US-Pacific midnight, NOT our 00:05 cron) and
+    # absorbs scheduler restarts (Railway redeploy/OOM). 24h was too short.
+    now = datetime.utcnow()
+    cutoff = now - timedelta(hours=72)
 
     db = SessionLocal()
     try:
@@ -113,8 +128,18 @@ def _job_retry_errored() -> None:
         ).scalars().all()
         for job in rows:
             msg = job.error_message or ""
-            if not any(m in msg for m in _LLM_TRANSIENT_MARKERS):
-                continue  # not a transient LLM failure — leave it for a human
+            # Auto-resurrect EVERY failed video back into production (user wants no
+            # error left sitting), not only transient-LLM ones — EXCEPT a publish
+            # interrupted mid-upload (duplicate-upload risk → left for a human).
+            if any(m in msg for m in _NO_AUTO_RETRY_MARKERS):
+                continue
+            # Growing back-off between attempts: 30m, 60m, 120m, … capped at 6h. The
+            # daily free quota doesn't reopen for hours, so retrying every 20m just
+            # burns all attempts in <3h (same evening). Spacing them out spreads the
+            # ~12 tries across ~40h so several land in DIFFERENT quota windows.
+            min_gap_min = min(30 * (2 ** (job.retry_count or 0)), 360)
+            if job.updated_at and (now - job.updated_at) < timedelta(minutes=min_gap_min):
+                continue  # not yet time to retry this one
             job.retry_count = (job.retry_count or 0) + 1
             job.status = JobStatus.QUEUED
             job.error_message = None
@@ -168,6 +193,7 @@ def _job_collect_analytics() -> None:
             select(VideoJob).where(VideoJob.status == JobStatus.PUBLISHED)
         ).scalars().all()
         agent = AnalyticsAgent(db)
+        collected = 0
         for job in published:
             age_h = (now - (job.updated_at or now)).total_seconds() / 3600
             for snap, (target_h, tol) in windows.items():
@@ -179,8 +205,174 @@ def _job_collect_analytics() -> None:
                     ).first()
                     if not exists:
                         agent.collect_for_job(job.id, snap)
+                        collected += 1
+                        # Live nudge so the Analytics tab refreshes the moment new
+                        # numbers land, instead of waiting for the next poll.
+                        publish_event({"type": "analytics_collected", "job_id": job.id,
+                                       "account_id": job.account_id, "snapshot_type": snap})
+        # Heartbeat so the UI can show a fresh "ao vivo" timestamp every cycle even
+        # when no new snapshot was due this tick.
+        publish_event({"type": "analytics_tick", "collected": collected})
     except Exception as exc:  # noqa: BLE001
         logger.debug("analytics job failed: %s", exc)
+    finally:
+        db.close()
+
+
+def _job_refresh_live() -> None:
+    """Overwrite each published video's 'live' snapshot with current platform numbers
+    so the Analytics page reflects near-real-time views, not a frozen snapshot."""
+    from sqlalchemy import select
+
+    from backend.agents.analytics import AnalyticsAgent
+    from backend.models import JobStatus, VideoJob
+
+    db = SessionLocal()
+    try:
+        published = db.execute(
+            select(VideoJob).where(VideoJob.status == JobStatus.PUBLISHED)
+        ).scalars().all()
+        agent = AnalyticsAgent(db)
+        refreshed = 0
+        for job in published:
+            try:
+                if agent.refresh_live(job.id):
+                    refreshed += 1
+                    publish_event({"type": "analytics_collected", "job_id": job.id,
+                                   "account_id": job.account_id, "snapshot_type": "live"})
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("live refresh for job %s failed: %s", job.id, exc)
+        publish_event({"type": "analytics_tick", "collected": refreshed, "live": True})
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("live refresh job failed: %s", exc)
+    finally:
+        db.close()
+
+
+def _create_trending_job(db, acct, moment) -> int:
+    """Create a QUEUED, AUTO-PUBLISHING VideoJob from a trending moment, then dispatch.
+
+    Moments are time-sensitive, so (unlike normal channel videos) these publish
+    DIRECTLY — require_approval=False lets the orchestrator auto-publish when
+    AUTO_PUBLISH is on. It still rides the SAME pipeline (scriptwriter + the channel's
+    learning/performance brief + the real-script-only rule), so the video is concrete
+    and on-brand, never generic. The is_trending marker drives the '🔥 do momento'
+    badge and the 6h idempotency check."""
+    from backend.agents.scriptwriter import ScriptwriterAgent
+    from backend.models import JobStatus, VideoJob
+    from backend.pipeline.dispatch import dispatch_job
+
+    # Pick a content_type that fits the moment (football → sports_highlights, etc.)
+    # instead of forcing film_recap on everything.
+    try:
+        content_type = ScriptwriterAgent._detect_content_type(f"{moment['title']} {moment.get('topic', '')}")
+    except Exception:  # noqa: BLE001
+        content_type = "film_recap_ai_images"
+
+    # SAFETY: a trending video auto-publishes — the only thing that routes it to human
+    # Approval is BRAND SAFETY (tragedy/death/politics/violence). Grounding is a QUALITY
+    # concern, not an approval one: the scriptwriter already retries when the LLM is down
+    # and the quality gate blocks generic/off-topic scripts, so an ungrounded-but-clean
+    # moment should still publish directly rather than pile up in Approvals.
+    safe = bool(moment.get("safe", True))
+    require_approval = not safe
+
+    job = VideoJob(
+        title=moment["title"],
+        topic=moment.get("topic") or moment["title"],
+        content_type=content_type,
+        video_format="short",                   # moments are punchy → short by default
+        target_platforms=["youtube"],
+        account_id=acct.id,
+        status=JobStatus.QUEUED,
+        scheduled_at=None,                       # publish ASAP (it's a moment)
+        video_context={
+            "require_approval": require_approval,  # brand-safe → direct; sensitive → Approval
+            "is_trending": True,
+            "trend_source": moment.get("source", "google_news"),
+            "trend_evidence": moment.get("evidence", ""),
+        },
+    )
+    db.add(job)
+    db.flush()
+    db.commit()
+    dispatch_job(job.id)
+    return job.id
+
+
+def _job_ride_trends() -> None:
+    """'Momento em alta': for each opted-in active channel, find the hottest niche
+    moments now and enqueue up to `trends_per_cycle` (max 2) approval-gated videos.
+    Guarded so it never floods: opt-in only, ≤2/cycle, and a 6h idempotency window."""
+    import asyncio as _aio
+    from datetime import timedelta as _td
+
+    from sqlalchemy import select
+
+    from backend.agents.account_profile import AccountProfileService
+    from backend.agents.trending_moment import TrendingMomentAgent
+    from backend.models import PlatformAccount, ThemeQueue, VideoJob
+
+    db = SessionLocal()
+    from backend.config import settings
+
+    if not settings.trending_enabled:
+        return  # global kill-switch — halt all trending auto-publishing instantly
+    try:
+        now = datetime.utcnow()
+        profile = AccountProfileService(db)
+        accounts = db.execute(
+            select(PlatformAccount).where(
+                PlatformAccount.ride_trends.is_(True),
+                PlatformAccount.status == "active",
+            )
+        ).scalars().all()
+        for acct in accounts:
+            try:
+                # Don't render a moment the channel can't even upload (quota/creds).
+                try:
+                    if not profile.can_upload(acct.id):
+                        continue
+                except Exception:  # noqa: BLE001
+                    pass
+                per_cycle = min(2, max(1, getattr(acct, "trends_per_cycle", 1) or 1))
+                recent_jobs = db.execute(
+                    select(VideoJob).where(VideoJob.account_id == acct.id)
+                    .order_by(VideoJob.created_at.desc()).limit(30)
+                ).scalars().all()
+                trending_recent = [j for j in recent_jobs if (j.video_context or {}).get("is_trending")]
+                # Don't stack moments: skip if we already made a trending video <6h ago.
+                if any(j.created_at and (now - j.created_at) < _td(hours=6) for j in trending_recent):
+                    continue
+                # Daily cap: never auto-publish more than max_trending_per_day per channel.
+                made_today = sum(1 for j in trending_recent
+                                 if j.created_at and (now - j.created_at) < _td(hours=24))
+                if made_today >= settings.max_trending_per_day:
+                    continue
+                recent_titles = [j.title for j in recent_jobs if j.title]
+                pend = db.execute(
+                    select(ThemeQueue.theme).where(
+                        ThemeQueue.account_id == acct.id, ThemeQueue.status == "pending")
+                ).scalars().all()
+                recent_titles += [t for t in pend if t]
+
+                lang = acct.content_language or "pt-BR"
+                region = "BR" if lang.lower().startswith("pt") else "US"
+                result = _aio.run(TrendingMomentAgent(job_id=None, emit=False).execute(
+                    niche=acct.niche or "entretenimento", language=lang, region=region,
+                    max_moments=per_cycle, recent_titles=recent_titles,
+                ))
+                created = 0
+                for moment in (result.get("moments") or [])[:per_cycle]:
+                    _create_trending_job(db, acct, moment)
+                    created += 1
+                if created:
+                    publish_event({"type": "trending_moment", "account_id": acct.id, "created": created})
+            except Exception as exc:  # noqa: BLE001
+                db.rollback()
+                logger.debug("ride_trends account %s failed: %s", acct.id, exc)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("ride_trends job failed: %s", exc)
     finally:
         db.close()
 

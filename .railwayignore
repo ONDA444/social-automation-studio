@@ -11,3 +11,4 @@ output/
 cache/
 logs/
 *.log
+assets/music/_synth_backup/

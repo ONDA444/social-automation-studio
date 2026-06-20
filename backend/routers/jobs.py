@@ -67,6 +67,19 @@ class BulkDelete(BaseModel):
 # Per-platform publish states that count as "already done" — never re-sent.
 _PUBLISHED_STATES = {"ok", "published"}
 
+
+def _platform_published(st) -> bool:
+    """True if a per-platform publish_status entry counts as already published.
+
+    publish_status[platform] is a dict like {"ok": True, "status": "ok", ...}. The
+    old check compared str(dict) against _PUBLISHED_STATES and never matched, so an
+    already-published platform looked 'pending' and got needlessly re-dispatched
+    (a duplicate-upload risk on TikTok/IG, which lack the YouTube-specific guard).
+    """
+    if isinstance(st, dict):
+        return bool(st.get("ok")) or st.get("status") in _PUBLISHED_STATES
+    return str(st) in _PUBLISHED_STATES
+
 # Statuses for which a job may still be edited (channel/platforms/schedule/title).
 _EDITABLE_STATES = {
     JobStatus.QUEUED,
@@ -94,6 +107,28 @@ def _require_account(db: Session, account_id: int | None) -> None:
         return
     if db.get(PlatformAccount, account_id) is None:
         raise HTTPException(400, f"account_id inválido: {account_id} não existe")
+
+
+# Approval policy for MANUALLY created videos. The user vets a channel ONCE: the
+# FIRST video made for a given channel lands in Approvals so they can confirm the
+# channel's setup (voice, identity, niche) before it goes public. After that channel
+# has published at least once, later manual videos for it auto-publish like the
+# scheduled/trending ones — no repeated gate. A job with NO channel always stops at
+# the gate (there's nothing to auto-publish to).
+_DEBUTED_STATES = (JobStatus.APPROVED, JobStatus.PUBLISHING, JobStatus.PUBLISHED)
+
+
+def _manual_needs_approval(db: Session, account_id: int | None) -> bool:
+    """True if a manually created job for this channel should stop at Approvals."""
+    if account_id is None:
+        return True
+    debuted = db.execute(
+        select(VideoJob.id)
+        .where(VideoJob.account_id == account_id)
+        .where(VideoJob.status.in_(_DEBUTED_STATES))
+        .limit(1)
+    ).first()
+    return debuted is None  # no prior published video → this is the channel's debut
 
 
 def _cleanup_job_files(job: VideoJob) -> None:
@@ -131,6 +166,11 @@ def create_job(payload: JobCreate, db: Session = Depends(get_db)):
         target_platforms=payload.target_platforms,
         scheduled_at=payload.scheduled_at,
         status=JobStatus.QUEUED,
+        # Only the channel's DEBUT video stops at Approvals; once the channel has
+        # published, later manual videos auto-publish like the automated ones.
+        video_context=(
+            {"require_approval": True} if _manual_needs_approval(db, payload.account_id) else {}
+        ),
     )
     db.add(job)
     db.commit()
@@ -151,8 +191,14 @@ def create_jobs_batch(payload: JobBatchCreate, db: Session = Depends(get_db)):
 
     themes = [t.strip() for t in payload.themes if t and t.strip()][:200]
 
+    # New channel → only the first job of the batch needs vetting; the rest of the
+    # batch (and an already-published channel) auto-publish.
+    no_channel = payload.account_id is None
+    debut_pending = _manual_needs_approval(db, payload.account_id)
+
     job_ids: list[int] = []
-    for theme in themes:
+    for idx, theme in enumerate(themes):
+        gate = no_channel or (debut_pending and idx == 0)
         job = VideoJob(
             title=theme,
             topic=theme,
@@ -161,6 +207,7 @@ def create_jobs_batch(payload: JobBatchCreate, db: Session = Depends(get_db)):
             account_id=payload.account_id,
             target_platforms=payload.target_platforms,
             status=JobStatus.QUEUED,
+            video_context={"require_approval": True} if gate else {},
         )
         db.add(job)
         db.commit()
@@ -184,7 +231,7 @@ def list_jobs(
     if account_id is not None:
         stmt = stmt.where(VideoJob.account_id == account_id)
     jobs = db.execute(stmt).scalars().all()
-    return {"jobs": [j.to_dict() for j in jobs], "count": len(jobs)}
+    return {"jobs": [j.to_dict_slim() for j in jobs], "count": len(jobs)}
 
 
 @router.get("/content-types")
@@ -204,7 +251,7 @@ def list_approvals(db: Session = Depends(get_db)):
         VideoJob.updated_at.desc()
     )
     jobs = db.execute(stmt).scalars().all()
-    return {"jobs": [j.to_dict() for j in jobs], "count": len(jobs)}
+    return {"jobs": [j.to_dict_slim() for j in jobs], "count": len(jobs)}
 
 
 @router.get("/{job_id}")
@@ -303,6 +350,7 @@ async def import_csv(file: UploadFile = File(...), db: Session = Depends(get_db)
     reader = csv.DictReader(io.StringIO(raw))
     created: list[int] = []
     skipped: list[dict] = []
+    debuted_in_run: set[int] = set()  # channels already given their gate this import
     for i, row in enumerate(reader, start=1):
         title = (row.get("title") or "").strip()
         if not title:
@@ -317,6 +365,14 @@ async def import_csv(file: UploadFile = File(...), db: Session = Depends(get_db)
         if account_id is not None and db.get(PlatformAccount, account_id) is None:
             skipped.append({"row": i, "title": title, "reason": f"account_id {account_id} não existe"})
             continue
+        # Gate only the first row per new channel; rest of the import auto-publishes.
+        if account_id is None:
+            gate = True
+        elif account_id in debuted_in_run:
+            gate = False
+        else:
+            gate = _manual_needs_approval(db, account_id)
+            debuted_in_run.add(account_id)
         job = VideoJob(
             title=title,
             topic=(row.get("topic") or None),
@@ -325,6 +381,7 @@ async def import_csv(file: UploadFile = File(...), db: Session = Depends(get_db)
             target_platforms=platforms,
             account_id=account_id,
             status=JobStatus.QUEUED,
+            video_context={"require_approval": True} if gate else {},
         )
         db.add(job)
         db.commit()
@@ -352,7 +409,7 @@ def publish_job(job_id: int, db: Session = Depends(get_db)):
 
     pub = job.publish_status or {}
     targets = job.target_platforms or []
-    pending = [p for p in targets if str(pub.get(p)) not in _PUBLISHED_STATES]
+    pending = [p for p in targets if not _platform_published(pub.get(p))]
 
     # Everything already published — nothing to do (idempotent no-op).
     if targets and not pending:

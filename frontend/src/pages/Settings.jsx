@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api } from '../api'
+import { PageHeader, SectionCard } from '../components/ui.jsx'
 
 const KEYS = [
   { env: 'GROQ_API_KEY', label: 'Groq (scripts/SEO)', tier: 'grátis', url: 'https://console.groq.com' },
@@ -20,16 +21,9 @@ export default function Settings() {
 
   return (
     <div className="space-y-6 max-w-3xl fade-in">
-      <div>
-        <h2 className="heading text-2xl text-gradient font-bold">Configurações</h2>
-        <p className="text-text-muted text-sm">Sistema e chaves de API.</p>
-      </div>
+      <PageHeader title="Configurações" sub="Sistema e chaves de API." />
 
-      <div className="card p-5">
-        <div className="flex items-center gap-3 mb-4">
-          <h3 className="heading font-semibold">Status dos serviços</h3>
-          <div className="flex-1 h-px" style={{ background: 'rgba(255,255,255,0.06)' }} />
-        </div>
+      <SectionCard title="Status dos serviços">
         {!health ? (
           <div className="space-y-3">
             {[1,2,3].map(i => (
@@ -47,13 +41,9 @@ export default function Settings() {
             ))}
           </div>
         )}
-      </div>
+      </SectionCard>
 
-      <div className="card p-5">
-        <div className="flex items-center gap-3 mb-1">
-          <h3 className="heading font-semibold">Chaves de API</h3>
-          <div className="flex-1 h-px" style={{ background: 'rgba(255,255,255,0.06)' }} />
-        </div>
+      <SectionCard title="Chaves de API">
         <p className="text-[11px] text-text-muted text-right mb-3">🔐 Chaves salvas somente no servidor</p>
         <p className="text-xs text-text-muted mb-4">
           As chaves são lidas do arquivo <code className="font-mono">.env</code> no servidor (nunca expostas ao navegador).
@@ -69,7 +59,7 @@ export default function Settings() {
             </div>
           ))}
         </div>
-      </div>
+      </SectionCard>
     </div>
   )
 }

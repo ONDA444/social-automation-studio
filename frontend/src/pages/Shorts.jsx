@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api, mediaUrl } from '../api'
+import { PageHeader, EmptyState } from '../components/ui.jsx'
 
 // Aba dedicada aos Shorts verticais (TikTok / Reels / YouTube Shorts).
 // Mostra cada short com player vertical, gancho do 1º frame e captions por
@@ -31,18 +32,17 @@ export default function Shorts() {
 
   return (
     <div className="space-y-5 fade-in">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <div>
-            <div className="flex items-center gap-2">
-              <h1 className="heading text-2xl text-gradient font-bold">Shorts</h1>
-              {cards.length > 0 && <span className="badge" style={{ background: 'rgba(124,106,255,0.15)', color: 'var(--accent)' }}>{cards.length}</span>}
-            </div>
-            <p className="text-text-muted text-sm">Vídeos curtos verticais (TikTok • Reels • YouTube Shorts) — gancho + captions prontos.</p>
-          </div>
-        </div>
-        <button className="btn-ghost" onClick={load}>↻ Atualizar</button>
-      </div>
+      <PageHeader
+        title={
+          <span className="inline-flex items-center gap-2.5">
+            Shorts
+            {cards.length > 0 && <span className="badge" style={{ background: 'var(--accent-dim)', color: 'var(--accent)', border: '1px solid var(--border)' }}>{cards.length}</span>}
+          </span>
+        }
+        sub="Vídeos curtos verticais (TikTok • Reels • YouTube Shorts) — gancho + captions prontos."
+      >
+        <button className="btn btn-ghost" onClick={load}>↻ Atualizar</button>
+      </PageHeader>
 
       {loading && (
         <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(165px, 1fr))' }}>
@@ -51,10 +51,9 @@ export default function Shorts() {
       )}
 
       {!loading && cards.length === 0 && (
-        <div className="card p-12 text-center">
-          <p className="text-5xl mb-4">📱</p>
-          <p className="heading font-semibold text-lg">Nenhum Short ainda</p>
-          <p className="text-text-muted text-sm mt-2">Crie um vídeo na Fila — os Shorts são gerados automaticamente em 9:16.</p>
+        <div className="rounded-card" style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)' }}>
+          <EmptyState icon="📱" title="Nenhum Short ainda"
+            hint="Crie um vídeo na Fila — os Shorts são gerados automaticamente em 9:16." />
         </div>
       )}
 

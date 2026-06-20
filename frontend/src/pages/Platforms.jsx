@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { api } from '../api'
 import PlatformCard from '../components/PlatformCard.jsx'
+import { PageHeader, SectionCard, EmptyState } from '../components/ui.jsx'
 
 const PLATFORMS = ['youtube', 'tiktok', 'instagram']
 
@@ -15,7 +16,7 @@ export default function Platforms() {
   const [adding, setAdding] = useState(false)
   const [form, setForm] = useState({ platform: 'youtube', display_name: '', niche: '' })
 
-  const load = () => api.get('/accounts').then((d) => setAccounts(d.accounts)).catch(() => {})
+  const load = () => api.get('/accounts').then((d) => setAccounts(d.accounts || [])).catch(() => {})
   useEffect(() => { load() }, [])
 
   const create = async () => {
@@ -26,16 +27,12 @@ export default function Platforms() {
 
   return (
     <div className="space-y-6 fade-in">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h2 className="heading text-2xl font-bold text-gradient">Plataformas & Canais</h2>
-          <p className="text-text-muted text-sm mt-1">Conecte e gerencie seus canais de publicação.</p>
-        </div>
-        <button className="btn-primary w-full sm:w-auto" onClick={() => setAdding((a) => !a)}>+ Conectar canal</button>
-      </div>
+      <PageHeader title="Plataformas & Canais" sub="Conecte e gerencie seus canais de publicação.">
+        <button className="btn btn-primary" onClick={() => setAdding((a) => !a)}>+ Conectar canal</button>
+      </PageHeader>
 
       {adding && (
-        <div className="card p-5 grid md:grid-cols-4 gap-3 items-end slide-down">
+        <SectionCard className="grid md:grid-cols-4 gap-3 items-end slide-down">
           <div>
             <label className="text-xs text-text-muted">Plataforma</label>
             <select className="input mt-1" value={form.platform} onChange={(e) => setForm({ ...form, platform: e.target.value })}>
@@ -52,8 +49,8 @@ export default function Platforms() {
             <label className="text-xs text-text-muted">Nicho</label>
             <input className="input mt-1" value={form.niche} onChange={(e) => setForm({ ...form, niche: e.target.value })} />
           </div>
-          <button className="btn-primary" onClick={create}>Criar</button>
-        </div>
+          <button className="btn btn-primary" onClick={create}>Criar</button>
+        </SectionCard>
       )}
 
       {PLATFORMS.map((plat) => {
@@ -65,7 +62,7 @@ export default function Platforms() {
             <div className="flex items-center gap-3 mb-4">
               <span className="text-lg">{meta.icon}</span>
               <h3 className="heading font-semibold">{meta.label}</h3>
-              <span className="badge" style={{ background: 'rgba(124,106,255,0.15)', color: 'var(--accent)' }}>{list.length}</span>
+              <span className="badge" style={{ background: 'var(--accent-dim)', color: 'var(--accent)', border: '1px solid var(--border)' }}>{list.length}</span>
               <div className="flex-1 h-px" style={{ background: 'rgba(255,255,255,0.06)' }} />
             </div>
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3">
@@ -76,11 +73,10 @@ export default function Platforms() {
       })}
 
       {accounts.length === 0 && (
-        <div className="card p-12 text-center">
-          <div className="text-5xl mb-4">🔗</div>
-          <h3 className="heading font-semibold text-lg mb-1">Nenhum canal conectado</h3>
-          <p className="text-text-muted text-sm mb-5">Clique em Conectar canal para adicionar.</p>
-          <button className="btn-primary" onClick={() => setAdding(true)}>+ Conectar canal</button>
+        <div className="rounded-card" style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)' }}>
+          <EmptyState icon="🔗" title="Nenhum canal conectado"
+            hint="Conecte um canal para começar a publicar."
+            action={<button className="btn btn-primary" onClick={() => setAdding(true)}>+ Conectar canal</button>} />
         </div>
       )}
     </div>

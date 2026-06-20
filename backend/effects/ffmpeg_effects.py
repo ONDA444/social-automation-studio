@@ -92,9 +92,14 @@ def xfade_name(transition: str) -> str | None:
 
 
 def loudnorm(platform: str = "youtube") -> str:
-    """Target integrated loudness per platform."""
+    """Target integrated loudness per platform.
+
+    TP (true-peak ceiling) at -2.0 dB leaves headroom so plosives (p/t/k) and
+    music transients don't slam the limiter into audible crackle. -1.5 was too
+    hot for casual social audio.
+    """
     target = "-14" if platform == "youtube" else "-9"  # tiktok/ig hotter
-    return f"loudnorm=I={target}:TP=-1.5:LRA=11"
+    return f"loudnorm=I={target}:TP=-2.0:LRA=11"
 
 
 def build_scene_filter(

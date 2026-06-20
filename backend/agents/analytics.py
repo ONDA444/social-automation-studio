@@ -8,7 +8,9 @@ ContentCalendarAgent (best hours) and the thumbnail A/B comparison.
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from backend.agents.account_profile import AccountProfileService
@@ -41,6 +43,50 @@ class AnalyticsAgent:
                 thumbnail_variant="A",  # main upload uses variant A
             )
             self.db.add(row)
+            out.append({"platform": platform, **metrics})
+        self.db.commit()
+        return out
+
+    def refresh_live(self, job_id: int) -> list[dict]:
+        """Upsert a continuously-refreshed 'live' snapshot with the CURRENT platform
+        numbers.
+
+        The fixed 2h/24h/7d snapshots are taken once and then frozen — so a video
+        published days ago would forever show its 7-day count while the platform kept
+        growing (e.g. 30 here vs 923 on YouTube). This row is instead OVERWRITTEN every
+        cycle, so it always holds what the platform shows right now. Because it carries
+        the newest collected_at, both the Analytics page and the learning loop (which
+        already pick the latest snapshot per platform) use these live numbers."""
+        job = self.db.get(VideoJob, job_id)
+        if not job or not job.publish_status:
+            return []
+        svc = AccountProfileService(self.db)
+        out: list[dict] = []
+        for platform, res in (job.publish_status or {}).items():
+            if not res.get("ok") or not res.get("video_id"):
+                continue
+            acct = svc.get_active_account(platform)
+            creds = svc.get_credentials(acct.id) if acct else {}
+            metrics = self._fetch(platform, res["video_id"], creds)
+            if metrics is None:
+                continue
+            row = self.db.execute(
+                select(VideoAnalytics).where(
+                    VideoAnalytics.job_id == job_id,
+                    VideoAnalytics.platform == platform,
+                    VideoAnalytics.snapshot_type == "live",
+                )
+            ).scalars().first()
+            if row is None:
+                row = VideoAnalytics(
+                    job_id=job_id, platform=platform, platform_video_id=res["video_id"],
+                    snapshot_type="live", thumbnail_variant="A",
+                )
+                self.db.add(row)
+            for k, v in metrics.items():
+                setattr(row, k, v)
+            row.platform_video_id = res["video_id"]
+            row.collected_at = datetime.utcnow()  # bump so this stays the "latest"
             out.append({"platform": platform, **metrics})
         self.db.commit()
         return out

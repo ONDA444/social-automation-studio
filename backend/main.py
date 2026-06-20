@@ -13,6 +13,7 @@ import shutil
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from backend import events
@@ -34,6 +35,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+# Compress JSON responses — list endpoints (jobs/dashboard) are mostly text and
+# shrink ~5-10x over the wire, a big win for the cross-origin Vercel frontend.
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 
 class _StripApiPrefix:
@@ -131,13 +135,26 @@ def _recover_orphan_jobs() -> None:
                 .filter(VideoJob.status.in_([JobStatus.PUBLISHING, JobStatus.PROCESSING]))
                 .all()
             )
+            cap = settings.llm_retry_max
             recovered = 0
             for job in orphans:
                 if job.status == JobStatus.PROCESSING:
-                    job.status = JobStatus.ERROR
-                    job.error_message = (
-                        "Interrompido por reinicialização do servidor — use Retry"
-                    )
+                    # A deploy/restart shouldn't cost the video: auto-requeue the
+                    # interrupted render so _redispatch_queued_jobs() (runs right
+                    # after) picks it up — no manual Retry needed. Capped by
+                    # retry_count so a job that keeps dying on boot eventually parks
+                    # in ERROR for a human instead of looping forever.
+                    if (job.retry_count or 0) < cap:
+                        job.retry_count = (job.retry_count or 0) + 1
+                        job.status = JobStatus.QUEUED
+                        job.error_message = None
+                        job.current_agent = None
+                        job.progress = 0
+                    else:
+                        job.status = JobStatus.ERROR
+                        job.error_message = (
+                            "Interrompido por reinicialização do servidor — use Retry"
+                        )
                 else:  # PUBLISHING orphan — never blindly republish (duplicate risk)
                     ps = job.publish_status if isinstance(job.publish_status, dict) else {}
                     yt = ps.get("youtube") or {}
@@ -207,11 +224,12 @@ async def _on_startup() -> None:
     except Exception as exc:  # noqa: BLE001
         logger.warning("create_all falhou: %s", exc)
     try:
-        from backend.database import ensure_columns
+        from backend.database import ensure_columns, ensure_indexes
 
         ensure_columns()  # idempotent: adds new columns (e.g. video_format) to old DBs
+        ensure_indexes()  # idempotent: indexes the scheduler's hot query paths
     except Exception as exc:  # noqa: BLE001
-        logger.warning("ensure_columns falhou: %s", exc)
+        logger.warning("ensure_columns/indexes falhou: %s", exc)
     _recover_orphan_jobs()
     _redispatch_queued_jobs()
     events.set_main_loop(asyncio.get_running_loop())
@@ -267,7 +285,10 @@ async def media(path: str):
         settings.abs_path(settings.cache_dir).resolve(),
         settings.abs_path(settings.assets_dir).resolve(),
     ]
-    if not any(str(target).startswith(str(root)) for root in allowed):
+    # Path-segment containment (NOT string prefix): str.startswith would let a
+    # sibling dir with a shared prefix ('/app/output-secret' vs '/app/output')
+    # escape the allow-list.
+    if not any(target == root or root in target.parents for root in allowed):
         raise HTTPException(403, "caminho não permitido")
     if not target.is_file():
         raise HTTPException(404, "arquivo não encontrado")

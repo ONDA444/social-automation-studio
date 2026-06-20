@@ -11,6 +11,10 @@ export default function PlatformCard({ account, onChange, onChanged, onDone }) {
   const isClone = account.preferred_voice?.startsWith('v_')
   const [voice, setVoice] = useState(isClone ? '' : (account.preferred_voice || ''))
   const [savingVoice, setSavingVoice] = useState(false)
+  const [music, setMusic] = useState(account.music_style || 'balanced')
+  const [savingMusic, setSavingMusic] = useState(false)
+  const [ride, setRide] = useState(account.ride_trends || false)
+  const [savingRide, setSavingRide] = useState(false)
   const m = PLATFORM_META[account.platform] || { label: account.platform, color: 'var(--accent)', icon: '●' }
   const quotaPct = account.quota_limit ? Math.round((account.quota_used_today / account.quota_limit) * 100) : 0
   const refresh = onChange || onChanged || onDone
@@ -44,6 +48,18 @@ export default function PlatformCard({ account, onChange, onChanged, onDone }) {
     try { await api.patch(`/accounts/${account.id}`, { preferred_voice: vid }); refresh?.() }
     catch (e) { alert('Falha ao salvar voz: ' + e.message); setVoice(isClone ? '' : (account.preferred_voice || '')) }
     finally { setSavingVoice(false) }
+  }
+  const changeMusic = async (style) => {
+    setMusic(style); setSavingMusic(true)
+    try { await api.patch(`/accounts/${account.id}`, { music_style: style }); refresh?.() }
+    catch (e) { alert('Falha ao salvar música: ' + e.message); setMusic(account.music_style || 'balanced') }
+    finally { setSavingMusic(false) }
+  }
+  const changeRide = async (on) => {
+    setRide(on); setSavingRide(true)
+    try { await api.patch(`/accounts/${account.id}`, { ride_trends: on }); refresh?.() }
+    catch (e) { alert('Falha ao salvar: ' + e.message); setRide(account.ride_trends || false) }
+    finally { setSavingRide(false) }
   }
 
   const statusColor = { active: 'var(--success)', paused: 'var(--text-muted)', quota_exceeded: 'var(--warning)', auth_error: 'var(--error)' }[account.status] || 'var(--text-muted)'
@@ -158,6 +174,41 @@ export default function PlatformCard({ account, onChange, onChanged, onDone }) {
               {voicesForLang(lang).map((v) => <option key={v.id} value={v.id}>{v.label}</option>)}
             </select>
             <p className="text-[10px] text-text-muted mt-1">Vozes prontas grátis — escolha uma diferente por canal.</p>
+          </div>
+
+          {/* Estilo de música (vibe por canal) */}
+          <div>
+            <label className="flex items-center justify-between text-[11px] text-text-muted mb-1">
+              <span>🎵 Estilo de música</span>
+              {savingMusic && <span className="opacity-60">salvando…</span>}
+            </label>
+            <select className="input w-full text-xs" value={music} disabled={savingMusic} onChange={(e) => changeMusic(e.target.value)}>
+              <option value="energetic">🔥 Highlight — batida forte</option>
+              <option value="balanced">🎚️ Equilibrado (padrão)</option>
+              <option value="calm">🌙 Calmo — fundo suave</option>
+            </select>
+            <p className="text-[10px] text-text-muted mt-1">Highlight = trilha energética estilo viral. Vale para os próximos vídeos.</p>
+          </div>
+
+          {/* 🔥 Momento em alta (opt-in por canal) */}
+          <div>
+            <label className="flex items-center justify-between text-[11px] text-text-muted mb-1">
+              <span>🔥 Momento em alta</span>
+              {savingRide && <span className="opacity-60">salvando…</span>}
+            </label>
+            <button
+              className="input w-full text-xs flex items-center justify-between"
+              disabled={savingRide}
+              onClick={() => changeRide(!ride)}
+            >
+              <span>{ride ? 'Ativado — pega o que está bombando no nicho' : 'Desativado'}</span>
+              <span className="badge text-[10px]"
+                style={ride ? { background: 'rgba(255,182,39,0.16)', color: 'var(--warning)' }
+                            : { background: 'rgba(255,255,255,0.06)', color: 'var(--text-muted)' }}>
+                {ride ? '● ON' : 'OFF'}
+              </span>
+            </button>
+            <p className="text-[10px] text-text-muted mt-1">Gera 1–2 vídeos do assunto em alta e <strong>publica direto</strong> no canal (sem aprovação).</p>
           </div>
 
           {/* Clonar a própria voz (LMNT) */}

@@ -1,223 +1,200 @@
 [
   {
-    "file": "dramatic_1.mp3",
-    "mood": "dramatic",
-    "bpm": 95,
-    "energy": 0.6,
-    "duration": 40,
-    "best_for": [
-      "film_recap_ai_images"
-    ],
-    "license": "CC0 (synthesized original)"
-  },
-  {
-    "file": "dramatic_2.mp3",
+    "file": "freepd_dramatic_1.mp3",
     "mood": "dramatic",
     "bpm": 90,
     "energy": 0.6,
-    "duration": 40,
-    "best_for": [
-      "film_recap_ai_images"
-    ],
-    "license": "CC0 (synthesized original)"
+    "duration": 44.0,
+    "source": "FreePD: Epic/The Ice Giants.mp3",
+    "license": "CC0 1.0 (public domain — free for commercial/monetized use, no attribution)"
   },
   {
-    "file": "epic_1.mp3",
-    "mood": "epic",
+    "file": "freepd_dramatic_2.mp3",
+    "mood": "dramatic",
     "bpm": 100,
-    "energy": 0.75,
-    "duration": 40,
-    "best_for": [
-      "film_recap_ai_images"
-    ],
-    "license": "CC0 (synthesized original)"
+    "energy": 0.6,
+    "duration": 186.9,
+    "source": "FreePD: Scoring/Patron Saint of Heists.mp3",
+    "license": "CC0 1.0 (public domain — free for commercial/monetized use, no attribution)"
   },
   {
-    "file": "epic_2.mp3",
+    "file": "freepd_epic_1.mp3",
+    "mood": "epic",
+    "bpm": 105,
+    "energy": 0.7,
+    "duration": 98.7,
+    "source": "FreePD: Epic/Overture.mp3",
+    "license": "CC0 1.0 (public domain — free for commercial/monetized use, no attribution)"
+  },
+  {
+    "file": "freepd_epic_2.mp3",
     "mood": "epic",
     "bpm": 110,
-    "energy": 0.8,
-    "duration": 40,
-    "best_for": [
-      "film_recap_ai_images"
-    ],
-    "license": "CC0 (synthesized original)"
-  },
-  {
-    "file": "suspense_1.mp3",
-    "mood": "suspense",
-    "bpm": 80,
-    "energy": 0.5,
-    "duration": 40,
-    "best_for": [
-      "film_recap_ai_images"
-    ],
-    "license": "CC0 (synthesized original)"
-  },
-  {
-    "file": "suspense_2.mp3",
-    "mood": "suspense",
-    "bpm": 75,
-    "energy": 0.45,
-    "duration": 40,
-    "best_for": [
-      "film_recap_ai_images"
-    ],
-    "license": "CC0 (synthesized original)"
-  },
-  {
-    "file": "melancholic_1.mp3",
-    "mood": "melancholic",
-    "bpm": 70,
-    "energy": 0.35,
-    "duration": 40,
-    "best_for": [
-      "quote_viral"
-    ],
-    "license": "CC0 (synthesized original)"
-  },
-  {
-    "file": "melancholic_2.mp3",
-    "mood": "melancholic",
-    "bpm": 65,
-    "energy": 0.35,
-    "duration": 40,
-    "best_for": [
-      "quote_viral"
-    ],
-    "license": "CC0 (synthesized original)"
-  },
-  {
-    "file": "ambient_1.mp3",
-    "mood": "ambient",
-    "bpm": 70,
-    "energy": 0.3,
-    "duration": 40,
-    "best_for": [
-      "quote_viral"
-    ],
-    "license": "CC0 (synthesized original)"
-  },
-  {
-    "file": "ambient_2.mp3",
-    "mood": "ambient",
-    "bpm": 68,
-    "energy": 0.3,
-    "duration": 40,
-    "best_for": [
-      "quote_viral"
-    ],
-    "license": "CC0 (synthesized original)"
-  },
-  {
-    "file": "lofi_1.mp3",
-    "mood": "lofi",
-    "bpm": 85,
-    "energy": 0.4,
-    "duration": 40,
-    "best_for": [
-      "quote_viral"
-    ],
-    "license": "CC0 (synthesized original)"
-  },
-  {
-    "file": "lofi_2.mp3",
-    "mood": "lofi",
-    "bpm": 82,
-    "energy": 0.4,
-    "duration": 40,
-    "best_for": [
-      "quote_viral"
-    ],
-    "license": "CC0 (synthesized original)"
-  },
-  {
-    "file": "upbeat_1.mp3",
-    "mood": "upbeat",
-    "bpm": 120,
     "energy": 0.7,
-    "duration": 40,
-    "best_for": [
-      "sports_highlights"
-    ],
-    "license": "CC0 (synthesized original)"
+    "duration": 39.6,
+    "source": "FreePD: Epic/Fanfare X.mp3",
+    "license": "CC0 1.0 (public domain — free for commercial/monetized use, no attribution)"
   },
   {
-    "file": "upbeat_2.mp3",
-    "mood": "upbeat",
-    "bpm": 124,
-    "energy": 0.7,
-    "duration": 40,
-    "best_for": [
-      "sports_highlights"
-    ],
-    "license": "CC0 (synthesized original)"
-  },
-  {
-    "file": "energetic_1.mp3",
-    "mood": "energetic",
-    "bpm": 128,
-    "energy": 0.85,
-    "duration": 40,
-    "best_for": [
-      "sports_highlights"
-    ],
-    "license": "CC0 (synthesized original)"
-  },
-  {
-    "file": "energetic_2.mp3",
-    "mood": "energetic",
-    "bpm": 132,
-    "energy": 0.85,
-    "duration": 40,
-    "best_for": [
-      "sports_highlights"
-    ],
-    "license": "CC0 (synthesized original)"
-  },
-  {
-    "file": "action_1.mp3",
+    "file": "freepd_action_1.mp3",
     "mood": "action",
     "bpm": 140,
     "energy": 0.9,
-    "duration": 40,
-    "best_for": [
-      "sports_highlights"
-    ],
-    "license": "CC0 (synthesized original)"
+    "duration": 77.7,
+    "source": "FreePD: Epic/Battle Ready.mp3",
+    "license": "CC0 1.0 (public domain — free for commercial/monetized use, no attribution)"
   },
   {
-    "file": "action_2.mp3",
+    "file": "freepd_action_2.mp3",
     "mood": "action",
     "bpm": 145,
-    "energy": 0.95,
-    "duration": 40,
-    "best_for": [
-      "sports_highlights"
-    ],
-    "license": "CC0 (synthesized original)"
+    "energy": 0.9,
+    "duration": 129.2,
+    "source": "FreePD: Electronic/Chronos.mp3",
+    "license": "CC0 1.0 (public domain — free for commercial/monetized use, no attribution)"
   },
   {
-    "file": "uplifting_1.mp3",
-    "mood": "upbeat",
-    "bpm": 115,
-    "energy": 0.65,
-    "duration": 40,
-    "best_for": [
-      "sports_highlights",
-      "quote_viral"
-    ],
-    "license": "CC0 (synthesized original)"
+    "file": "freepd_suspense_1.mp3",
+    "mood": "suspense",
+    "bpm": 80,
+    "energy": 0.4,
+    "duration": 54.7,
+    "source": "FreePD: Horror/Nightmare.mp3",
+    "license": "CC0 1.0 (public domain — free for commercial/monetized use, no attribution)"
   },
   {
-    "file": "calm_1.mp3",
-    "mood": "ambient",
+    "file": "freepd_suspense_2.mp3",
+    "mood": "suspense",
+    "bpm": 75,
+    "energy": 0.4,
+    "duration": 55.0,
+    "source": "FreePD: Horror/Footsteps in the Attic.mp3",
+    "license": "CC0 1.0 (public domain — free for commercial/monetized use, no attribution)"
+  },
+  {
+    "file": "freepd_tense_1.mp3",
+    "mood": "tense",
+    "bpm": 70,
+    "energy": 0.4,
+    "duration": 124.1,
+    "source": "FreePD: Horror/Alien Spaceship Atmosphere.mp3",
+    "license": "CC0 1.0 (public domain — free for commercial/monetized use, no attribution)"
+  },
+  {
+    "file": "freepd_melancholic_1.mp3",
+    "mood": "melancholic",
+    "bpm": 65,
+    "energy": 0.3,
+    "duration": 88.9,
+    "source": "FreePD: Romance/Landra's Dream.mp3",
+    "license": "CC0 1.0 (public domain — free for commercial/monetized use, no attribution)"
+  },
+  {
+    "file": "freepd_melancholic_2.mp3",
+    "mood": "melancholic",
     "bpm": 60,
-    "energy": 0.25,
-    "duration": 40,
-    "best_for": [
-      "quote_viral"
-    ],
-    "license": "CC0 (synthesized original)"
+    "energy": 0.3,
+    "duration": 114.5,
+    "source": "FreePD: Romance/Amazing Grace.mp3",
+    "license": "CC0 1.0 (public domain — free for commercial/monetized use, no attribution)"
+  },
+  {
+    "file": "freepd_ambient_1.mp3",
+    "mood": "ambient",
+    "bpm": 70,
+    "energy": 0.3,
+    "duration": 140.8,
+    "source": "FreePD: Scoring/Slice of Life.mp3",
+    "license": "CC0 1.0 (public domain — free for commercial/monetized use, no attribution)"
+  },
+  {
+    "file": "freepd_ambient_2.mp3",
+    "mood": "ambient",
+    "bpm": 90,
+    "energy": 0.4,
+    "duration": 37.1,
+    "source": "FreePD: Scoring/City Run.mp3",
+    "license": "CC0 1.0 (public domain — free for commercial/monetized use, no attribution)"
+  },
+  {
+    "file": "freepd_calm_1.mp3",
+    "mood": "calm",
+    "bpm": 68,
+    "energy": 0.2,
+    "duration": 102.3,
+    "source": "FreePD: Romance/Horizon Flare.mp3",
+    "license": "CC0 1.0 (public domain — free for commercial/monetized use, no attribution)"
+  },
+  {
+    "file": "freepd_lofi_1.mp3",
+    "mood": "lofi",
+    "bpm": 82,
+    "energy": 0.4,
+    "duration": 48.1,
+    "source": "FreePD: World/Coy Koi.mp3",
+    "license": "CC0 1.0 (public domain — free for commercial/monetized use, no attribution)"
+  },
+  {
+    "file": "freepd_lofi_2.mp3",
+    "mood": "lofi",
+    "bpm": 85,
+    "energy": 0.4,
+    "duration": 37.4,
+    "source": "FreePD: World/Forest Frolic Loop.mp3",
+    "license": "CC0 1.0 (public domain — free for commercial/monetized use, no attribution)"
+  },
+  {
+    "file": "freepd_upbeat_1.mp3",
+    "mood": "upbeat",
+    "bpm": 120,
+    "energy": 0.7,
+    "duration": 114.3,
+    "source": "FreePD: Upbeat/And Just Like That.mp3",
+    "license": "CC0 1.0 (public domain — free for commercial/monetized use, no attribution)"
+  },
+  {
+    "file": "freepd_upbeat_2.mp3",
+    "mood": "upbeat",
+    "bpm": 124,
+    "energy": 0.7,
+    "duration": 136.6,
+    "source": "FreePD: Upbeat/From Page to Practice.mp3",
+    "license": "CC0 1.0 (public domain — free for commercial/monetized use, no attribution)"
+  },
+  {
+    "file": "freepd_uplifting_1.mp3",
+    "mood": "uplifting",
+    "bpm": 115,
+    "energy": 0.7,
+    "duration": 65.7,
+    "source": "FreePD: Upbeat/Stereotype News.mp3",
+    "license": "CC0 1.0 (public domain — free for commercial/monetized use, no attribution)"
+  },
+  {
+    "file": "freepd_energetic_1.mp3",
+    "mood": "energetic",
+    "bpm": 128,
+    "energy": 0.8,
+    "duration": 116.7,
+    "source": "FreePD: Electronic/Hippety Hop.mp3",
+    "license": "CC0 1.0 (public domain — free for commercial/monetized use, no attribution)"
+  },
+  {
+    "file": "freepd_energetic_2.mp3",
+    "mood": "energetic",
+    "bpm": 130,
+    "energy": 0.8,
+    "duration": 76.9,
+    "source": "FreePD: Electronic/Bit Bit Loop.mp3",
+    "license": "CC0 1.0 (public domain — free for commercial/monetized use, no attribution)"
+  },
+  {
+    "file": "freepd_energetic_3.mp3",
+    "mood": "energetic",
+    "bpm": 124,
+    "energy": 0.8,
+    "duration": 46.2,
+    "source": "FreePD: Electronic/Backbeat.mp3",
+    "license": "CC0 1.0 (public domain — free for commercial/monetized use, no attribution)"
   }
 ]

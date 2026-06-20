@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from datetime import datetime
 
 from backend.database import SessionLocal
@@ -40,9 +41,12 @@ async def _with_retry(fn, *args, label="upload", **kwargs) -> dict:
         if result.get("ok"):
             return result
         last = result
-        # Don't retry terminal states (approval/quota/auth/config).
+        # Don't retry terminal states (approval/quota/auth/config/missing media).
+        # Retrying these never succeeds and — critically — sleeping through the
+        # backoff while holding a worker slot is what jammed the pipeline.
         if result.get("status") in {"tiktok_pending_approval", "quota_exceeded",
-                                     "auth_error", "not_configured", "library_missing"}:
+                                     "auth_error", "not_configured", "library_missing",
+                                     "file_missing", "no_short"}:
             return result
         if attempt < 2:
             await asyncio.sleep(2 if fast else RETRY_BACKOFFS[attempt])
@@ -166,6 +170,15 @@ async def run_publish(job_id: int) -> dict:
 
         job.publish_status = results
         job.status = _overall_status(results)
+        # Surface a human, actionable reason on the job row instead of a cryptic
+        # "[Errno 2] No such file..." so the user knows to REGENERATE, not retry.
+        if job.status == JobStatus.ERROR:
+            if any((r or {}).get("status") == "file_missing" for r in results.values()):
+                job.error_message = _FILE_GONE
+            else:
+                first_err = next((r.get("error") for r in results.values()
+                                  if isinstance(r, dict) and r.get("error")), None)
+                job.error_message = (first_err or "Falha na publicação.")[:500]
         db.commit()
         _emit(job_id, status=job.status.value, results=results)
 
@@ -184,7 +197,7 @@ async def run_publish(job_id: int) -> dict:
         logger.exception("run_publish failed for job %s", job_id)
         if job is not None:
             try:
-                job.publish_status = results or None
+                job.publish_status = results or {}
                 job.status = JobStatus.ERROR
                 job.error_message = f"Falha na publicação: {exc}"[:500]
                 db.commit()
@@ -196,7 +209,13 @@ async def run_publish(job_id: int) -> dict:
         db.close()
 
 
+_FILE_GONE = ("Os arquivos do vídeo foram perdidos (o servidor reiniciou). "
+              "Gere o vídeo novamente (↻) para poder publicar.")
+
+
 async def self_publish_youtube(job, seo, creds, publish_at, shorts, privacy="private") -> dict:
+    if not (job.main_video_path and os.path.exists(job.main_video_path)):
+        return {"ok": False, "platform": "youtube", "status": "file_missing", "error": _FILE_GONE}
     y = seo.get("youtube", {})
     main = await _with_retry(
         yt.upload_video, job.main_video_path, y.get("title", job.title),
@@ -222,6 +241,8 @@ async def self_publish_tiktok(seo, creds, shorts, privacy="private") -> dict:
     target = _pick_short(shorts, prefer=4) or _pick_short(shorts, prefer=2)
     if not target:
         return {"ok": False, "platform": "tiktok", "status": "no_short", "error": "Sem Short para TikTok."}
+    if not os.path.exists(target):
+        return {"ok": False, "platform": "tiktok", "status": "file_missing", "error": _FILE_GONE}
     return await _with_retry(tk.upload_video, target, caption, creds, privacy=privacy, label="tiktok")
 
 
@@ -232,6 +253,8 @@ async def self_publish_instagram(seo, creds, shorts) -> dict:
     target = _pick_short(shorts, prefer=3) or _pick_short(shorts, prefer=2)
     if not target:
         return {"ok": False, "platform": "instagram", "status": "no_short", "error": "Sem Short para IG."}
+    if not os.path.exists(target):
+        return {"ok": False, "platform": "instagram", "status": "file_missing", "error": _FILE_GONE}
     return await _with_retry(ig.upload_reel, target, f"{caption}\n\n{hashtags}".strip(), creds, label="ig")
 
 

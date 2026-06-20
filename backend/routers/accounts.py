@@ -35,6 +35,9 @@ class AccountUpdate(BaseModel):
     preferred_voice: str | None = None
     content_tone: str | None = None
     content_language: str | None = None
+    music_style: str | None = None  # calm | balanced | energetic
+    ride_trends: bool | None = None          # 🔥 Momento em alta (opt-in)
+    trends_per_cycle: int | None = None      # 1..2
     preferred_templates: list[str] | None = None
     avoid_topics: list[str] | None = None
     schedule: dict | None = None
@@ -77,6 +80,8 @@ def update_account(account_id: int, payload: AccountUpdate, db: Session = Depend
     if not acct:
         raise HTTPException(404, "conta não encontrada")
     for k, v in payload.model_dump(exclude_none=True).items():
+        if k == "trends_per_cycle":
+            v = max(1, min(2, int(v)))  # never let a channel flood: cap at 2/cycle
         setattr(acct, k, v)
     db.commit()
     db.refresh(acct)

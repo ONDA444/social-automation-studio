@@ -1,5 +1,5 @@
 """
-Unified LLM client with automatic fallback: Groq -> Gemini -> Ollama.
+Unified LLM client with automatic fallback: Groq -> Gemini -> OpenRouter -> Ollama.
 
 Uses plain HTTP (httpx) so we don't depend on three SDKs staying in sync.
 Every call returns text; `complete_json` additionally parses a JSON object out
@@ -67,6 +67,10 @@ def _limiter(provider: str) -> _RateLimiter:
 
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 GROQ_MODEL = "llama-3.3-70b-versatile"
+# When the 70b model is rate-limited (429) but the account still has quota, the
+# fast 8b model often answers — try it before tripping the breaker / falling to
+# the next provider, so a momentary 70b limit doesn't cost the whole script.
+GROQ_FALLBACK_MODEL = "llama-3.1-8b-instant"
 # gemini-1.5-flash was retired (404 on this key) — the Gemini fallback silently
 # never ran. 2.5-flash is current and supports Google Search grounding.
 GEMINI_MODEL = "gemini-2.5-flash"
@@ -85,7 +89,7 @@ class LLMUnavailable(Exception):
     """No configured LLM provider succeeded."""
 
 
-async def _try_groq(system: str | None, prompt: str, json_mode: bool, max_tokens: int) -> str | None:
+async def _try_groq(system: str | None, prompt: str, json_mode: bool, max_tokens: int, fast: bool = False) -> str | None:
     global _groq_blocked_until
     if not settings.groq_api_key:
         return None
@@ -96,7 +100,11 @@ async def _try_groq(system: str | None, prompt: str, json_mode: bool, max_tokens
     if system:
         messages.append({"role": "system", "content": system})
     messages.append({"role": "user", "content": prompt})
-    payload: dict = {"model": GROQ_MODEL, "messages": messages, "max_tokens": max_tokens, "temperature": 0.8}
+    # fast=True → use the lighter 8b model as PRIMARY to spare the scarce 70b daily
+    # quota for the script itself; cheap creative rewrites (hook/retention/shorts)
+    # don't need 70b. This directly relieves the exhaustion behind "LLM indisponível".
+    primary = GROQ_FALLBACK_MODEL if fast else GROQ_MODEL
+    payload: dict = {"model": primary, "messages": messages, "max_tokens": max_tokens, "temperature": 0.8}
     if json_mode:
         payload["response_format"] = {"type": "json_object"}
     # Each video makes ~8 LLM calls in seconds (script + growth agents + SEO); the
@@ -126,14 +134,31 @@ async def _try_groq(system: str | None, prompt: str, json_mode: bool, max_tokens
         except Exception as exc:  # noqa: BLE001
             logger.warning("Groq failed: %s", exc)
             return None
-    # Still rate-limited after retries — open the circuit so the next ~cooldown of
-    # calls skip Groq and use Gemini directly.
+    # 70b still rate-limited — try the fast 8b model once (separate capacity) before
+    # giving up on Groq. Skipped when we were ALREADY on 8b (fast=True): no heavier
+    # Groq model left to try, so fall straight through to the next provider.
+    if not fast:
+        try:
+            await _limiter("groq").acquire()
+            async with httpx.AsyncClient(timeout=60) as client:
+                r = await client.post(
+                    GROQ_URL,
+                    headers={"Authorization": f"Bearer {settings.groq_api_key}"},
+                    json={**payload, "model": GROQ_FALLBACK_MODEL},
+                )
+                if r.status_code != 429:
+                    r.raise_for_status()
+                    return r.json()["choices"][0]["message"]["content"]
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Groq %s failed: %s", GROQ_FALLBACK_MODEL, exc)
+    # Both Groq models rate-limited — open the circuit so the next ~cooldown of
+    # calls skip Groq and use the next provider directly.
     _groq_blocked_until = time.monotonic() + _GROQ_COOLDOWN_S
-    logger.warning("Groq rate-limited; pulando Groq por %.0fs (usando Gemini).", _GROQ_COOLDOWN_S)
+    logger.warning("Groq rate-limited; pulando Groq por %.0fs (usando próximo provedor).", _GROQ_COOLDOWN_S)
     return None
 
 
-async def _try_gemini(system: str | None, prompt: str, json_mode: bool, max_tokens: int) -> str | None:
+async def _try_gemini(system: str | None, prompt: str, json_mode: bool, max_tokens: int, fast: bool = False) -> str | None:
     if not settings.gemini_api_key:
         return None
     full = f"{system}\n\n{prompt}" if system else prompt
@@ -141,7 +166,9 @@ async def _try_gemini(system: str | None, prompt: str, json_mode: bool, max_toke
     if json_mode:
         gen_cfg["responseMimeType"] = "application/json"
     payload = {"contents": [{"parts": [{"text": full}]}], "generationConfig": gen_cfg}
-    for model in GEMINI_COMPLETION_MODELS:
+    # fast=True → prefer the lite/flash models first (cheaper, higher free limits).
+    models = ["gemini-2.5-flash-lite", "gemini-2.0-flash"] if fast else GEMINI_COMPLETION_MODELS
+    for model in models:
         try:
             await _limiter("gemini").acquire()
             async with httpx.AsyncClient(timeout=60) as client:
@@ -162,7 +189,62 @@ async def _try_gemini(system: str | None, prompt: str, json_mode: bool, max_toke
     return None
 
 
-async def _try_ollama(system: str | None, prompt: str, json_mode: bool, max_tokens: int) -> str | None:
+OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+# Free models on OpenRouter — their quota is INDEPENDENT of Groq/Gemini, so when
+# both of those free tiers are exhausted (the recurring "LLM indisponível"), these
+# keep scripts flowing. Tried in order; each ':free' model has its own availability,
+# so a 429/5xx on one falls through to the next instead of failing the call.
+# Slugs ROT regularly: OpenRouter retires ':free' models without notice (a retired
+# slug 404s). Keep this list to models confirmed live and spread across DISTINCT
+# providers (Meta/OpenAI/Qwen/NVIDIA/Google) so a single provider's upstream 429
+# falls through to a different provider instead of stalling the whole fallback.
+# Ordered strong→light; fast=True reverses it to try the lightest first.
+OPENROUTER_MODELS = [
+    "meta-llama/llama-3.3-70b-instruct:free",
+    "openai/gpt-oss-120b:free",
+    "qwen/qwen3-next-80b-a3b-instruct:free",
+    "nvidia/nemotron-3-super-120b-a12b:free",
+    "google/gemma-4-31b-it:free",
+    "meta-llama/llama-3.2-3b-instruct:free",
+]
+
+
+async def _try_openrouter(system: str | None, prompt: str, json_mode: bool, max_tokens: int, fast: bool = False) -> str | None:
+    if not settings.openrouter_api_key:
+        return None
+    messages = []
+    if system:
+        messages.append({"role": "system", "content": system})
+    messages.append({"role": "user", "content": prompt})
+    headers = {"Authorization": f"Bearer {settings.openrouter_api_key}"}
+    base: dict = {"messages": messages, "max_tokens": max_tokens, "temperature": 0.8}
+    if json_mode:
+        base["response_format"] = {"type": "json_object"}
+    # fast=True → try the lighter 8b free model first (last in the list).
+    models = list(reversed(OPENROUTER_MODELS)) if fast else OPENROUTER_MODELS
+    for model in models:
+        try:
+            async with httpx.AsyncClient(timeout=90) as client:
+                r = await client.post(OPENROUTER_URL, headers=headers, json={**base, "model": model})
+                # 400/401/403/404 happen when a :free model isn't available to the
+                # account (commonly: the data policy isn't enabled at
+                # openrouter.ai/settings/privacy) — skip to the next model instead of
+                # blowing up, so one bad model never sinks the whole provider.
+                if r.status_code in (400, 401, 403, 404, 429, 502, 503):
+                    logger.info("OpenRouter %s %s — tentando próximo modelo.", model, r.status_code)
+                    continue
+                r.raise_for_status()
+                data = r.json()
+                content = (data.get("choices") or [{}])[0].get("message", {}).get("content")
+                if content:
+                    return content
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("OpenRouter %s failed: %s", model, exc)
+            continue
+    return None
+
+
+async def _try_ollama(system: str | None, prompt: str, json_mode: bool, max_tokens: int, fast: bool = False) -> str | None:
     full = f"{system}\n\n{prompt}" if system else prompt
     payload = {"model": "llama3.1", "prompt": full, "stream": False}
     if json_mode:
@@ -182,15 +264,22 @@ async def complete(
     system: str | None = None,
     json_mode: bool = False,
     max_tokens: int = 2048,
+    fast: bool = False,
 ) -> str:
-    """Return completion text from the first available provider."""
-    for provider in (_try_groq, _try_gemini, _try_ollama):
-        text = await provider(system, prompt, json_mode, max_tokens)
+    """Return completion text from the first available provider.
+
+    fast=True routes the call to the lighter/cheaper model of each provider (Groq
+    8b, Gemini flash-lite, OpenRouter 8b) — use it for short, formulaic calls
+    (hooks, captions, hashtags) so they don't burn the scarce strong-model quota
+    that the script itself needs.
+    """
+    for provider in (_try_groq, _try_gemini, _try_openrouter, _try_ollama):
+        text = await provider(system, prompt, json_mode, max_tokens, fast)
         if text:
             return text
     raise LLMUnavailable(
-        "Nenhum provedor LLM disponível (configure GROQ_API_KEY ou GEMINI_API_KEY, "
-        "ou rode Ollama localmente)."
+        "Nenhum provedor LLM disponível (configure GROQ_API_KEY, GEMINI_API_KEY ou "
+        "OPENROUTER_API_KEY, ou rode Ollama localmente)."
     )
 
 
@@ -213,20 +302,36 @@ async def complete_json(
     prompt: str,
     system: str | None = None,
     max_tokens: int = 2048,
+    fast: bool = False,
 ) -> dict:
-    raw = await complete(prompt, system=system, json_mode=True, max_tokens=max_tokens)
-    return extract_json(raw)
+    raw = await complete(prompt, system=system, json_mode=True, max_tokens=max_tokens, fast=fast)
+    try:
+        return extract_json(raw)
+    except (json.JSONDecodeError, ValueError) as exc:
+        # Weak free models (especially the 3B 'fast' tier) sometimes emit truncated or
+        # malformed JSON. A raw JSONDecodeError would bubble up as an uncaught crash;
+        # instead treat it like the provider being unavailable so every caller degrades
+        # the SAME graceful way it already handles LLMUnavailable (the scriptwriter
+        # retries for real content; growth agents fall back to their offline path).
+        snippet = (raw or "").replace("\n", " ")[:180]
+        logger.warning("complete_json: JSON inválido do modelo (%d chars) — tratando como indisponível: %s",
+                       len(raw or ""), snippet)
+        raise LLMUnavailable("modelo retornou JSON inválido") from exc
 
 
 async def research(query: str, max_tokens: int = 1200) -> dict:
     """Grounded factual lookup via Gemini + Google Search.
 
-    Returns {"facts": str, "sources": [{"title","uri"}], "grounded": bool}. NEVER
-    raises — on any failure returns grounded=False with empty facts so the caller
-    can proceed in 'cautious' mode (state nothing it can't verify). This is what
-    stops the scriptwriter from inventing scores/dates/names for real events.
+    Returns {"facts": str, "sources": [{"title","uri"}], "grounded": bool,
+    "unavailable": bool}. NEVER raises. `unavailable` distinguishes two very different
+    "grounded=False" cases so the caller can react correctly:
+      * unavailable=False — grounding is not configured / not needed (no Gemini key,
+        empty query). Permanent; proceed in 'cautious' mode (retrying won't help).
+      * unavailable=True  — Gemini was TRIED but every model 429'd / errored. Transient;
+        a factual/trending topic should RETRY rather than ship an ungrounded (generic)
+        script. This is the recurring 429 storm that produced off-topic videos.
     """
-    empty = {"facts": "", "sources": [], "grounded": False}
+    empty = {"facts": "", "sources": [], "grounded": False, "unavailable": False}
     if not settings.gemini_api_key or not query.strip():
         return empty
     prompt = (
@@ -264,13 +369,15 @@ async def research(query: str, max_tokens: int = 1200) -> dict:
                     if w.get("uri"):
                         sources.append({"title": w.get("title", ""), "uri": w["uri"]})
                 if facts:
-                    return {"facts": facts, "sources": sources, "grounded": True}
+                    return {"facts": facts, "sources": sources, "grounded": True,
+                            "unavailable": False}
         except Exception as exc:  # noqa: BLE001
             last_exc = exc
             continue
     logger.warning("Gemini research (grounding) unavailable (last: %s)", last_exc)
-    return empty
+    # Every model was tried and none answered (429 / network) → transient outage.
+    return {**empty, "unavailable": True}
 
 
 def available() -> bool:
-    return bool(settings.groq_api_key or settings.gemini_api_key)
+    return bool(settings.groq_api_key or settings.gemini_api_key or settings.openrouter_api_key)

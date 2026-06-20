@@ -384,6 +384,16 @@ class ScriptwriterAgent(BaseAgent):
         research = research or self.ctx_get("research") or {}
         video_format = video_format or self.ctx_get("format") or "long"
 
+        # A "momento em alta" video is factual and time-sensitive. If grounding was only
+        # TRANSIENTLY unavailable (Gemini 429 storm — not "skipped by design"), writing an
+        # ungrounded script is exactly what produced the off-topic moment the user saw.
+        # Reject so BaseAgent retries (and _job_retry_errored resurrects later when the
+        # quota reopens) instead of shipping a generic, off-theme script.
+        if (research.get("unavailable") and not settings.allow_offline_script
+                and self.ctx_get("is_trending")):
+            self.emit("progress", "Grounding do momento indisponível — re-tentando (sem publicar genérico)", progress=18)
+            raise AgentError("Grounding indisponível para vídeo do momento — re-tentando para conteúdo factual")
+
         self.emit("progress", f"Gerando roteiro ({content_type}, {video_format}, modo={mode})", progress=20)
 
         try:
@@ -443,7 +453,20 @@ class ScriptwriterAgent(BaseAgent):
         # Native short: keep it tight (vertical <60s). Cap scenes and recompute.
         script["format"] = video_format
         if video_format == "short" and len(scenes) > 6:
-            scenes = scenes[:6]
+            # Trim to a Short WITHOUT decapitating the payoff: a blind scenes[:6]
+            # drops the ending (payoff + CTA) — the completion-rate signal that most
+            # drives the Shorts feed. Keep the hook (first) + resolution (last two),
+            # then fill the middle preferring is_highlight scenes, preserving order.
+            n = len(scenes)
+            keep = {0, n - 2, n - 1}
+            middle = list(range(1, n - 2))
+            ordered = ([i for i in middle if scenes[i].get("is_highlight")]
+                       + [i for i in middle if not scenes[i].get("is_highlight")])
+            for i in ordered:
+                if len(keep) >= 6:
+                    break
+                keep.add(i)
+            scenes = [scenes[i] for i in sorted(keep)]
             script["scenes"] = scenes
             if content_type != "quote_viral":
                 script["narration_text"] = " ".join(
@@ -456,7 +479,9 @@ class ScriptwriterAgent(BaseAgent):
         if not settings.allow_offline_script:
             from backend.agents.quality_gate import assess
 
-            ok, reason = assess(script)
+            forbidden = ((self.ctx_get("channel_config") or {})
+                         .get("guardrails", {}).get("forbidden_topics") or [])
+            ok, reason = assess(script, topic=theme, forbidden_topics=forbidden)
             if not ok:
                 self.emit("progress", f"Roteiro rejeitado pelo controle de qualidade: {reason}", progress=30)
                 raise AgentError(f"Roteiro genérico rejeitado: {reason}")
@@ -477,6 +502,15 @@ class ScriptwriterAgent(BaseAgent):
             )
 
         facts = (research or {}).get("facts", "").strip()
+        # Time-sensitive content (live scores, breaking/"do momento") is dangerous
+        # to write ungrounded — an unverified date/result is misinformation.
+        # Evergreen content (tutorials, lists, curiosities, recaps) is NOT: the
+        # model's own general knowledge IS the content, so ungrounded ≠ "stay
+        # vague". The old code treated EVERY ungrounded topic as time-sensitive,
+        # forcing hollow hedging ("é importante", "muda tudo") on tutorial/tech
+        # videos — the main cause of generic output.
+        _TIME_SENSITIVE = {"sports_highlights", "reaction_commentary"}
+        is_time_sensitive = content_type in _TIME_SENSITIVE or bool(self.ctx_get("is_trending"))
         if (research or {}).get("grounded") and facts:
             facts_block = (
                 "\n\n=== FATOS VERIFICADOS (FONTE DA VERDADE) ===\n"
@@ -485,13 +519,24 @@ class ScriptwriterAgent(BaseAgent):
                 "uma informação não estiver aqui, NÃO a afirme.\n" + facts + "\n"
                 "=== FIM DOS FATOS ===\n"
             )
+        elif is_time_sensitive:
+            facts_block = (
+                "\n\n[ATENÇÃO] SEM FATOS VERIFICADOS para este tema sensível ao tempo. "
+                "É PROIBIDO inventar resultados, placares, datas, nomes, números ou dizer "
+                "que algo 'aconteceu hoje/ontem'. Se o tema pede um resultado/evento recente "
+                "que você NÃO pode confirmar, não finja saber: fale da expectativa, do contexto "
+                "e da importância de forma geral e atemporal, deixando claro que o desfecho não "
+                "é afirmado.\n"
+            )
         else:
             facts_block = (
-                "\n\n[ATENÇÃO] SEM FATOS VERIFICADOS para este tema. É PROIBIDO inventar "
-                "resultados, placares, datas, nomes, números ou dizer que algo 'aconteceu "
-                "hoje/ontem'. Se o tema pede um resultado/evento recente que você NÃO pode "
-                "confirmar, não finja saber: fale da expectativa, do contexto e da importância "
-                "de forma geral e atemporal, deixando claro que o desfecho não é afirmado.\n"
+                "\n\n[CONTEÚDO EVERGREEN] Não há pesquisa da web, mas este é um tema de "
+                "CONHECIMENTO GERAL (tutorial, dica, lista, curiosidade, recap) — não é "
+                "notícia. USE seu conhecimento para entregar informação CONCRETA e ESPECÍFICA: "
+                "passos reais, configurações, números, nomes, exemplos acionáveis. É PROIBIDO "
+                "ser vago ou genérico ('é importante', 'muda tudo', 'otimização é essencial') — "
+                "entregue o COMO, com detalhe que o espectador consiga aplicar. Evite apenas "
+                "afirmar eventos/datas/resultados RECENTES que você não pode confirmar.\n"
             )
 
         # Channel block — read from ctx if the orchestrator stored it; else minimal.
@@ -589,14 +634,23 @@ GERE narration_text (COM marcadores) E tts_text (LIMPO, sem nenhum colchete)."""
         # like [ENFASE]{texto} and {x} that .format() would treat as fields
         # (KeyError 'texto'). Only {lang} is a real placeholder.
         system = with_style(SYSTEM.replace("{lang}", _lang_name(language)))
-        return await llm.complete_json(prompt, system=system, max_tokens=4500)
+        # 3000 fits even a 14-scene recap (target ~400-700 words ≈ 2.2-2.6k tokens
+        # incl. JSON + visual prompts); 4500 was padding that burned the scarce free
+        # quota faster. Don't drop below ~2800 or long scripts truncate.
+        return await llm.complete_json(prompt, system=system, max_tokens=3000)
 
     @classmethod
     def _detect_content_type(cls, theme: str) -> str:
         """Keyword-based auto-detection — picks the best content_type for a theme."""
         t = f" {(theme or '').lower()} "
-        # Sports: reuse the existing domain keywords (most specific signal)
-        sport_kws = cls._DOMAIN_KEYWORDS.get("soccer", []) + cls._DOMAIN_KEYWORDS.get("basketball", [])
+        # Sports: reuse the existing domain keywords (most specific signal), plus
+        # explicit extras the domain map misses — American football / NFL / generic
+        # "football" were falling through to film_recap (the off-theme bug).
+        sport_kws = (cls._DOMAIN_KEYWORDS.get("soccer", [])
+                     + cls._DOMAIN_KEYWORDS.get("basketball", [])
+                     + ["futebol americano", "american football", "nfl", "super bowl",
+                        "futebol", "vôlei", "volei", "tênis", "tenis", "mma", "ufc",
+                        "fórmula 1", "formula 1", "f1", "olimpíada", "olimpiada"])
         if any(k in t for k in sport_kws):
             return "sports_highlights"
         # Ranking / top N

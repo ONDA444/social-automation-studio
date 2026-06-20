@@ -23,12 +23,18 @@ from backend.config import settings
 
 logger = logging.getLogger("studio.dispatch")
 
-# Local-dev concurrency cap for the in-process path (1 render at a time).
-_MAX_INPROC = 1
+# Local-dev concurrency cap for the in-process path. Rendering is CPU/RAM heavy
+# (ffmpeg) and MUST stay serial (1 at a time). Publishing is network I/O — give it
+# its OWN small pool so a slow or stuck upload can NEVER starve the render slot
+# (a missing-file publish used to hold the single shared slot for minutes, leaving
+# freshly-created jobs stuck in QUEUED with "nothing generating").
+_MAX_RENDER = 1
+_MAX_PUBLISH = 2
 
 _worker_loop: asyncio.AbstractEventLoop | None = None
 _worker_lock = threading.Lock()
-_sem: asyncio.Semaphore | None = None
+_render_sem: asyncio.Semaphore | None = None
+_publish_sem: asyncio.Semaphore | None = None
 _pending: set = set()
 
 # Cache the Redis probe briefly: each probe costs ~0.4s when Redis is down, and
@@ -39,7 +45,7 @@ _REDIS_TTL = 5.0
 
 def _ensure_worker() -> asyncio.AbstractEventLoop:
     """Lazily start the dedicated worker loop on a daemon thread."""
-    global _worker_loop, _sem
+    global _worker_loop, _render_sem, _publish_sem
     if _worker_loop is not None:
         return _worker_loop
     with _worker_lock:
@@ -53,13 +59,14 @@ def _ensure_worker() -> asyncio.AbstractEventLoop:
 
         threading.Thread(target=_run, daemon=True, name="studio-pipeline-worker").start()
 
-        # Create the Semaphore *inside* this loop so `async with _sem` binds to it.
-        async def _mk() -> asyncio.Semaphore:
-            return asyncio.Semaphore(_MAX_INPROC)
+        # Create the Semaphores *inside* this loop so `async with` binds to it.
+        async def _mk() -> tuple[asyncio.Semaphore, asyncio.Semaphore]:
+            return asyncio.Semaphore(_MAX_RENDER), asyncio.Semaphore(_MAX_PUBLISH)
 
-        _sem = asyncio.run_coroutine_threadsafe(_mk(), loop).result(timeout=5)
+        _render_sem, _publish_sem = asyncio.run_coroutine_threadsafe(_mk(), loop).result(timeout=5)
         _worker_loop = loop
-        logger.info("In-process pipeline worker started (serial, cap=%d).", _MAX_INPROC)
+        logger.info("In-process pipeline worker started (render cap=%d, publish cap=%d).",
+                    _MAX_RENDER, _MAX_PUBLISH)
     return _worker_loop
 
 
@@ -133,13 +140,17 @@ def _run_inprocess(run: str, job_id: int) -> None:
 
 
 async def _guarded(run: str, job_id: int) -> None:
-    assert _sem is not None
-    async with _sem:
-        if run == "pipeline":
+    # Render and publish use SEPARATE semaphores: a slow/stuck upload holds only
+    # the publish pool and never blocks the render slot (and vice-versa).
+    if run == "pipeline":
+        assert _render_sem is not None
+        async with _render_sem:
             from backend.agents.orchestrator import run_pipeline
 
             await run_pipeline(job_id)
-        else:
+    else:
+        assert _publish_sem is not None
+        async with _publish_sem:
             from backend.agents.publisher import run_publish
 
             await run_publish(job_id)

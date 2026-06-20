@@ -52,8 +52,22 @@ class FFmpegError(RuntimeError):
     pass
 
 
-def _run(cmd: list[str], cwd: str | None = None) -> None:
-    proc = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, encoding="utf-8", errors="replace")
+# Hard ceiling per ffmpeg invocation. A healthy encode of one clip/segment is far
+# under this; the point is that a HUNG ffmpeg (stalled filter, bad input) can never
+# hold the single render slot forever — it's killed and surfaced as a retryable error.
+_FFMPEG_TIMEOUT = 1200  # 20 min
+
+
+def _run(cmd: list[str], cwd: str | None = None, timeout: int = _FFMPEG_TIMEOUT) -> None:
+    try:
+        proc = subprocess.run(
+            cmd, cwd=cwd, capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        # subprocess.run already killed the child; turn the stall into a retryable
+        # FFmpegError so BaseAgent can retry/ERROR and the render semaphore is freed.
+        raise FFmpegError(f"ffmpeg timed out after {timeout}s (killed): {' '.join(cmd[:3])}…")
     if proc.returncode != 0:
         tail = (proc.stderr or "")[-1500:]
         raise FFmpegError(f"ffmpeg failed (rc={proc.returncode}):\n{tail}")
@@ -251,13 +265,19 @@ class VideoEditorAgent(BaseAgent):
         loud = fx.loudnorm("youtube")
 
         if narr_path and music_path and not is_silent:
-            # narration + ducked music
+            # narration + ducked music. Resample BOTH inputs to 44.1 kHz first:
+            # TTS comes out at 16/22/24 kHz and the music at 44.1 kHz, and mixing
+            # mismatched rates makes ffmpeg resample implicitly mid-graph — the
+            # source of the grating/robotic artifact. [narr] is reused as the
+            # sidechain trigger and as a mix input.
             cmd = ["ffmpeg", "-y", "-i", narr_path, "-stream_loop", "-1", "-i", music_path,
                    "-filter_complex",
-                   f"[1:a]volume={vol_db}dB[bg];"
-                   f"[bg][0:a]sidechaincompress=threshold=0.03:ratio=8:attack=20:release=300[duck];"
-                   f"[0:a][duck]amix=inputs=2:duration=first:dropout_transition=2,{loud}[a]",
-                   "-map", "[a]", "-t", f"{video_len:.3f}", "-c:a", "aac", "-b:a", "192k", dst.name]
+                   f"[0:a]aresample=44100[narr];"
+                   f"[1:a]aresample=44100,volume={vol_db}dB[bg];"
+                   f"[bg][narr]sidechaincompress=threshold=0.03:ratio=8:attack=20:release=300[duck];"
+                   f"[narr][duck]amix=inputs=2:duration=first:dropout_transition=2,{loud}[a]",
+                   "-map", "[a]", "-t", f"{video_len:.3f}",
+                   "-ar", "44100", "-ac", "2", "-c:a", "aac", "-b:a", "192k", dst.name]
             _run(cmd, cwd=str(work))
             return True
 
@@ -266,14 +286,16 @@ class VideoEditorAgent(BaseAgent):
             # normalize so the track plays at full foreground loudness (the remix
             # follows a music-driven reference with no voice-over).
             cmd = ["ffmpeg", "-y", "-stream_loop", "-1", "-i", music_path,
-                   "-filter_complex", f"[0:a]{loud}[a]",
-                   "-map", "[a]", "-t", f"{video_len:.3f}", "-c:a", "aac", "-b:a", "192k", dst.name]
+                   "-filter_complex", f"[0:a]aresample=44100,{loud}[a]",
+                   "-map", "[a]", "-t", f"{video_len:.3f}",
+                   "-ar", "44100", "-ac", "2", "-c:a", "aac", "-b:a", "192k", dst.name]
             _run(cmd, cwd=str(work))
             return True
 
         # narration only
-        cmd = ["ffmpeg", "-y", "-i", narr_path, "-af", loud,
-               "-t", f"{video_len:.3f}", "-c:a", "aac", "-b:a", "192k", dst.name]
+        cmd = ["ffmpeg", "-y", "-i", narr_path, "-af", f"aresample=44100,{loud}",
+               "-t", f"{video_len:.3f}",
+               "-ar", "44100", "-ac", "2", "-c:a", "aac", "-b:a", "192k", dst.name]
         _run(cmd, cwd=str(work))
         return True
 
@@ -292,7 +314,7 @@ class VideoEditorAgent(BaseAgent):
             out = subprocess.run(
                 ["ffprobe", "-v", "error", "-show_entries", "format=duration",
                  "-of", "default=nw=1:nk=1", str(path)],
-                capture_output=True, text=True,
+                capture_output=True, text=True, timeout=30,
             )
             return float(out.stdout.strip())
         except Exception:

@@ -5,7 +5,8 @@ import { CSS } from '@dnd-kit/utilities'
 import { api, mediaUrl } from '../api'
 import { useWs } from '../App.jsx'
 import AddJobModal from '../components/AddJobModal.jsx'
-import { statusMeta, PLATFORM_META, fmtDate } from '../lib'
+import { PageHeader, EmptyState, StatusBadge } from '../components/ui.jsx'
+import { PLATFORM_META, fmtDate } from '../lib'
 
 const CHANNEL_EDITABLE = new Set(['queued', 'awaiting_approval', 'approved', 'error'])
 
@@ -13,7 +14,6 @@ function Row({ job, accounts, selected, onToggleSelect, onChannelChange, onRetry
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: job.id })
   const [showPlayer, setShowPlayer] = useState(false)
   const [showFullError, setShowFullError] = useState(false)
-  const s = statusMeta(job.status)
   const canEditChannel = CHANNEL_EDITABLE.has(job.status)
   const canRepublish   = job.status === 'approved' || job.status === 'error'
 
@@ -31,7 +31,12 @@ function Row({ job, accounts, selected, onToggleSelect, onChannelChange, onRetry
         <span {...attributes} {...listeners} className="cursor-grab text-text-muted select-none text-lg leading-none shrink-0">⠿</span>
 
         <div className="flex-1 min-w-0" style={{ flexBasis: '180px' }}>
-          <p className="font-medium truncate text-sm leading-tight">{job.title}</p>
+          <p className="font-medium truncate text-sm leading-tight">
+            {job.video_context?.is_trending && (
+              <span className="badge text-[9px] mr-1.5 align-middle" style={{ background: 'rgba(255,182,39,0.16)', color: 'var(--warning)' }}>🔥 do momento</span>
+            )}
+            {job.title}
+          </p>
           <div className="flex items-center gap-1.5 flex-wrap text-[11px] text-text-muted leading-tight">
             {(job.target_platforms || []).map((p) => {
               const m = PLATFORM_META[p]
@@ -41,7 +46,7 @@ function Row({ job, accounts, selected, onToggleSelect, onChannelChange, onRetry
           </div>
         </div>
 
-        <span className="badge shrink-0" style={{ background: s.color + '22', color: s.color }}>{s.label}</span>
+        <StatusBadge status={job.status} />
 
         <select
           className="input text-xs py-1.5 px-2 w-full sm:w-36 shrink-0 order-last sm:order-none"
@@ -106,6 +111,7 @@ function Row({ job, accounts, selected, onToggleSelect, onChannelChange, onRetry
 
 export default function Queue() {
   const [jobs, setJobs]         = useState([])
+  const [loaded, setLoaded]     = useState(false)
   const [accounts, setAccounts] = useState([])
   const [selected, setSelected] = useState(() => new Set())
   const [modal, setModal]       = useState(false)
@@ -113,7 +119,10 @@ export default function Queue() {
   const { count } = useWs()
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }))
 
-  const load = () => api.get('/jobs?limit=200').then((d) => setJobs(d.jobs || [])).catch(() => {})
+  const load = () => api.get('/jobs?limit=200')
+    .then((d) => setJobs(d.jobs || []))
+    .catch(() => {})
+    .finally(() => setLoaded(true))
 
   useEffect(() => { load() }, [])
   useEffect(() => { const t = setTimeout(load, 800); return () => clearTimeout(t) }, [count])
@@ -207,24 +216,21 @@ export default function Queue() {
 
   return (
     <div className="space-y-4 fade-in">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-3">
-          <h2 className="heading text-2xl font-semibold">Fila</h2>
-          <span className="badge" style={{ background: 'rgba(108,92,231,0.15)', color: 'var(--accent)', border: '1px solid rgba(108,92,231,0.25)' }}>
-            {jobs.length}
-          </span>
+      <PageHeader title={
+        <span className="inline-flex items-center gap-2.5">
+          Fila
+          <span className="badge" style={{ background: 'var(--accent-dim)', color: 'var(--accent)', border: '1px solid var(--border)' }}>{jobs.length}</span>
           {errCount > 0 && (
-            <span className="badge" style={{ background: 'rgba(255,71,87,0.12)', color: 'var(--error)', border: '1px solid rgba(255,71,87,0.2)' }}>
+            <span className="badge" style={{ background: 'rgba(255,80,102,0.12)', color: 'var(--error)', border: '1px solid rgba(255,80,102,0.2)' }}>
               {errCount} erro{errCount > 1 ? 's' : ''}
             </span>
           )}
-        </div>
-        <div className="flex gap-2 w-full sm:w-auto">
-          <button className="btn-ghost text-sm flex-1 sm:flex-none" onClick={() => fileRef.current?.click()}>⬆ Importar CSV</button>
-          <input ref={fileRef} type="file" accept=".csv" className="hidden" onChange={importCsv} />
-          <button className="btn-primary text-sm flex-1 sm:flex-none" onClick={() => setModal(true)}>+ Novo vídeo</button>
-        </div>
-      </div>
+        </span>
+      }>
+        <button className="btn btn-ghost text-sm" onClick={() => fileRef.current?.click()}>⬆ Importar CSV</button>
+        <input ref={fileRef} type="file" accept=".csv" className="hidden" onChange={importCsv} />
+        <button className="btn btn-primary text-sm" onClick={() => setModal(true)}>+ Novo vídeo</button>
+      </PageHeader>
 
       <p className="text-xs text-text-muted">
         CSV: <code className="font-mono bg-elevated px-1.5 py-0.5 rounded">title, topic, content_type, mode, target_platforms (a|b), account_id</code>
@@ -251,11 +257,15 @@ export default function Queue() {
         </div>
       )}
 
-      {jobs.length === 0 ? (
-        <div className="card p-12 text-center text-text-muted">
-          <p className="text-4xl mb-3">🎬</p>
-          <p className="font-medium">Fila vazia.</p>
-          <p className="text-sm mt-1">Crie um vídeo ou importe um CSV para começar.</p>
+      {!loaded ? (
+        <div className="space-y-1.5">
+          {Array.from({ length: 5 }).map((_, i) => <div key={i} className="skeleton h-14 rounded-card" />)}
+        </div>
+      ) : jobs.length === 0 ? (
+        <div className="rounded-card" style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)' }}>
+          <EmptyState icon="🎬" title="Fila vazia."
+            hint="Crie um vídeo ou importe um CSV para começar."
+            action={<button className="btn btn-primary text-sm" onClick={() => setModal(true)}>+ Novo vídeo</button>} />
         </div>
       ) : (
         <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
