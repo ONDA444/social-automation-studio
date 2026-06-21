@@ -15,6 +15,7 @@ import logging
 import os
 from datetime import datetime
 
+from backend.config import settings
 from backend.database import SessionLocal
 from backend.events import publish_event
 from backend.models import JobStatus, VideoJob
@@ -237,6 +238,16 @@ async def self_publish_youtube(job, seo, creds, publish_at, shorts, privacy="pri
                     await asyncio.to_thread(yt.add_to_playlist, creds, pid, vid)
         except Exception as exc:  # noqa: BLE001
             logger.warning("playlist grouping failed for job %s: %s", getattr(job, "id", "?"), exc)
+        # Localized title/description for free international reach (opt-in via
+        # LOCALIZE_LANGUAGES). Best-effort read-modify-write; never affects the publish.
+        try:
+            locs = ((seo.get("youtube") or {}).get("localizations")) or {}
+            vid = main.get("video_id")
+            if locs and vid:
+                await asyncio.to_thread(yt.set_localizations, creds, vid,
+                                        settings.default_language, locs)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("localization apply failed for job %s: %s", getattr(job, "id", "?"), exc)
         for sp in shorts:
             if sp == job.main_video_path:
                 continue

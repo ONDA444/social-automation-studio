@@ -165,6 +165,15 @@ class Settings(BaseSettings):
     default_tts_voice: str = "pt-BR-AntonioNeural"
     default_language: str = "pt-BR"
     log_level: str = "INFO"
+    # Monetization CTA injected at the TOP of every YouTube description (affiliate /
+    # digital product / newsletter links + FTC disclosure). The only revenue that does
+    # NOT require the channel to be in the YPP. Empty = disabled. Set MONETIZATION_CTA
+    # on Railway with the real links, e.g. "🔗 Ferramentas: https://...\n(links afiliados)".
+    monetization_cta: str = ""
+    # Extra languages to localize each YouTube video's title/description into (free
+    # international reach). Comma-separated ISO codes, e.g. "en,es,hi". Empty = disabled.
+    # Applied via videos.update read-modify-write (never wipes the base snippet).
+    localize_languages: str = ""
 
     # CORS origins for the frontend (comma-separated in env, list in code).
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"

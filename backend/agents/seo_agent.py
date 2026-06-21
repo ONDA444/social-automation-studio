@@ -7,11 +7,14 @@ YouTube description gets auto chapters built from narration scene markers.
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 
 from backend.agents.base_agent import BaseAgent
 from backend.config import settings
 from backend import llm
+
+logger = logging.getLogger("studio.seo")
 
 SYSTEM = (
     "Você é um especialista de SEO e Algoritmo de YouTube/TikTok/Instagram de nível mundial. "
@@ -67,11 +70,48 @@ class SEOAgent(BaseAgent):
         seo["youtube"]["description"] = self._with_chapters(
             seo["youtube"].get("description", ""), seo["youtube"]["chapters"]
         )
+        # Monetization CTA (affiliate / digital product / newsletter) goes in the FIRST
+        # lines — above the "Show more" fold converts 5-10x. This is the only revenue that
+        # does NOT need the channel to be in the YPP. Empty by default (no-op); the user
+        # sets MONETIZATION_CTA on Railway with their real links + an FTC disclosure line.
+        _cta = (settings.monetization_cta or "").strip()
+        if _cta:
+            seo["youtube"]["description"] = _cta + "\n\n" + (seo["youtube"]["description"] or "")
         seo = self._clamp(seo)
+        await self._localize(seo)
 
         self.ctx_set("seo", seo)
         self.emit("progress", "SEO pronto (YT/TikTok/IG)", progress=86)
         return seo
+
+    async def _localize(self, seo: dict) -> None:
+        """Translate title/description into settings.localize_languages (free reach).
+        One LLM call returns all languages -> seo['youtube']['localizations']. Disabled
+        (no-op) unless LOCALIZE_LANGUAGES is set. Best-effort."""
+        langs = [x.strip() for x in (settings.localize_languages or "").split(",") if x.strip()]
+        yt = seo.get("youtube", {})
+        title = yt.get("title", "")
+        if not langs or not title:
+            return
+        try:
+            prompt = (
+                f"Traduza o TÍTULO e a DESCRIÇÃO de um vídeo do YouTube para estes idiomas "
+                f"(códigos ISO): {', '.join(langs)}. Preserve o apelo de clique; NÃO traduza "
+                f"nomes próprios, hashtags nem URLs. Responda SOMENTE JSON no formato "
+                f'{{"<lang>": {{"title": "...", "description": "..."}}}}.\n\n'
+                f"TÍTULO: {title}\n\nDESCRIÇÃO:\n{(yt.get('description') or '')[:1500]}"
+            )
+            out = await llm.complete_json(prompt, system="Tradutor profissional. Só JSON válido.",
+                                          max_tokens=1500)
+            loc = {}
+            for lang in langs:
+                v = out.get(lang) if isinstance(out, dict) else None
+                if isinstance(v, dict) and v.get("title"):
+                    loc[lang] = {"title": v.get("title", ""), "description": v.get("description", "")}
+            if loc:
+                seo["youtube"]["localizations"] = loc
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("localize failed: %s", exc)
 
     async def _via_llm(self, script, content_type, language) -> dict:
         title = script.get("title", "")
