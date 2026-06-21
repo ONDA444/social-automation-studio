@@ -115,6 +115,59 @@ def _fetch_channel(creds: dict) -> dict:
         return {}
 
 
+# ---------------------------------------------------------------- playlists
+# Grouping uploads into a series/topic playlist is the cheapest session-time win
+# (a returning binge-viewer is worth 5-10x). All best-effort: a playlist failure
+# must NEVER affect the publish. Scope `youtube` already covers these (no re-consent).
+def ensure_playlist(creds: dict, title: str, description: str = "") -> str | None:
+    """Return the id of the channel playlist named `title`, creating it if missing.
+    Looks up by title first (1 unit) so it never duplicates. None on any failure."""
+    title = (title or "").strip()
+    if not title:
+        return None
+    try:
+        yt = _service(creds)
+        req = yt.playlists().list(part="snippet", mine=True, maxResults=50)
+        while req is not None:
+            resp = req.execute()
+            for it in resp.get("items", []):
+                if (it.get("snippet", {}).get("title") or "").strip().lower() == title.lower():
+                    return it["id"]
+            req = yt.playlists().list_next(req, resp)
+        created = yt.playlists().insert(
+            part="snippet,status",
+            body={"snippet": {"title": title[:150], "description": description[:5000]},
+                  "status": {"privacyStatus": "public"}},
+        ).execute()
+        return created.get("id")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("ensure_playlist(%r) failed: %s", title, exc)
+        return None
+
+
+def add_to_playlist(creds: dict, playlist_id: str, video_id: str) -> bool:
+    """Add a video to a playlist, idempotently (orphan-recovery can re-dispatch a
+    publish, so skip if already present). Best-effort — returns False on any failure."""
+    if not (playlist_id and video_id):
+        return False
+    try:
+        yt = _service(creds)
+        existing = yt.playlistItems().list(
+            part="contentDetails", playlistId=playlist_id, videoId=video_id, maxResults=1,
+        ).execute()
+        if existing.get("items"):
+            return True
+        yt.playlistItems().insert(
+            part="snippet",
+            body={"snippet": {"playlistId": playlist_id,
+                              "resourceId": {"kind": "youtube#video", "videoId": video_id}}},
+        ).execute()
+        return True
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("add_to_playlist(%s, %s) failed: %s", playlist_id, video_id, exc)
+        return False
+
+
 # ---------------------------------------------------------------- upload
 def upload_video(
     video_path: str,
