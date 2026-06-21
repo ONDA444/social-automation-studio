@@ -73,6 +73,10 @@ def ensure_columns() -> None:
         ("platform_accounts", "music_style", "VARCHAR(20) DEFAULT 'balanced'"),
         ("platform_accounts", "ride_trends", "BOOLEAN DEFAULT false"),
         ("platform_accounts", "trends_per_cycle", "INTEGER DEFAULT 1"),
+        ("video_analytics", "watch_minutes", "INTEGER DEFAULT 0"),
+        ("video_analytics", "avg_view_seconds", "FLOAT DEFAULT 0"),
+        ("video_analytics", "avg_view_pct", "FLOAT DEFAULT 0"),
+        ("video_analytics", "subscribers_gained", "INTEGER DEFAULT 0"),
     ]
     try:
         with engine.begin() as conn:

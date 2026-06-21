@@ -31,6 +31,12 @@ class VideoAnalytics(Base):
     retention_avg: Mapped[float] = mapped_column(Float, default=0.0)
     completion_rate: Mapped[float] = mapped_column(Float, default=0.0)
 
+    # Watch-time (YouTube Analytics API; populated on the 24h/7d collect only).
+    watch_minutes: Mapped[int] = mapped_column(Integer, default=0)
+    avg_view_seconds: Mapped[float] = mapped_column(Float, default=0.0)
+    avg_view_pct: Mapped[float] = mapped_column(Float, default=0.0)
+    subscribers_gained: Mapped[int] = mapped_column(Integer, default=0)
+
     thumbnail_variant: Mapped[str | None] = mapped_column(String(2), default=None)  # A|B
     raw: Mapped[dict] = mapped_column(JSON, default=dict)
 
@@ -54,6 +60,10 @@ class VideoAnalytics(Base):
             "saves": self.saves,
             "retention_avg": self.retention_avg,
             "completion_rate": self.completion_rate,
+            "watch_minutes": self.watch_minutes,
+            "avg_view_seconds": self.avg_view_seconds,
+            "avg_view_pct": self.avg_view_pct,
+            "subscribers_gained": self.subscribers_gained,
             "thumbnail_variant": self.thumbnail_variant,
             "collected_at": self.collected_at.isoformat() if self.collected_at else None,
         }
