@@ -177,6 +177,76 @@ def link_account(account_id: int, payload: LinkRequest, db: Session = Depends(ge
     return acct.to_dict()
 
 
+# ---------------------------------------------------------------- Channel Optimizer
+class OptimizeApply(BaseModel):
+    confirmed_fields: list[str] = Field(default_factory=list)
+
+
+class ChecklistToggle(BaseModel):
+    item_id: str
+    done: bool = True
+
+
+def _optimizer_account(account_id: int, db: Session):
+    """Shared guard: account exists, is YouTube, and has live credentials."""
+    svc = AccountProfileService(db)
+    acct = svc.get(account_id)
+    if not acct:
+        raise HTTPException(404, "conta não encontrada")
+    if acct.platform != "youtube":
+        raise HTTPException(400, "Otimização de canal disponível apenas para YouTube.")
+    if not svc.has_valid_credentials(acct):
+        raise HTTPException(400, "Conecte a conta do YouTube antes de otimizar.")
+    return svc, acct
+
+
+@router.get("/accounts/{account_id}/optimize")
+def get_optimize(account_id: int, db: Session = Depends(get_db)):
+    acct = AccountProfileService(db).get(account_id)
+    if not acct:
+        raise HTTPException(404, "conta não encontrada")
+    return acct.channel_optimization or {}
+
+
+@router.post("/accounts/{account_id}/optimize/analyze")
+async def optimize_analyze(account_id: int, db: Session = Depends(get_db)):
+    from backend.agents import channel_optimizer as opt
+
+    svc, acct = _optimizer_account(account_id, db)
+    plan = await opt.analyze(acct, svc.get_credentials(acct.id))
+    if not plan.get("ok"):
+        raise HTTPException(400, plan.get("error", "Falha ao analisar o canal."))
+    return plan
+
+
+@router.post("/accounts/{account_id}/optimize/apply")
+async def optimize_apply(account_id: int, payload: OptimizeApply,
+                         db: Session = Depends(get_db)):
+    from backend.agents import channel_optimizer as opt
+
+    svc, acct = _optimizer_account(account_id, db)
+    res = await opt.apply(acct, svc.get_credentials(acct.id), payload.confirmed_fields)
+    db.commit()  # persists acct.channel_optimization mutated inside apply()
+    if not res.get("ok"):
+        raise HTTPException(400, res.get("error", "Falha ao aplicar a otimização."))
+    return res
+
+
+@router.post("/accounts/{account_id}/optimize/checklist")
+def optimize_checklist(account_id: int, payload: ChecklistToggle,
+                       db: Session = Depends(get_db)):
+    acct = AccountProfileService(db).get(account_id)
+    if not acct:
+        raise HTTPException(404, "conta não encontrada")
+    state = dict(acct.channel_optimization or {})
+    done = set(state.get("checklist_done") or [])
+    done.add(payload.item_id) if payload.done else done.discard(payload.item_id)
+    state["checklist_done"] = sorted(done)
+    acct.channel_optimization = state
+    db.commit()
+    return state
+
+
 # ---------------------------------------------------------------- OAuth
 @router.get("/auth/{platform}/start")
 def oauth_start(platform: str, account_id: int = Query(...), db: Session = Depends(get_db)):

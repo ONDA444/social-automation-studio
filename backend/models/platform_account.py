@@ -40,6 +40,12 @@ class PlatformAccount(Base):
     ride_trends: Mapped[bool] = mapped_column(default=False)
     trends_per_cycle: Mapped[int] = mapped_column(Integer, default=1)  # 1..2 (capped)
 
+    # --- Channel Optimizer ("Otimizar canal") state ---
+    # {activated, last_run_at, applied:{field:{value,applied_at}}, pending:[...],
+    #  checklist:[{id,done}], original_snapshot:{...}}. original_snapshot proves we
+    # never clobbered a value the user purposely set (apply is reversible).
+    channel_optimization: Mapped[dict] = mapped_column(JSON, default=dict)
+
     # --- Scheduling (denormalised convenience copy; canonical config in ScheduleConfig) ---
     schedule: Mapped[dict] = mapped_column(JSON, default=dict)
 
@@ -80,6 +86,7 @@ class PlatformAccount(Base):
             "avoid_topics": self.avoid_topics or [],
             "content_language": self.content_language,
             "music_style": getattr(self, "music_style", None) or "balanced",
+            "channel_optimization": getattr(self, "channel_optimization", None) or {},
             "ride_trends": bool(getattr(self, "ride_trends", False)),
             "trends_per_cycle": int(getattr(self, "trends_per_cycle", 1) or 1),
             "schedule": self.schedule or {},

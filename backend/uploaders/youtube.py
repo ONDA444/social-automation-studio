@@ -209,6 +209,129 @@ def set_localizations(creds: dict, video_id: str, default_language: str,
         return False
 
 
+# ---------------------------------------------------------------- channel branding (optimizer)
+# The writable subset of brandingSettings.channel. We NEVER send title (read-only —
+# channels.update returns channelTitleUpdateForbidden if it changes) or image fields
+# (read-only output). Scope `youtube` already covers these — no re-consent.
+_BRANDING_WRITABLE = ("keywords", "description", "country", "defaultLanguage",
+                      "unsubscribedTrailer")
+
+
+def get_branding(creds: dict) -> dict:
+    """Read the current channel identity. Returns {ok, channel_id, title, branding:{
+    keywords, description, country, defaultLanguage, ...}}. Best-effort."""
+    try:
+        yt = _service(creds)
+        resp = yt.channels().list(part="brandingSettings,snippet,id", mine=True).execute()
+        items = resp.get("items") or []
+        if not items:
+            return {"ok": False, "error": "Nenhum canal nesta conta."}
+        ch = items[0]
+        chan = (ch.get("brandingSettings") or {}).get("channel") or {}
+        snip = ch.get("snippet") or {}
+        return {
+            "ok": True,
+            "channel_id": ch.get("id"),
+            "title": snip.get("title") or chan.get("title"),
+            "branding": {k: chan.get(k, "") for k in _BRANDING_WRITABLE},
+        }
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("get_branding failed: %s", exc)
+        return {"ok": False, "error": str(exc)[:200]}
+
+
+def update_branding(creds: dict, patch: dict) -> dict:
+    """Apply a partial branding patch (any of _BRANDING_WRITABLE) via channels.update.
+
+    READ-MODIFY-WRITE: reads the current writable fields, preserves them, overlays the
+    patch, and sends ONLY the writable channel block — so we never touch the read-only
+    title/image (which would fail the whole call) and never blank a sibling field."""
+    patch = {k: v for k, v in (patch or {}).items() if k in _BRANDING_WRITABLE and v is not None}
+    if not patch:
+        return {"ok": False, "error": "Nada para aplicar."}
+    try:
+        yt = _service(creds)
+        resp = yt.channels().list(part="brandingSettings,id", mine=True).execute()
+        items = resp.get("items") or []
+        if not items:
+            return {"ok": False, "error": "Nenhum canal nesta conta."}
+        ch = items[0]
+        channel_id = ch["id"]
+        cur = (ch.get("brandingSettings") or {}).get("channel") or {}
+        new_chan = {k: cur[k] for k in _BRANDING_WRITABLE if cur.get(k)}  # preserve existing
+        new_chan.update(patch)                                            # overlay changes
+        yt.channels().update(
+            part="brandingSettings",
+            body={"id": channel_id, "brandingSettings": {"channel": new_chan}},
+        ).execute()
+        return {"ok": True, "channel_id": channel_id, "applied": patch}
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("update_branding failed: %s", exc)
+        return {"ok": False, "error": str(exc)[:200]}
+
+
+def list_channel_sections(creds: dict) -> list[dict]:
+    """Current homepage sections (best-effort, [] on failure)."""
+    try:
+        yt = _service(creds)
+        resp = yt.channelSections().list(part="snippet,contentDetails", mine=True).execute()
+        return resp.get("items") or []
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("list_channel_sections failed: %s", exc)
+        return []
+
+
+def ensure_section(creds: dict, section_type: str, title: str = "",
+                   position: int = 0, playlist_ids: list[str] | None = None) -> bool:
+    """Insert a homepage section if no same-type section already exists. Best-effort.
+
+    Auto types (popularUploads/recentUploads) take no contentDetails; playlist types
+    need contentDetails.playlists[]. Never reshuffles a layout the user curated — only
+    ADDS when that type is absent."""
+    try:
+        existing = list_channel_sections(creds)
+        for it in existing:
+            if (it.get("snippet") or {}).get("type") == section_type:
+                return True  # already present — don't fight a curated layout
+        snippet = {"type": section_type, "position": position}
+        if title:
+            snippet["title"] = title[:100]
+        body = {"snippet": snippet}
+        if playlist_ids:
+            body["contentDetails"] = {"playlists": playlist_ids[:5]}
+        yt = _service(creds)
+        part = "snippet,contentDetails" if playlist_ids else "snippet"
+        yt.channelSections().insert(part=part, body=body).execute()
+        return True
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("ensure_section(%s) failed: %s", section_type, exc)
+        return False
+
+
+def set_watermark(creds: dict, channel_id: str, image_path: str,
+                  entire_video: bool = True) -> bool:
+    """Upload the channel branding watermark (subscribe-bug). Best-effort. Needs a PNG/
+    JPEG. timing covering the whole video keeps the clickable bug always on screen."""
+    if not (channel_id and image_path):
+        return False
+    try:
+        from googleapiclient.http import MediaFileUpload
+
+        yt = _service(creds)
+        body = {"position": {"type": "corner", "cornerPosition": "topRight"}}
+        if entire_video:
+            body["timing"] = {"type": "offsetFromStart", "offsetMs": "0",
+                              "durationMs": "999999999"}
+        yt.watermarks().set(
+            channelId=channel_id, body=body,
+            media_body=MediaFileUpload(image_path),
+        ).execute()
+        return True
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("set_watermark failed: %s", exc)
+        return False
+
+
 # ---------------------------------------------------------------- upload
 def upload_video(
     video_path: str,

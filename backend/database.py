@@ -77,6 +77,8 @@ def ensure_columns() -> None:
         ("video_analytics", "avg_view_seconds", "FLOAT DEFAULT 0"),
         ("video_analytics", "avg_view_pct", "FLOAT DEFAULT 0"),
         ("video_analytics", "subscribers_gained", "INTEGER DEFAULT 0"),
+        ("platform_accounts", "channel_optimization",
+         "JSON DEFAULT '{}'" if not settings.sqlalchemy_url.startswith("sqlite") else "TEXT DEFAULT '{}'"),
     ]
     try:
         with engine.begin() as conn:

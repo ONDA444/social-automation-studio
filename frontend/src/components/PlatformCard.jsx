@@ -2,9 +2,11 @@ import { useState } from 'react'
 import { api } from '../api'
 import { PLATFORM_META, LANGUAGES, voicesForLang } from '../lib'
 import VoiceRecorder from './VoiceRecorder.jsx'
+import ChannelOptimizer from './ChannelOptimizer.jsx'
 
 export default function PlatformCard({ account, onChange, onChanged, onDone }) {
   const [recording, setRecording] = useState(false)
+  const [optimizing, setOptimizing] = useState(false)
   const [expanded, setExpanded] = useState(false)
   const [lang, setLang] = useState(account.content_language || 'pt-BR')
   const [savingLang, setSavingLang] = useState(false)
@@ -131,6 +133,20 @@ export default function PlatformCard({ account, onChange, onChanged, onDone }) {
           className="slide-down space-y-3 px-3 pb-4 border-t pt-3"
           style={{ borderColor: 'rgba(255,255,255,0.06)' }}
         >
+          {/* ✨ Otimizar canal (YouTube conectado) */}
+          {connected && account.platform === 'youtube' && (
+            <button
+              className="w-full text-xs font-semibold rounded-btn py-2 flex items-center justify-center gap-1.5 transition-all hover:brightness-110"
+              style={{ background: 'var(--accent-dim)', color: 'var(--accent)', border: '1px solid var(--accent)' }}
+              onClick={() => setOptimizing(true)}
+            >
+              ✨ Otimizar canal
+              {account.channel_optimization?.activated && (
+                <span className="badge text-[9px]" style={{ background: 'rgba(0,245,160,0.15)', color: 'var(--success)' }}>● ativo</span>
+              )}
+            </button>
+          )}
+
           {/* Quota */}
           <div>
             <div className="flex justify-between text-[11px] text-text-muted mb-1">
@@ -235,6 +251,14 @@ export default function PlatformCard({ account, onChange, onChanged, onDone }) {
           account={account}
           onClose={() => setRecording(false)}
           onCloned={() => { setRecording(false); refresh?.() }}
+        />
+      )}
+
+      {optimizing && (
+        <ChannelOptimizer
+          account={account}
+          onClose={() => setOptimizing(false)}
+          onApplied={() => refresh?.()}
         />
       )}
     </div>
