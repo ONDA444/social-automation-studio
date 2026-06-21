@@ -96,6 +96,28 @@ def _has_concrete_anchor(raw_text: str) -> bool:
     return bool(_NUMBER_RE.search(raw_text) or _ENTITY_RE.search(raw_text))
 
 
+# Literal slots a model leaves behind when it refuses to invent a fact but doesn't
+# rewrite the sentence — '{nome do jogador}', '{data}', '{time A}'. Normalized
+# (lowercased, accent-stripped) so '{Estádio}' matches. Exact-match only, so a real
+# emphasis like [ENFASE]{O estádio tremeu} is NOT flagged.
+_PLACEHOLDER_SLOTS = {
+    "nome", "nome do jogador", "nome do time", "jogador", "time", "time a", "time b",
+    "nome a", "nome b", "data", "tempo", "minuto", "minutos", "ano", "estadio",
+    "lugar", "local", "valor", "numero", "placar", "resultado", "evento", "fulano",
+    "ciclano", "x", "y", "z", "a", "b", "n",
+}
+
+
+def _has_placeholder(raw_text: str) -> str | None:
+    """Return the first unfilled placeholder slot found in the narration, else None.
+    These get spoken verbatim ('o gol foi marcado por nome do jogador'), so a script
+    containing one must be rejected and regenerated."""
+    for inner in re.findall(r"\{([^}]*)\}", raw_text or ""):
+        if _norm(inner).strip() in _PLACEHOLDER_SLOTS:
+            return inner.strip()
+    return None
+
+
 def assess(script: dict, topic: str | None = None,
            forbidden_topics: list[str] | None = None) -> tuple[bool, str]:
     """Return (ok, reason). ok=False means the script is generic/vague/stunted/off-theme
@@ -112,6 +134,12 @@ def assess(script: dict, topic: str | None = None,
     text = raw.lower()
     if not text:
         return True, "ok"  # e.g. quote_viral has no narration — handled elsewhere
+
+    # 0a) Unfilled placeholder slots: the model refused to invent a fact but left a
+    #     variable ('{nome do jogador}', '{data}') instead of rewriting. Block + retry.
+    ph = _has_placeholder(raw)
+    if ph:
+        return False, f"roteiro com placeholder não preenchido ('{{{ph}}}') — variável deixada no texto"
 
     # 0) Channel guardrails: avoid_topics as a HARD gate. If the narration actually
     #    mentions a forbidden subject, reject (retry) instead of publishing it.
