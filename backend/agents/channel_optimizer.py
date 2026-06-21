@@ -165,13 +165,14 @@ async def analyze(account, creds: dict) -> dict:
         fields.append({"key": key, "label": label, "current": current,
                        "proposed": value, "action": action})
 
+    _niche = (account.niche or "Destaques").strip() or "Destaques"
     return {
         "ok": True,
         "channel_id": branding.get("channel_id"),
         "title": branding.get("title"),
         "fields": fields,
-        "playlists": [f"{(account.niche or 'Destaques').title()}: melhores momentos",
-                      f"{(account.niche or 'Série').title()}: básico ao avançado"],
+        "playlists": [f"{_niche.title()}: melhores momentos",
+                      f"{_niche.title()}: do básico ao avançado"],
         "category_id": _category_for(account.niche),
         "source": proposed["source"],
         "checklist": _checklist(account),
