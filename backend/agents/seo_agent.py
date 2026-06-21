@@ -161,7 +161,8 @@ JSON EXATO (preencha todos os campos, não omita plataformas):
             "search": {"search_seed": kws[0] if kws else title.lower(),
                        "long_tail_variants": [], "title_keyword": kws[0] if kws else title.lower()},
             "feed": {"entities": kws[:5], "cluster_terms": kws[:3],
-                     "suggested_next_to": [content_type], "playlist_target": ""},
+                     "suggested_next_to": [content_type],
+                     "playlist_target": content_type.replace("_", " ").title()},
             "fyp": {
                 "tiktok": {"completion_play": "gancho no 1s", "rewatch_play": "loop fechado",
                            "save_play": "utilidade", "share_play": "identidade",

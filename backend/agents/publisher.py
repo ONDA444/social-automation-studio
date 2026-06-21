@@ -225,6 +225,18 @@ async def self_publish_youtube(job, seo, creds, publish_at, shorts, privacy="pri
     )
     short_results = []
     if main.get("ok"):
+        # Group the upload into its series/topic playlist for session-time. The
+        # playlist_target is produced by the SEO agent and was never consumed.
+        # Strictly best-effort: a playlist failure must NOT affect the publish.
+        try:
+            pl_title = ((seo.get("feed") or {}).get("playlist_target") or "").strip()
+            vid = main.get("video_id")
+            if pl_title and vid:
+                pid = await asyncio.to_thread(yt.ensure_playlist, creds, pl_title)
+                if pid:
+                    await asyncio.to_thread(yt.add_to_playlist, creds, pid, vid)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("playlist grouping failed for job %s: %s", getattr(job, "id", "?"), exc)
         for sp in shorts:
             if sp == job.main_video_path:
                 continue
