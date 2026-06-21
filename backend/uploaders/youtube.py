@@ -168,6 +168,47 @@ def add_to_playlist(creds: dict, playlist_id: str, video_id: str) -> bool:
         return False
 
 
+# ---------------------------------------------------------------- localizations
+def set_localizations(creds: dict, video_id: str, default_language: str,
+                      localizations: dict) -> bool:
+    """Add localized title/description to a video for free international reach.
+
+    READ-MODIFY-WRITE: reads the current snippet+localizations first and writes it
+    back UNCHANGED except for the added languages, so title/description/tags/category
+    are NEVER wiped (videos.update replaces what you send). Best-effort — a failure
+    never affects the publish. One update covers ALL languages."""
+    if not (video_id and localizations):
+        return False
+    try:
+        yt = _service(creds)
+        cur = yt.videos().list(part="snippet,localizations", id=video_id).execute()
+        items = cur.get("items") or []
+        if not items:
+            return False
+        snippet = items[0].get("snippet", {})
+        if not snippet.get("title") or not snippet.get("categoryId"):
+            return False  # update requires these; don't risk a malformed write
+        loc = dict(items[0].get("localizations") or {})
+        for lang, v in localizations.items():
+            title = (v or {}).get("title", "").strip()
+            if not title:
+                continue
+            loc[lang] = {"title": title[:100],
+                         "description": (v.get("description") or "")[:5000]}
+        if not loc:
+            return False
+        if default_language:
+            snippet["defaultLanguage"] = default_language
+        yt.videos().update(
+            part="snippet,localizations",
+            body={"id": video_id, "snippet": snippet, "localizations": loc},
+        ).execute()
+        return True
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("set_localizations(%s) failed: %s", video_id, exc)
+        return False
+
+
 # ---------------------------------------------------------------- upload
 def upload_video(
     video_path: str,
