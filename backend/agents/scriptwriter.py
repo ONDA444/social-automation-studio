@@ -266,6 +266,20 @@ SYSTEM = (
     "canal (não um molde repetido). Comentário/análise/perspectiva domina sobre a mera "
     "descrição dos fatos.\n"
     "=== FIM ===\n\n"
+    "=== REGRA DA VERDADE (ANTI-INVENÇÃO) — OBRIGATÓRIO ===\n"
+    "NUNCA invente fatos específicos só para soar preciso. Se você NÃO tem certeza "
+    "ou não há fonte verificada, é PROIBIDO afirmar como verdade: placares/resultados "
+    "exatos, datas exatas, números de público/estatísticas, atribuir um feito "
+    "específico a uma pessoa nomeada, e 'coincidências' numéricas exatas "
+    "(ex.: 'o gol aos 93:00 coincidiu com 1950'). Inventar isso desmonetiza o canal e "
+    "destrói a credibilidade — é pior do que não citar o detalhe.\n"
+    "Sem certeza, faça UMA das duas: (a) fique no que é de conhecimento AMPLO e "
+    "indiscutível (ex.: 'o Maracanã é um dos estádios mais famosos do mundo'); ou "
+    "(b) transforme o detalhe incerto em PERGUNTA ('qual jogo você acha que lotou "
+    "mais?'), nunca em afirmação inventada. Conteúdo de conhecimento geral (tutoriais, "
+    "dicas, como-fazer) PODE e DEVE ser concreto — esta regra mira EVENTOS, RESULTADOS "
+    "e NÚMEROS que você não pode confirmar, não os passos de um tutorial.\n"
+    "=== FIM ===\n\n"
     "CLICHÊS PROIBIDOS (rejeição automática): 'olá pessoal', 'você não vai acreditar', "
     "'prepare-se', 'o que vem agora muda tudo', 'presta atenção', 'segura essa', "
     "'hoje eu vou te mostrar', 'bem-vindos de volta', 'você já parou para pensar', "
@@ -529,12 +543,15 @@ class ScriptwriterAgent(BaseAgent):
             )
         elif is_time_sensitive:
             facts_block = (
-                "\n\n[ATENÇÃO] SEM FATOS VERIFICADOS para este tema sensível ao tempo. "
-                "É PROIBIDO inventar resultados, placares, datas, nomes, números ou dizer "
-                "que algo 'aconteceu hoje/ontem'. Se o tema pede um resultado/evento recente "
-                "que você NÃO pode confirmar, não finja saber: fale da expectativa, do contexto "
-                "e da importância de forma geral e atemporal, deixando claro que o desfecho não "
-                "é afirmado.\n"
+                "\n\n[ATENÇÃO] SEM FATOS VERIFICADOS e este tema é SENSÍVEL A FATOS. "
+                "Aplique a REGRA DA VERDADE ao MÁXIMO: é PROIBIDO inventar resultados, "
+                "placares, datas, números de público, estatísticas, nomes de quem fez o quê, "
+                "'coincidências' numéricas exatas, ou dizer que algo 'aconteceu hoje/ontem'. "
+                "NÃO finja saber um desfecho. Escreva o vídeo de forma VERDADEIRA e atemporal "
+                "— história, contexto, por que o tema importa e o que é de conhecimento AMPLO e "
+                "indiscutível — e transforme qualquer detalhe incerto em PERGUNTA ao espectador, "
+                "nunca em afirmação inventada. Um roteiro geral e verdadeiro vale mais que um "
+                "específico e falso.\n"
             )
         else:
             facts_block = (
