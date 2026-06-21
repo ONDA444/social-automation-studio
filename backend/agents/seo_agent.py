@@ -243,13 +243,19 @@ JSON EXATO (preencha todos os campos, não omita plataformas):
         scenes = script.get("scenes", [])
         if not words or not scenes:
             return []
+        from backend.agents.scriptwriter import clean_markers
+
         chapters = [{"time": 0.0, "title": "Início"}]
         cursor = 0
         for sc in scenes:
             n = len((sc.get("narration") or "").split())
             if n and cursor < len(words):
                 t = words[cursor]["start"]
-                label = (sc.get("narration") or "").split(".")[0][:40] or f"Parte {sc.get('index', 0) + 1}"
+                # Clean the inline markers ([PAUSA], [ENFASE]{...}, etc.) BEFORE using
+                # the narration as a chapter title — otherwise they leak verbatim into
+                # the published YouTube description.
+                clean = clean_markers(sc.get("narration") or "")
+                label = clean.split(".")[0][:40].strip() or f"Parte {sc.get('index', 0) + 1}"
                 if t > 5:  # YouTube needs distinct timestamps; skip near-zero
                     chapters.append({"time": round(t, 1), "title": label})
             cursor += n

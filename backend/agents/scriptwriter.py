@@ -205,6 +205,20 @@ def render_channel_block(cfg: dict | None = None) -> str:
 _MARKERS_RE = re.compile(r"\[(RE-HOOK|PATTERN-INT|LOOP-OPEN:[^\]]+|LOOP-PAY:[^\]]+)\]")
 
 
+def clean_markers(text: str, pause: str = " ") -> str:
+    """Strip inline direction markers from a narration string, leaving readable text.
+    For TTS pass pause=' ... '; for user-facing surfaces (chapter titles, on-screen
+    snippets) the default single space reads better. Also drops any stray '{...}'
+    placeholder a model might leave, so internal tokens NEVER reach the published
+    description."""
+    raw = _MARKERS_RE.sub("", text or "")
+    raw = re.sub(r"\[PAUSA\]", pause, raw)
+    raw = re.sub(r"\[ENFASE\]\{([^}]*)\}", r"\1", raw)
+    raw = re.sub(r"\[[^\]]*\]", "", raw)        # any other [marker]
+    raw = re.sub(r"\{[^}]*\}", "", raw)         # any leftover {placeholder}
+    return re.sub(r"\s{2,}", " ", raw).strip()
+
+
 def build_tts_text(scenes: list) -> str:
     """Strip inline direction markers, leaving only the speakable narration text."""
     raw = " ".join(
@@ -212,11 +226,7 @@ def build_tts_text(scenes: list) -> str:
         for s in sorted(scenes, key=lambda s: s.get("index", 0))
         if s.get("narration")
     )
-    raw = _MARKERS_RE.sub("", raw)
-    raw = re.sub(r"\[PAUSA\]", " ... ", raw)
-    raw = re.sub(r"\[ENFASE\]\{([^}]*)\}", r"\1", raw)
-    raw = re.sub(r"\[[^\]]*\]", "", raw)
-    return re.sub(r"\s{2,}", " ", raw).strip()
+    return clean_markers(raw, pause=" ... ")
 
 
 # ── System prompt (v2.1) ─────────────────────────────────────────────────────
