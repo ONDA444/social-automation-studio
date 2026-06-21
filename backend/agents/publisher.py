@@ -153,7 +153,9 @@ async def run_publish(job_id: int) -> dict:
                         "account_id": acct.id,
                     }}
                     db.commit()
-                    results["youtube"] = await self_publish_youtube(job, seo, creds, publish_at, shorts, privacy)
+                    results["youtube"] = await self_publish_youtube(
+                        job, seo, creds, publish_at, shorts, privacy,
+                        content_language=getattr(acct, "content_language", None) or "pt-BR")
                 elif platform == "tiktok":
                     results["tiktok"] = await self_publish_tiktok(seo, creds, shorts, privacy)
                 elif platform == "instagram":
@@ -214,15 +216,18 @@ _FILE_GONE = ("Os arquivos do vídeo foram perdidos (o servidor reiniciou). "
               "Gere o vídeo novamente (↻) para poder publicar.")
 
 
-async def self_publish_youtube(job, seo, creds, publish_at, shorts, privacy="private") -> dict:
+async def self_publish_youtube(job, seo, creds, publish_at, shorts, privacy="private",
+                               content_language="pt-BR") -> dict:
     if not (job.main_video_path and os.path.exists(job.main_video_path)):
         return {"ok": False, "platform": "youtube", "status": "file_missing", "error": _FILE_GONE}
     y = seo.get("youtube", {})
+    _lang = content_language or "pt-BR"  # BCP-47; stamped as metadata + audio language
     main = await _with_retry(
         yt.upload_video, job.main_video_path, y.get("title", job.title),
         y.get("description", ""), y.get("tags", []), creds,
         category_id=y.get("category_id", "22"), privacy=privacy, publish_at=publish_at,
-        thumbnail_path=job.thumbnail_path, label="yt-main",
+        thumbnail_path=job.thumbnail_path,
+        default_language=_lang, default_audio_language=_lang, label="yt-main",
     )
     short_results = []
     if main.get("ok"):
@@ -254,7 +259,8 @@ async def self_publish_youtube(job, seo, creds, publish_at, shorts, privacy="pri
             short_results.append(await _with_retry(
                 yt.upload_video, sp, (y.get("title", job.title) + " #shorts")[:100],
                 y.get("description", ""), y.get("tags", []), creds,
-                category_id=y.get("category_id", "22"), privacy=privacy, label="yt-short",
+                category_id=y.get("category_id", "22"), privacy=privacy,
+                default_language=_lang, default_audio_language=_lang, label="yt-short",
             ))
     return {**main, "shorts": short_results}
 

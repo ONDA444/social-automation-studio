@@ -220,6 +220,11 @@ def upload_video(
     privacy: str = "private",
     publish_at: str | None = None,
     thumbnail_path: str | None = None,
+    default_language: str | None = None,
+    default_audio_language: str | None = None,
+    made_for_kids: bool = False,
+    embeddable: bool = True,
+    public_stats: bool = True,
 ) -> dict:
     err = _missing_libs()
     if err:
@@ -237,11 +242,23 @@ def upload_video(
         status = {"privacyStatus": privacy}
         if publish_at:  # schedule -> must be private until publish_at
             status = {"privacyStatus": "private", "publishAt": publish_at}
-        body = {
-            "snippet": {"title": title[:100], "description": description,
-                        "tags": tags[:30], "categoryId": category_id},
-            "status": status,
-        }
+        # Reach + compliance defaults stamped on EVERY upload — YouTube has no
+        # channel-wide API for these, so we emulate them per insert.
+        # selfDeclaredMadeForKids MUST be sent explicitly: a missing/dropped False
+        # silently mis-declares COPPA and strips comments/cards/notifications.
+        status["selfDeclaredMadeForKids"] = bool(made_for_kids)
+        status["embeddable"] = bool(embeddable)
+        status["publicStatsViewable"] = bool(public_stats)
+        snippet = {"title": title[:100], "description": description,
+                   "tags": tags[:30], "categoryId": category_id}
+        # Declaring the metadata + spoken-audio language stops YouTube from
+        # mis-detecting a synthetic (TTS) voice's language and burying the video's
+        # regional reach — the single cheapest reach win for a faceless channel.
+        if default_language:
+            snippet["defaultLanguage"] = default_language
+        if default_audio_language:
+            snippet["defaultAudioLanguage"] = default_audio_language
+        body = {"snippet": snippet, "status": status}
         media = MediaFileUpload(video_path, chunksize=-1, resumable=True)
         request = yt.videos().insert(part="snippet,status", body=body, media_body=media)
 
