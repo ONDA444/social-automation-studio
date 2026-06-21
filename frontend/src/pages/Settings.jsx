@@ -13,6 +13,131 @@ const KEYS = [
   { env: 'META_APP_ID', label: 'Instagram / Meta Graph', tier: 'grátis', url: 'https://developers.facebook.com' },
 ]
 
+function Toggle({ on, onChange }) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={on}
+      onClick={() => onChange(!on)}
+      className="relative shrink-0 rounded-full transition-colors"
+      style={{
+        width: 42, height: 24,
+        background: on ? 'var(--success)' : 'rgba(255,255,255,0.14)',
+      }}
+    >
+      <span
+        className="absolute top-0.5 rounded-full bg-white transition-all"
+        style={{ width: 20, height: 20, left: on ? 20 : 2 }}
+      />
+    </button>
+  )
+}
+
+function MonetizationCard() {
+  const [cfg, setCfg] = useState(null)
+  const [saving, setSaving] = useState(false)
+  const [msg, setMsg] = useState(null)
+
+  useEffect(() => {
+    api.get('/settings/monetization').then(setCfg).catch((e) => setMsg({ ok: false, text: e.message }))
+  }, [])
+
+  const save = async () => {
+    if (!cfg) return
+    setSaving(true); setMsg(null)
+    try {
+      const next = await api.put('/settings/monetization', cfg)
+      setCfg(next)
+      setMsg({ ok: true, text: 'Salvo. Vale para os próximos vídeos gerados.' })
+    } catch (e) {
+      setMsg({ ok: false, text: e.message })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const field = (k, v) => setCfg((c) => ({ ...c, [k]: v }))
+
+  if (!cfg) {
+    return (
+      <SectionCard title="Monetização">
+        <div className="skeleton h-24 rounded-card" />
+      </SectionCard>
+    )
+  }
+
+  const inputStyle = {
+    background: 'var(--bg-base, rgba(0,0,0,0.25))',
+    border: '1px solid var(--border)',
+    color: 'var(--text-primary)',
+  }
+
+  return (
+    <SectionCard title="Monetização" sub="Receita que não depende do YPP">
+      {/* CTA de afiliado / produto */}
+      <div className="flex items-start gap-3 mb-2">
+        <Toggle on={cfg.monetization_enabled} onChange={(v) => field('monetization_enabled', v)} />
+        <div className="flex-1">
+          <p className="font-medium text-sm">CTA de afiliado / produto</p>
+          <p className="text-xs text-text-muted">
+            Vai no <strong>topo</strong> da descrição de cada vídeo do YouTube — onde mais converte.
+            Cole seus links de afiliado, produto ou newsletter. Inclua a frase de divulgação (ex.: “Links de afiliado”).
+          </p>
+        </div>
+      </div>
+      <textarea
+        value={cfg.monetization_cta || ''}
+        onChange={(e) => field('monetization_cta', e.target.value)}
+        disabled={!cfg.monetization_enabled}
+        rows={4}
+        placeholder={'🔗 Ferramentas que eu uso: https://...\n📩 Newsletter grátis: https://...\n(Links de afiliado)'}
+        className="w-full rounded-card px-3 py-2 text-sm font-mono resize-y disabled:opacity-40 mb-6"
+        style={inputStyle}
+      />
+
+      {/* Idiomas extras */}
+      <div className="flex items-start gap-3 mb-2">
+        <Toggle on={cfg.localize_enabled} onChange={(v) => field('localize_enabled', v)} />
+        <div className="flex-1">
+          <p className="font-medium text-sm">Títulos/descrições em outros idiomas</p>
+          <p className="text-xs text-text-muted">
+            Alcance internacional grátis: o vídeo ganha título e descrição traduzidos.
+            Códigos ISO separados por vírgula. Ex.: <code className="font-mono">en,es,hi</code>.
+            Recomendo testar em 1 vídeo antes de ligar para todos.
+          </p>
+        </div>
+      </div>
+      <input
+        type="text"
+        value={cfg.localize_languages || ''}
+        onChange={(e) => field('localize_languages', e.target.value)}
+        disabled={!cfg.localize_enabled}
+        placeholder="en,es,hi"
+        className="w-full rounded-card px-3 py-2 text-sm font-mono disabled:opacity-40"
+        style={inputStyle}
+      />
+
+      <div className="flex items-center gap-3 mt-5">
+        <button
+          type="button"
+          onClick={save}
+          disabled={saving}
+          className="rounded-card px-4 py-2 text-sm font-semibold disabled:opacity-50"
+          style={{ background: 'var(--accent)', color: '#04110b' }}
+        >
+          {saving ? 'Salvando…' : 'Salvar'}
+        </button>
+        {msg && (
+          <span className="text-xs" style={{ color: msg.ok ? 'var(--success)' : 'var(--error)' }}>
+            {msg.text}
+          </span>
+        )}
+      </div>
+    </SectionCard>
+  )
+}
+
 export default function Settings() {
   const [health, setHealth] = useState(null)
   useEffect(() => { api.get('/dashboard/health').then(setHealth).catch(() => {}) }, [])
@@ -21,7 +146,7 @@ export default function Settings() {
 
   return (
     <div className="space-y-6 max-w-3xl fade-in">
-      <PageHeader title="Configurações" sub="Sistema e chaves de API." />
+      <PageHeader title="Configurações" sub="Sistema, monetização e chaves de API." />
 
       <SectionCard title="Status dos serviços">
         {!health ? (
@@ -42,6 +167,8 @@ export default function Settings() {
           </div>
         )}
       </SectionCard>
+
+      <MonetizationCard />
 
       <SectionCard title="Chaves de API">
         <p className="text-[11px] text-text-muted text-right mb-3">🔐 Chaves salvas somente no servidor</p>

@@ -13,6 +13,7 @@ import re
 from backend.agents.base_agent import BaseAgent
 from backend.config import settings
 from backend import llm
+from backend import runtime_settings
 
 logger = logging.getLogger("studio.seo")
 
@@ -73,8 +74,8 @@ class SEOAgent(BaseAgent):
         # Monetization CTA (affiliate / digital product / newsletter) goes in the FIRST
         # lines — above the "Show more" fold converts 5-10x. This is the only revenue that
         # does NOT need the channel to be in the YPP. Empty by default (no-op); the user
-        # sets MONETIZATION_CTA on Railway with their real links + an FTC disclosure line.
-        _cta = (settings.monetization_cta or "").strip()
+        # sets it in Settings → Monetização (dashboard) or MONETIZATION_CTA on Railway.
+        _cta = runtime_settings.effective_cta()
         if _cta:
             seo["youtube"]["description"] = _cta + "\n\n" + (seo["youtube"]["description"] or "")
         seo = self._clamp(seo)
@@ -88,7 +89,7 @@ class SEOAgent(BaseAgent):
         """Translate title/description into settings.localize_languages (free reach).
         One LLM call returns all languages -> seo['youtube']['localizations']. Disabled
         (no-op) unless LOCALIZE_LANGUAGES is set. Best-effort."""
-        langs = [x.strip() for x in (settings.localize_languages or "").split(",") if x.strip()]
+        langs = runtime_settings.effective_localize_langs()
         yt = seo.get("youtube", {})
         title = yt.get("title", "")
         if not langs or not title:

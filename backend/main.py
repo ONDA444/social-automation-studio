@@ -81,6 +81,7 @@ _ROUTER_MODULES = [
     "backend.routers.dashboard",
     "backend.routers.analytics",
     "backend.routers.themes",
+    "backend.routers.settings",
 ]
 
 
