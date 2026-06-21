@@ -283,19 +283,110 @@ async def complete(
     )
 
 
-def extract_json(text: str) -> dict:
-    """Pull the first JSON object out of an LLM response."""
-    text = text.strip()
-    # Strip ```json ... ``` fences.
-    fence = re.search(r"```(?:json)?\s*(.*?)```", text, re.DOTALL)
-    if fence:
-        text = fence.group(1).strip()
-    # Find the outermost {...}.
+_TRAILING_COMMA = re.compile(r",(\s*[}\]])")
+
+
+def _strip_trailing_commas(s: str) -> str:
+    return _TRAILING_COMMA.sub(r"\1", s)
+
+
+def _balanced_object(text: str, start: int) -> str | None:
+    """The brace-balanced {...} substring beginning at index `start`, scanned with
+    string/escape awareness so braces inside string values don't fool it. Returns
+    None if the object is never closed (truncated response)."""
+    depth = 0
+    in_str = False
+    esc = False
+    for i in range(start, len(text)):
+        c = text[i]
+        if in_str:
+            if esc:
+                esc = False
+            elif c == "\\":
+                esc = True
+            elif c == '"':
+                in_str = False
+            continue
+        if c == '"':
+            in_str = True
+        elif c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start : i + 1]
+    return None
+
+
+def _repair_truncated(text: str) -> str:
+    """Best-effort close of a JSON object cut off by a token cap: from the first
+    '{', close any still-open string / array / object so it parses. The final
+    value may be partial but the structure is recovered — far better than tossing
+    a real (just-truncated) response as 'unavailable'."""
     start = text.find("{")
-    end = text.rfind("}")
-    if start != -1 and end != -1 and end > start:
-        text = text[start : end + 1]
-    return json.loads(text)
+    if start == -1:
+        raise ValueError("no JSON object present")
+    s = text[start:].rstrip()
+    stack: list[str] = []
+    in_str = False
+    esc = False
+    for c in s:
+        if in_str:
+            if esc:
+                esc = False
+            elif c == "\\":
+                esc = True
+            elif c == '"':
+                in_str = False
+            continue
+        if c == '"':
+            in_str = True
+        elif c == "{":
+            stack.append("}")
+        elif c == "[":
+            stack.append("]")
+        elif c == "}" or c == "]":
+            if stack:
+                stack.pop()
+    out = s
+    if in_str:           # truncated mid-string → close it
+        out += '"'
+    out = out.rstrip().rstrip(",")   # drop a dangling comma before closing
+    for closer in reversed(stack):   # close open containers, innermost first
+        out += closer
+    return _strip_trailing_commas(out)
+
+
+def extract_json(text: str) -> dict:
+    """Pull the first JSON object out of an LLM response — tolerant of reasoning
+    preambles, markdown fences, trailing prose, and truncation from token caps.
+    Free models routinely wrap the JSON in chain-of-thought ('We need to produce
+    JSON...') or get cut off mid-array; the strict find-first-{-to-last-} parse
+    discarded those as 'unavailable' even though the answer was right there."""
+    text = (text or "").strip()
+    # Strip a ```json ... ``` fence (closing fence optional — a truncated response
+    # may open the fence and never close it).
+    fence = re.search(r"```(?:json)?\s*(.*?)(?:```|$)", text, re.DOTALL)
+    if fence and "{" in fence.group(1):
+        text = fence.group(1).strip()
+
+    # Try each '{' as a start and return the first balanced object that parses.
+    # This skips a reasoning preamble (and any stray '{' inside it) instead of
+    # slicing first-{ … last-} blindly, which breaks when prose contains braces.
+    idx = text.find("{")
+    while idx != -1:
+        obj = _balanced_object(text, idx)
+        if obj is not None:
+            for candidate in (obj, _strip_trailing_commas(obj)):
+                try:
+                    return json.loads(candidate)
+                except json.JSONDecodeError:
+                    pass
+        idx = text.find("{", idx + 1)
+
+    # Nothing balanced parsed → the object was almost certainly truncated. Repair
+    # it (close open brackets/strings) and try once more.
+    return json.loads(_repair_truncated(text))
 
 
 async def complete_json(
