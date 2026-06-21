@@ -240,12 +240,21 @@ def get_branding(creds: dict) -> dict:
         return {"ok": False, "error": str(exc)[:200]}
 
 
+# Channel-resource fields that are read-only or deprecated/removed — echoing any of
+# them back in a channels.update makes the whole call 400 "invalid argument".
+_BRANDING_DROP = ("title", "defaultTab", "moderateComments", "showRelatedChannels",
+                  "showBrowseView", "profileColor", "featuredChannelsTitle",
+                  "featuredChannelsUrls", "trackingAnalyticsAccountId")
+
+
 def update_branding(creds: dict, patch: dict) -> dict:
     """Apply a partial branding patch (any of _BRANDING_WRITABLE) via channels.update.
 
-    READ-MODIFY-WRITE: reads the current writable fields, preserves them, overlays the
-    patch, and sends ONLY the writable channel block — so we never touch the read-only
-    title/image (which would fail the whole call) and never blank a sibling field."""
+    READ-MODIFY-WRITE the FULL brandingSettings (so the image sub-object isn't lost),
+    drop the read-only/deprecated channel fields (they 400 the call), overlay the patch.
+    channels.update for brandingSettings is finicky: a single field can 400 the whole
+    request, so on a badRequest we retry progressively dropping the prime suspects
+    (defaultLanguage, then country) — the real value (keywords/description) still lands."""
     patch = {k: v for k, v in (patch or {}).items() if k in _BRANDING_WRITABLE and v is not None}
     if not patch:
         return {"ok": False, "error": "Nada para aplicar."}
@@ -257,14 +266,34 @@ def update_branding(creds: dict, patch: dict) -> dict:
             return {"ok": False, "error": "Nenhum canal nesta conta."}
         ch = items[0]
         channel_id = ch["id"]
-        cur = (ch.get("brandingSettings") or {}).get("channel") or {}
-        new_chan = {k: cur[k] for k in _BRANDING_WRITABLE if cur.get(k)}  # preserve existing
-        new_chan.update(patch)                                            # overlay changes
-        yt.channels().update(
-            part="brandingSettings",
-            body={"id": channel_id, "brandingSettings": {"channel": new_chan}},
-        ).execute()
-        return {"ok": True, "channel_id": channel_id, "applied": patch}
+        base_bs = dict(ch.get("brandingSettings") or {})
+        base_chan = {k: v for k, v in (base_bs.get("channel") or {}).items()
+                     if k not in _BRANDING_DROP}
+
+        last_err = None
+        for drops in ([], ["defaultLanguage"], ["defaultLanguage", "country"]):
+            chan = dict(base_chan)
+            chan.update(patch)
+            for d in drops:
+                chan.pop(d, None)
+            body_bs = dict(base_bs)
+            body_bs["channel"] = chan
+            try:
+                yt.channels().update(
+                    part="brandingSettings",
+                    body={"id": channel_id, "brandingSettings": body_bs},
+                ).execute()
+                applied = {k: v for k, v in patch.items() if k not in drops}
+                return {"ok": True, "channel_id": channel_id, "applied": applied,
+                        "dropped": drops}
+            except Exception as e:  # noqa: BLE001
+                last_err = e
+                msg = str(e).lower()
+                if "badrequest" in msg or "invalid argument" in msg:
+                    logger.info("update_branding 400 — retrying without %s", drops or "(full)")
+                    continue
+                raise
+        return {"ok": False, "error": str(last_err)[:300]}
     except Exception as exc:  # noqa: BLE001
         logger.warning("update_branding failed: %s", exc)
         return {"ok": False, "error": str(exc)[:200]}
