@@ -66,6 +66,21 @@ def _country_for(content_language: str | None) -> str:
     return _LANG_COUNTRY.get((content_language or "").lower(), "BR")
 
 
+def _keywords_str(keywords: list[str], limit: int = 480) -> str:
+    """Build the space-separated channel-keywords string (multi-word phrases quoted),
+    capped under YouTube's 500-char hard limit — over it, channels.update 400s the
+    whole request. Adds whole phrases until the next one wouldn't fit."""
+    out, total = [], 0
+    for k in keywords:
+        tok = f'"{k}"' if " " in k else k
+        add = len(tok) + (1 if out else 0)
+        if total + add > limit:
+            break
+        out.append(tok)
+        total += add
+    return " ".join(out)
+
+
 def _checklist(account) -> list[dict]:
     """Studio-only items (no free API) as a 1-click checklist with deep links."""
     name = (account.display_name or "").strip()
@@ -145,7 +160,7 @@ async def analyze(account, creds: dict) -> dict:
         return {"ok": False, "error": branding.get("error", "Não foi possível ler o canal.")}
     cur = branding.get("branding") or {}
     proposed = await _propose(account)
-    keywords_str = " ".join(f'"{k}"' if " " in k else k for k in proposed["keywords"])
+    keywords_str = _keywords_str(proposed["keywords"])
 
     targets = {
         "keywords": (keywords_str, "Palavras-chave do canal"),

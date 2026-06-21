@@ -271,7 +271,8 @@ def update_branding(creds: dict, patch: dict) -> dict:
                      if k not in _BRANDING_DROP}
 
         last_err = None
-        for drops in ([], ["defaultLanguage"], ["defaultLanguage", "country"]):
+        for drops in ([], ["defaultLanguage"], ["defaultLanguage", "country"],
+                      ["keywords"], ["keywords", "defaultLanguage", "country"]):
             chan = dict(base_chan)
             chan.update(patch)
             for d in drops:
