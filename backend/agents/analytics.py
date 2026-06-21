@@ -34,7 +34,9 @@ class AnalyticsAgent:
                 continue
             acct = svc.get_active_account(platform)
             creds = svc.get_credentials(acct.id) if acct else {}
-            metrics = self._fetch(platform, res["video_id"], creds)
+            # Pull watch-time on the fixed 2h/24h/7d collect (YT Analytics latency is
+            # 1-3 days, so it's worthless at 2h but populated by 24h/7d).
+            metrics = self._fetch(platform, res["video_id"], creds, with_analytics=True)
             if metrics is None:
                 continue
             row = VideoAnalytics(
@@ -91,16 +93,17 @@ class AnalyticsAgent:
         self.db.commit()
         return out
 
-    def _fetch(self, platform: str, video_id: str, creds: dict) -> dict | None:
+    def _fetch(self, platform: str, video_id: str, creds: dict,
+               with_analytics: bool = False) -> dict | None:
         if platform == "youtube":
-            return self._youtube(video_id, creds)
+            return self._youtube(video_id, creds, with_analytics=with_analytics)
         if platform == "instagram":
             return self._instagram(video_id, creds)
         if platform == "tiktok":
             return self._tiktok(video_id, creds)
         return None
 
-    def _youtube(self, video_id: str, creds: dict) -> dict | None:
+    def _youtube(self, video_id: str, creds: dict, with_analytics: bool = False) -> dict | None:
         if not creds:
             return None
         try:
@@ -109,14 +112,60 @@ class AnalyticsAgent:
             yt = _service(creds)
             resp = yt.videos().list(part="statistics", id=video_id).execute()
             stats = (resp.get("items") or [{}])[0].get("statistics", {})
-            return {
+            out = {
                 "views": int(stats.get("viewCount", 0)),
                 "likes": int(stats.get("likeCount", 0)),
                 "comments": int(stats.get("commentCount", 0)),
                 "raw": stats,
             }
+            if with_analytics:
+                wt = self._youtube_watchtime(video_id, creds)
+                if wt:
+                    out.update(wt)
+            return out
         except Exception as exc:  # noqa: BLE001
             logger.debug("YT analytics failed: %s", exc)
+            return None
+
+    @staticmethod
+    def _youtube_watchtime(video_id: str, creds: dict) -> dict | None:
+        """Watch-time via the YouTube Analytics API (scope yt-analytics.readonly, already
+        granted on youtube.py:22 but never used). This is the metric the learning loop
+        actually needs (the 4000h YPP threshold is watch-HOURS, not views). Best-effort;
+        returns None so the caller still keeps the basic stats."""
+        try:
+            from datetime import timedelta
+
+            from googleapiclient.discovery import build
+
+            from backend.uploaders.youtube import _credentials
+
+            ya = build("youtubeAnalytics", "v2",
+                       credentials=_credentials(creds), cache_discovery=False)
+            end = datetime.utcnow().date()
+            start = end - timedelta(days=400)
+            resp = ya.reports().query(
+                ids="channel==MINE",
+                startDate=start.isoformat(), endDate=end.isoformat(),
+                metrics="estimatedMinutesWatched,averageViewDuration,averageViewPercentage,subscribersGained",
+                filters=f"video=={video_id}",
+            ).execute()
+            rows = resp.get("rows") or []
+            if not rows:
+                return None
+            cols = [h.get("name") for h in resp.get("columnHeaders", [])]
+            vals = dict(zip(cols, rows[0]))
+            pct = float(vals.get("averageViewPercentage", 0) or 0)
+            return {
+                "watch_minutes": int(vals.get("estimatedMinutesWatched", 0) or 0),
+                "avg_view_seconds": float(vals.get("averageViewDuration", 0) or 0),
+                "avg_view_pct": pct,
+                "subscribers_gained": int(vals.get("subscribersGained", 0) or 0),
+                "retention_avg": pct / 100.0,
+                "completion_rate": pct / 100.0,
+            }
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("YT watch-time failed: %s", exc)
             return None
 
     def _instagram(self, media_id: str, creds: dict) -> dict | None:
