@@ -35,7 +35,12 @@ export default function ChannelOptimizer({ account, onClose, onApplied }) {
     try {
       const confirmedFields = (plan.fields || [])
         .filter((f) => f.action === 'confirm' && confirmed[f.key]).map((f) => f.key)
-      const res = await api.post(`/accounts/${account.id}/optimize/apply`, { confirmed_fields: confirmedFields })
+      // Send the exact proposal the user reviewed, so the server doesn't re-run the LLM
+      // (that second call was what made apply slow enough to look frozen).
+      const proposed = {}
+      for (const f of (plan.fields || [])) proposed[f.key] = f.proposed
+      const res = await api.post(`/accounts/${account.id}/optimize/apply`,
+        { confirmed_fields: confirmedFields, proposed }, { timeoutMs: 90000 })
       setResult(res)
       onApplied?.()
     } catch (e) { setErr(e.message) }

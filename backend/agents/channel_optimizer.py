@@ -153,18 +153,33 @@ async def _propose(account) -> dict:
             "description": desc[:900], "source": "fallback"}
 
 
-async def analyze(account, creds: dict) -> dict:
-    """Read-only: build the current-vs-proposed plan + the Studio checklist. No writes."""
+async def analyze(account, creds: dict, client_targets: dict | None = None) -> dict:
+    """Read-only: build the current-vs-proposed plan + the Studio checklist. No writes.
+
+    `client_targets` lets apply() reuse the EXACT proposal the user already reviewed in
+    the modal (keys: keywords/description/country/defaultLanguage) instead of burning a
+    second LLM call — this is what made apply() slow enough to look like a hang."""
     branding = await asyncio.to_thread(yt.get_branding, creds)
     if not branding.get("ok"):
         return {"ok": False, "error": branding.get("error", "Não foi possível ler o canal.")}
     cur = branding.get("branding") or {}
-    proposed = await _propose(account)
-    keywords_str = _keywords_str(proposed["keywords"])
+
+    ct = client_targets or {}
+    if str(ct.get("keywords") or "").strip() and str(ct.get("description") or "").strip():
+        # Reuse what the user saw — keywords already came joined+capped from the prior
+        # analyze (a final space-separated string), so don't re-process it.
+        keywords_str = str(ct["keywords"])[:500]
+        description = str(ct["description"])[:1000]
+        source = "client"
+    else:
+        proposed = await _propose(account)
+        keywords_str = _keywords_str(proposed["keywords"])
+        description = proposed["description"]
+        source = proposed["source"]
 
     targets = {
         "keywords": (keywords_str, "Palavras-chave do canal"),
-        "description": (proposed["description"], "Descrição (Sobre)"),
+        "description": (description, "Descrição (Sobre)"),
         "country": (_country_for(account.content_language), "País"),
         "defaultLanguage": ((account.content_language or "pt-BR").split("-")[0], "Idioma padrão"),
     }
@@ -189,16 +204,18 @@ async def analyze(account, creds: dict) -> dict:
         "playlists": [f"{_niche.title()}: melhores momentos",
                       f"{_niche.title()}: do básico ao avançado"],
         "category_id": _category_for(account.niche),
-        "source": proposed["source"],
+        "source": source,
         "checklist": _checklist(account),
     }
 
 
-async def apply(account, creds: dict, confirmed_fields: list[str] | None = None) -> dict:
-    """Apply AUTO fields + any the user confirmed. Re-analyzes (idempotent) so the
-    write reflects the live state, then persists what was applied."""
+async def apply(account, creds: dict, confirmed_fields: list[str] | None = None,
+                client_targets: dict | None = None) -> dict:
+    """Apply AUTO fields + any the user confirmed. Re-reads the live channel (so the
+    write never clobbers a value the user set meanwhile) but reuses the proposal the
+    user already reviewed (`client_targets`) — no second LLM call, so it's fast."""
     confirmed = set(confirmed_fields or [])
-    plan = await analyze(account, creds)
+    plan = await analyze(account, creds, client_targets=client_targets)
     if not plan.get("ok"):
         return plan
 

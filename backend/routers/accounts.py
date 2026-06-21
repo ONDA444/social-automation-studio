@@ -180,6 +180,9 @@ def link_account(account_id: int, payload: LinkRequest, db: Session = Depends(ge
 # ---------------------------------------------------------------- Channel Optimizer
 class OptimizeApply(BaseModel):
     confirmed_fields: list[str] = Field(default_factory=list)
+    # The proposal the user already saw (keys: keywords/description/...), so apply
+    # reuses it instead of re-running the LLM. Optional → falls back to a fresh draft.
+    proposed: dict | None = None
 
 
 class ChecklistToggle(BaseModel):
@@ -225,7 +228,8 @@ async def optimize_apply(account_id: int, payload: OptimizeApply,
     from backend.agents import channel_optimizer as opt
 
     svc, acct = _optimizer_account(account_id, db)
-    res = await opt.apply(acct, svc.get_credentials(acct.id), payload.confirmed_fields)
+    res = await opt.apply(acct, svc.get_credentials(acct.id), payload.confirmed_fields,
+                          client_targets=payload.proposed)
     db.commit()  # persists acct.channel_optimization mutated inside apply()
     if not res.get("ok"):
         raise HTTPException(400, res.get("error", "Falha ao aplicar a otimização."))

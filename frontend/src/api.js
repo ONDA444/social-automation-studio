@@ -11,13 +11,30 @@ const _onVercel = typeof location !== 'undefined' && location.hostname.endsWith(
 export const API_BASE = _envBase || (_onVercel ? RAILWAY_BACKEND : '/api')
 const BASE = API_BASE
 
-async function req(method, path, body) {
+async function req(method, path, body, { timeoutMs } = {}) {
   const opts = { method, headers: {} }
   if (body !== undefined) {
     opts.headers['Content-Type'] = 'application/json'
     opts.body = JSON.stringify(body)
   }
-  const res = await fetch(`${BASE}${path}`, opts)
+  // Optional timeout so a stalled request can never hang the UI forever.
+  let timer
+  if (timeoutMs) {
+    const ctrl = new AbortController()
+    opts.signal = ctrl.signal
+    timer = setTimeout(() => ctrl.abort(), timeoutMs)
+  }
+  let res
+  try {
+    res = await fetch(`${BASE}${path}`, opts)
+  } catch (e) {
+    if (e?.name === 'AbortError') {
+      throw new Error('A operação demorou demais e foi cancelada. Tente de novo.')
+    }
+    throw e
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
   if (!res.ok) {
     let detail
     try { detail = (await res.json()).detail } catch { detail = undefined }
@@ -39,7 +56,7 @@ async function req(method, path, body) {
 
 export const api = {
   get: (p) => req('GET', p),
-  post: (p, b) => req('POST', p, b),
+  post: (p, b, opts) => req('POST', p, b, opts),
   patch: (p, b) => req('PATCH', p, b),
   put: (p, b) => req('PUT', p, b),
   del: (p) => req('DELETE', p),
