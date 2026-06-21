@@ -11,10 +11,27 @@ const STATUS_COLOR = {
 
 export default function AgentLog() {
   const { events, connected } = useWs()
-  const endRef = useRef(null)
-  useEffect(() => { endRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [events])
+  const scrollRef = useRef(null)
+  // Whether to keep pinned to the newest line. Starts true (show latest), flips
+  // off the moment the user scrolls up to read history, back on when they return
+  // to the bottom — so a new event never yanks them away mid-read.
+  const stickRef = useRef(true)
 
   const log = events.filter((e) => e.type === 'agent_event' || e.type === 'job_update')
+
+  const onScroll = () => {
+    const el = scrollRef.current
+    if (!el) return
+    stickRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 48
+  }
+
+  // Auto-follow only when pinned. Sets scrollTop on the LOG container itself —
+  // never scrollIntoView(), which would also scroll the page <main> and make the
+  // whole dashboard jump on every event.
+  useEffect(() => {
+    const el = scrollRef.current
+    if (el && stickRef.current) el.scrollTop = el.scrollHeight
+  }, [log.length])
 
   return (
     <div className="card p-4 flex flex-col h-full min-h-0">
@@ -24,7 +41,7 @@ export default function AgentLog() {
           {connected ? 'ao vivo' : 'desconectado'}
         </span>
       </div>
-      <div className="flex-1 overflow-y-auto font-mono text-[11px] space-y-1 pr-1">
+      <div ref={scrollRef} onScroll={onScroll} className="flex-1 overflow-y-auto font-mono text-[11px] space-y-1 pr-1">
         {log.length === 0 && <p className="text-text-muted">Sem eventos ainda. Crie um job para ver o pipeline ao vivo.</p>}
         {log.map((e, i) => (
           <div key={i} className="flex gap-2 items-baseline">
@@ -35,7 +52,6 @@ export default function AgentLog() {
             <span className="text-text-primary/80 truncate">{e.message || e.status}</span>
           </div>
         ))}
-        <div ref={endRef} />
       </div>
     </div>
   )
