@@ -42,6 +42,8 @@ export default function Schedule() {
   const [themeFormat, setThemeFormat] = useState('long')
   const [contentTypes, setContentTypes] = useState(FALLBACK_CONTENT_TYPES)
   const [queue, setQueue]   = useState([])
+  const [history, setHistory] = useState([])   // consumed themes (already turned into videos)
+  const [showHistory, setShowHistory] = useState(false)
   const [busy, setBusy]     = useState(false)
 
   const selAccount = accounts.find((a) => String(a.id) === sel)
@@ -66,8 +68,12 @@ export default function Schedule() {
   }, [sel])
 
   const loadQueue = () => {
-    if (!sel) { setQueue([]); return }
+    if (!sel) { setQueue([]); setHistory([]); return }
     api.get(`/themes?account_id=${sel}&status=pending`).then((d) => setQueue(d.themes || [])).catch(() => setQueue([]))
+    // Consumed themes (already generated) — shown as history so they don't look "lost".
+    api.get(`/themes?account_id=${sel}&status=consumed`)
+      .then((d) => setHistory((d.themes || []).slice().reverse()))
+      .catch(() => setHistory([]))
   }
   useEffect(() => { loadQueue() }, [sel])
 
@@ -104,6 +110,20 @@ export default function Schedule() {
 
   const deleteTheme = async (id) => {
     try { await api.del(`/themes/${id}`); loadQueue() } catch (e) { alert(e.message) }
+  }
+
+  // Re-queue a consumed theme as a fresh pending one (re-uses POST /themes — no
+  // backend change). Lets the user regenerate a theme whose video failed/was lost.
+  const regenTheme = async (t) => {
+    if (!sel) return
+    try {
+      await api.post('/themes', {
+        account_id: Number(sel), themes: [t.theme],
+        content_type: t.content_type, format: t.format,
+        target_platforms: t.target_platforms || ['youtube'],
+      })
+      loadQueue()
+    } catch (e) { alert(e.message) }
   }
 
   const clearThemes = async () => {
@@ -379,6 +399,34 @@ export default function Schedule() {
                     </li>
                   ))}
                 </ul>
+              )}
+
+              {/* History: consumed themes (already generated) — proves nothing was lost */}
+              {history.length > 0 && (
+                <div className="pt-1">
+                  <button type="button" onClick={() => setShowHistory((s) => !s)}
+                    className="text-xs text-text-muted hover:text-text-primary flex items-center gap-1">
+                    {showHistory ? '▾' : '▸'} Já gerados ({history.length})
+                  </button>
+                  {showHistory && (
+                    <ul className="space-y-2 max-h-[300px] overflow-y-auto pr-1 mt-2">
+                      {history.map((t) => (
+                        <li key={t.id} className="card p-3 flex items-center gap-2 opacity-70">
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm truncate" title={t.theme}>{t.theme}</p>
+                            <p className="text-[11px] text-text-muted mt-0.5">
+                              {t.content_type} · {t.format === 'short' ? '📱 Short' : '🖥️ Longo'} · já gerado
+                            </p>
+                          </div>
+                          <button className="btn-ghost text-xs shrink-0" onClick={() => regenTheme(t)}
+                            title="Gerar este tema de novo (vira um novo vídeo)">
+                            ↻ Gerar de novo
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
               )}
             </div>
           </div>
