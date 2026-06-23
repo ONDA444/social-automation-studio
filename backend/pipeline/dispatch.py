@@ -99,6 +99,13 @@ def dispatch_job(job_id: int) -> str:
     In-process is the safe default: it runs the pipeline on a dedicated worker
     loop inside this process.
     """
+    # SAFE_BOOT halts heavy renders process-wide (boot recovery from an OOM crash
+    # loop). The job stays QUEUED and resumes once the flag is cleared. Publishing
+    # (light network I/O, no OOM risk) is intentionally left running.
+    import os
+    if os.getenv("SAFE_BOOT", "").strip().lower() in {"1", "true", "yes", "on"}:
+        logger.warning("SAFE_BOOT ativo — render do job %s adiado (continua QUEUED).", job_id)
+        return "deferred"
     if settings.use_celery and _redis_ok():
         try:
             from backend.pipeline.video_pipeline import process_job

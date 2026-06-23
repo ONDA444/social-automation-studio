@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import importlib
 import logging
+import os
 import shutil
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -111,6 +112,14 @@ _FRONTEND_DIST = _ROOT_DIR / "frontend" / "dist"
 _RESERVED_PREFIXES = {"api", "files", "media", "health", "ws", "docs", "openapi.json", "redoc"}
 
 
+def _safe_boot() -> bool:
+    """SAFE_BOOT=1 makes startup NOT re-dispatch heavy renders — the recovery valve
+    for an OOM crash-loop (an interrupted video job that re-OOMs the container on every
+    restart until Railway gives up). Publish-status recovery still runs (no duplicates);
+    only the re-render of PROCESSING/QUEUED jobs is held so the API boots clean."""
+    return os.getenv("SAFE_BOOT", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _recover_orphan_jobs() -> None:
     """
     In-process pipeline (no Redis): any job left in PUBLISHING/PROCESSING when
@@ -137,6 +146,7 @@ def _recover_orphan_jobs() -> None:
                 .all()
             )
             cap = settings.llm_retry_max
+            safe = _safe_boot()
             recovered = 0
             for job in orphans:
                 if job.status == JobStatus.PROCESSING:
@@ -145,7 +155,15 @@ def _recover_orphan_jobs() -> None:
                     # after) picks it up — no manual Retry needed. Capped by
                     # retry_count so a job that keeps dying on boot eventually parks
                     # in ERROR for a human instead of looping forever.
-                    if (job.retry_count or 0) < cap:
+                    # SAFE_BOOT: park instead of requeue, so an OOM-looping render
+                    # can't keep killing the container on every restart.
+                    if safe:
+                        job.status = JobStatus.ERROR
+                        job.error_message = (
+                            "Render interrompido (boot seguro) — use Retry quando o "
+                            "serviço estiver estável."
+                        )
+                    elif (job.retry_count or 0) < cap:
                         job.retry_count = (job.retry_count or 0) + 1
                         job.status = JobStatus.QUEUED
                         job.error_message = None
@@ -189,6 +207,9 @@ def _redispatch_queued_jobs() -> None:
     queue there. Bounded to avoid a thundering herd on boot.
     """
     if settings.use_celery:
+        return
+    if _safe_boot():
+        logger.warning("SAFE_BOOT ativo — re-dispatch de jobs QUEUED ignorado no boot.")
         return
     try:
         from backend.database import SessionLocal
