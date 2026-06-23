@@ -92,6 +92,9 @@ def _job_quota_reset() -> None:
 _NO_AUTO_RETRY_MARKERS = (
     "PODE já estar no canal",
     "Verifique o YouTube",
+    # An interrupted render (prime OOM suspect) is parked for MANUAL Retry — never
+    # auto-resurrect it, or a heavy/OOM render would crash the container every cycle.
+    "Render interrompido",
 )
 
 

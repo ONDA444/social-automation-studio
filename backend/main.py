@@ -112,6 +112,18 @@ _FRONTEND_DIST = _ROOT_DIR / "frontend" / "dist"
 _RESERVED_PREFIXES = {"api", "files", "media", "health", "ws", "docs", "openapi.json", "redoc"}
 
 
+# A PROCESSING render orphan auto-resumes at most this many times across restarts;
+# beyond it (i.e. resuming it killed the process again) it parks for manual Retry so
+# a heavy/OOM render can't crash-loop the container.
+_ORPHAN_RESUME_MAX = 1
+# Distinctive phrase MUST also be listed in scheduler._NO_AUTO_RETRY_MARKERS so the
+# resurrection cron never auto-retries an interrupted render (that would reintroduce
+# intermittent OOM downtime). Manual Retry still works regardless.
+_RENDER_INTERRUPTED_MSG = (
+    "Render interrompido (reinício do servidor) — use Retry para gerar de novo."
+)
+
+
 def _safe_boot() -> bool:
     """SAFE_BOOT=1 makes startup NOT re-dispatch heavy renders — the recovery valve
     for an OOM crash-loop (an interrupted video job that re-OOMs the container on every
@@ -145,25 +157,20 @@ def _recover_orphan_jobs() -> None:
                 .filter(VideoJob.status.in_([JobStatus.PUBLISHING, JobStatus.PROCESSING]))
                 .all()
             )
-            cap = settings.llm_retry_max
             safe = _safe_boot()
             recovered = 0
             for job in orphans:
                 if job.status == JobStatus.PROCESSING:
-                    # A deploy/restart shouldn't cost the video: auto-requeue the
-                    # interrupted render so _redispatch_queued_jobs() (runs right
-                    # after) picks it up — no manual Retry needed. Capped by
-                    # retry_count so a job that keeps dying on boot eventually parks
-                    # in ERROR for a human instead of looping forever.
-                    # SAFE_BOOT: park instead of requeue, so an OOM-looping render
-                    # can't keep killing the container on every restart.
-                    if safe:
-                        job.status = JobStatus.ERROR
-                        job.error_message = (
-                            "Render interrompido (boot seguro) — use Retry quando o "
-                            "serviço estiver estável."
-                        )
-                    elif (job.retry_count or 0) < cap:
+                    # A render that was running when the process died is the PRIME
+                    # SUSPECT for the death (an OOM render that blew the RAM ceiling).
+                    # Auto-resuming it on EVERY boot is exactly what crash-looped the
+                    # whole service. So: resume it AT MOST ONCE (covers a benign
+                    # deploy/restart — "a deploy shouldn't cost the video"); if it
+                    # comes back as an orphan again, park it for MANUAL Retry with a
+                    # message the scheduler WON'T auto-resurrect (see _NO_AUTO_RETRY_
+                    # MARKERS) — so a heavy/OOM render can never loop the container.
+                    # SAFE_BOOT parks immediately (no resume at all).
+                    if (not safe) and (job.retry_count or 0) < _ORPHAN_RESUME_MAX:
                         job.retry_count = (job.retry_count or 0) + 1
                         job.status = JobStatus.QUEUED
                         job.error_message = None
@@ -171,9 +178,7 @@ def _recover_orphan_jobs() -> None:
                         job.progress = 0
                     else:
                         job.status = JobStatus.ERROR
-                        job.error_message = (
-                            "Interrompido por reinicialização do servidor — use Retry"
-                        )
+                        job.error_message = _RENDER_INTERRUPTED_MSG
                 else:  # PUBLISHING orphan — never blindly republish (duplicate risk)
                     ps = job.publish_status if isinstance(job.publish_status, dict) else {}
                     yt = ps.get("youtube") or {}
