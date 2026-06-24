@@ -41,6 +41,37 @@ def _sig_words(s: str) -> set[str]:
     return {w for w in re.sub(r"[^\w\s]", " ", _norm(s)).split()
             if len(w) > 3 and w not in _STOPWORDS}
 
+
+# Distinctive function words per language (already accent-stripped to match _norm
+# output). Used ONLY to decide whether the topic and the narration are in the SAME
+# language. The relevance test (rule 4) compares word OVERLAP, which is meaningless
+# across languages: an English theme title ("How Football Became the World's Most
+# Popular Sport") shares zero words with correct pt-BR narration ("o futebol nasceu
+# na Inglaterra..."), so a good on-theme script falsely reads as "off-theme" and
+# gets killed. When topic and narration are clearly different languages we SKIP
+# rule 4 — it can only judge relevance within one language.
+_LANG_HINTS = {
+    "pt": {"de", "da", "do", "das", "dos", "que", "com", "para", "por", "uma", "nao",
+           "como", "mais", "voce", "ele", "ela", "isso", "seu", "sua", "mundo",
+           "historia", "futebol", "foi", "ser", "esse", "essa", "ate", "entao"},
+    "en": {"the", "of", "and", "for", "with", "this", "that", "how", "why", "what",
+           "most", "world", "became", "your", "you", "from", "into", "about",
+           "their", "they", "when", "were", "popular", "sport"},
+    "es": {"el", "los", "las", "del", "con", "una", "como", "mas", "pero", "mundo",
+           "futbol", "fue", "ser", "hasta", "entonces", "porque", "donde"},
+}
+_LANG_HINTS_NORM = {lang: {_norm(w) for w in hints} for lang, hints in _LANG_HINTS.items()}
+
+
+def _lang_of(s: str) -> str | None:
+    """Best-effort language of a string from distinctive function words. Returns the
+    language with the most hits, or None when nothing matches (too short/ambiguous to
+    judge). Conservative on purpose: a None on either side means 'don't compare'."""
+    words = set(re.sub(r"[^\w\s]", " ", _norm(s)).split())
+    scores = {lang: len(words & hints) for lang, hints in _LANG_HINTS_NORM.items()}
+    best = max(scores, key=scores.get)
+    return best if scores[best] >= 1 else None
+
 # Distinctive fragments of the offline template + generic AI filler. A real,
 # fact-grounded script does not lean on these.
 _GENERIC_MARKERS = [
@@ -176,7 +207,14 @@ def assess(script: dict, topic: str | None = None,
     #    pass untouched and false-positives stay near zero.
     if topic:
         topic_words = _sig_words(topic)
-        if len(topic_words) >= 4 and not (topic_words & _sig_words(raw)):
+        # Only judge relevance when topic and narration are confidently the SAME
+        # language — otherwise the overlap test is invalid (an English title vs a
+        # Portuguese narration shares no words yet is perfectly on-theme). Cross-
+        # language or unclassifiable → give the benefit of the doubt (rules 1-3
+        # already block generic/vague/stunted scripts regardless of language).
+        tl, nl = _lang_of(topic), _lang_of(raw)
+        same_lang = tl is not None and nl is not None and tl == nl
+        if same_lang and len(topic_words) >= 4 and not (topic_words & _sig_words(raw)):
             return False, ("roteiro desconectado do tema — nenhuma palavra do tópico "
                            f"({', '.join(sorted(topic_words))}) aparece na narração")
 
