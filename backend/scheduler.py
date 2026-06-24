@@ -95,6 +95,14 @@ _NO_AUTO_RETRY_MARKERS = (
     # An interrupted render (prime OOM suspect) is parked for MANUAL Retry — never
     # auto-resurrect it, or a heavy/OOM render would crash the container every cycle.
     "Render interrompido",
+    # Dead OAuth (revoked/expired refresh token): re-rendering the whole video from
+    # scratch only to fail publish again burns the scarce free-LLM quota every cycle
+    # — and that wasted burn is what surfaces as "scriptwriter esgotou (LLM indisponível)"
+    # on OTHER jobs. Park auth failures until the user reconnects the channel; then new
+    # jobs (or a manual Retry) flow normally.
+    "invalid_grant",
+    "expired or revoked",
+    "credenciais conectadas",
 )
 
 
