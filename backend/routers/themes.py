@@ -26,6 +26,7 @@ class ThemeCreate(BaseModel):
 class BulkDelete(BaseModel):
     ids: list[int] | None = None
     status: str | None = None
+    account_id: int | None = None
 
 
 @router.post("")
@@ -136,14 +137,26 @@ def restore_consumed(account_id: int | None = Query(None), db: Session = Depends
 
 @router.post("/bulk-delete")
 def bulk_delete_themes(payload: BulkDelete, db: Session = Depends(get_db)):
-    """Delete by explicit ids and/or by status; returns the deleted ids."""
-    q = db.query(ThemeQueue)
+    """Delete by explicit ids and/or by status, optionally scoped to one account.
+
+    A status-only delete MUST be scoped to an account_id: without it, a single
+    "limpar fila" click would wipe that status across EVERY channel. We refuse the
+    unscoped case so the queue of one channel can never silently erase another's.
+    """
     if payload.ids is None and payload.status is None:
         return {"deleted": []}
+    if payload.ids is None and payload.account_id is None:
+        raise HTTPException(
+            400, "account_id obrigatório ao limpar por status (evita apagar de todos os canais)"
+        )
+
+    q = db.query(ThemeQueue)
     if payload.ids is not None:
         q = q.filter(ThemeQueue.id.in_(payload.ids))
     if payload.status is not None:
         q = q.filter(ThemeQueue.status == payload.status)
+    if payload.account_id is not None:
+        q = q.filter(ThemeQueue.account_id == payload.account_id)
 
     rows = q.all()
     deleted = [r.id for r in rows]

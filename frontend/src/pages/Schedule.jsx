@@ -129,7 +129,7 @@ export default function Schedule() {
   const clearThemes = async () => {
     if (queue.length === 0) return
     if (!confirm(`Limpar ${queue.length} tema(s) da fila?`)) return
-    try { await api.post('/themes/bulk-delete', { status: 'pending' }); loadQueue() } catch (e) { alert(e.message) }
+    try { await api.post('/themes/bulk-delete', { status: 'pending', account_id: Number(sel) }); loadQueue() } catch (e) { alert(e.message) }
   }
 
   return (
@@ -369,7 +369,7 @@ export default function Schedule() {
                   </span>
                 </p>
                 {queue.length > 0 && (
-                  <button className="btn-ghost text-xs" onClick={clearThemes}>🧹 Limpar todos</button>
+                  <button className="btn-ghost text-xs" onClick={clearThemes}>🧹 Limpar fila</button>
                 )}
               </div>
 
