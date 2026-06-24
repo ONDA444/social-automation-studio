@@ -178,6 +178,11 @@ async def run_publish(job_id: int) -> dict:
         if job.status == JobStatus.ERROR:
             if any((r or {}).get("status") == "file_missing" for r in results.values()):
                 job.error_message = _FILE_GONE
+            elif any((r or {}).get("status") == "auth_error" for r in results.values()):
+                # Dead token: don't make the user click Retry (it can't work until the
+                # channel is reconnected). Tell them what to do — the reconnect itself
+                # auto-republishes this job (see dispatch.resume_account_blocked_jobs).
+                job.error_message = _AUTH_BLOCKED
             else:
                 first_err = next((r.get("error") for r in results.values()
                                   if isinstance(r, dict) and r.get("error")), None)
@@ -214,6 +219,12 @@ async def run_publish(job_id: int) -> dict:
 
 _FILE_GONE = ("Os arquivos do vídeo foram perdidos (o servidor reiniciou). "
               "Gere o vídeo novamente (↻) para poder publicar.")
+
+# Keep the "invalid_grant" token in this string: scheduler._NO_AUTO_RETRY_MARKERS and
+# dispatch.resume_account_blocked_jobs both match on it to (a) NOT waste LLM retrying
+# while blocked and (b) auto-republish the moment the channel is reconnected.
+_AUTH_BLOCKED = ("Login do YouTube expirou (invalid_grant) — reconecte o canal em "
+                 "Plataformas e o vídeo publica sozinho. Não precisa clicar Retry.")
 
 
 async def self_publish_youtube(job, seo, creds, publish_at, shorts, privacy="private",

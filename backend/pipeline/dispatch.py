@@ -161,3 +161,64 @@ async def _guarded(run: str, job_id: int) -> None:
             from backend.agents.publisher import run_publish
 
             await run_publish(job_id)
+
+
+def resume_account_blocked_jobs(account_id: int) -> list[int]:
+    """A channel was just reconnected with a fresh, working OAuth token — auto-resume
+    every job that was parked because its token had died.
+
+    If the rendered video still exists on disk → re-publish it (cheap, NO LLM, no
+    re-render). If the file is gone (the container recycled, ephemeral FS) → requeue
+    a fresh render. Fire-and-forget: dispatch_* return immediately, so this never
+    blocks the OAuth callback. Returns the resumed job ids.
+
+    This is the complement to scheduler._job_retry_errored skipping auth failures:
+    we don't retry while blocked (no wasted free-LLM quota), then resume the instant
+    the blocker clears — exactly "the video goes back into production and publishes
+    by itself" without the dead-token retry loop.
+    """
+    import os
+
+    from sqlalchemy import or_, select
+
+    from backend.database import SessionLocal
+    from backend.models import JobStatus, VideoJob
+
+    db = SessionLocal()
+    resumed: list[int] = []
+    try:
+        rows = db.execute(
+            select(VideoJob).where(
+                VideoJob.account_id == account_id,
+                VideoJob.status == JobStatus.ERROR,
+                or_(
+                    VideoJob.error_message.contains("invalid_grant"),
+                    VideoJob.error_message.contains("expired or revoked"),
+                    VideoJob.error_message.contains("credenciais conectadas"),
+                ),
+            )
+        ).scalars().all()
+        for job in rows:
+            job.error_message = None
+            job.approval_status = "approved"
+            if job.main_video_path and os.path.exists(job.main_video_path):
+                job.status = JobStatus.APPROVED        # render survives → publish only
+                db.commit()
+                dispatch_publish(job.id)
+            else:
+                job.status = JobStatus.QUEUED          # file gone → must re-render
+                job.progress = 0
+                job.current_agent = None
+                db.commit()
+                dispatch_job(job.id)
+            resumed.append(job.id)
+        if resumed:
+            logger.info("Reconexão da conta %s — %d job(s) retomado(s) automaticamente: %s",
+                        account_id, len(resumed), resumed)
+        return resumed
+    except Exception:  # noqa: BLE001 — must never break the OAuth callback
+        db.rollback()
+        logger.exception("resume_account_blocked_jobs falhou (conta %s)", account_id)
+        return resumed
+    finally:
+        db.close()

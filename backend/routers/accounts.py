@@ -290,8 +290,21 @@ def oauth_callback(platform: str, code: str = Query(""), state: str = Query(""),
         acct.channel_id = channel["channel_id"]
         if channel.get("title"):
             acct.display_name = channel["title"]
-        db.commit()
-    return _html(f"✓ {platform.capitalize()} conectado com sucesso! Pode fechar esta janela.")
+    db.commit()
+
+    # The token is freshly valid (the exchange just succeeded) — this is the only
+    # moment we KNOW it works. Auto-resume every job that was parked waiting on this
+    # reconnect: re-publish if the rendered video survives, else re-render. No button.
+    resumed: list[int] = []
+    try:
+        from backend.pipeline.dispatch import resume_account_blocked_jobs
+        resumed = resume_account_blocked_jobs(account_id)
+    except Exception:  # noqa: BLE001 — never break the success page over a resume hiccup
+        resumed = []
+    extra = (f" {len(resumed)} vídeo(s) voltando à produção automaticamente."
+             if resumed else "")
+    return _html(f"✓ {platform.capitalize()} conectado com sucesso!{extra} "
+                 "Pode fechar esta janela.")
 
 
 def _html(msg: str) -> HTMLResponse:
