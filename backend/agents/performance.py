@@ -55,21 +55,43 @@ class PerformanceInsights:
                 if cur is None or (r.collected_at and (cur.collected_at is None
                                    or r.collected_at > cur.collected_at)):
                     latest[r.platform] = r
-            vals = latest.values()
+            vals = list(latest.values())
+            # retention/completion are RATES → average across platforms (summing is
+            # meaningless); they default to 0.0 until the YouTube Analytics API
+            # populates them, so _score's factor stays 1.0 (no-op) until then.
+            def _avg(attr: str) -> float:
+                xs = [float(getattr(r, attr, 0.0) or 0.0) for r in vals]
+                return sum(xs) / len(xs) if xs else 0.0
             out.append({
                 "job": job,
                 "views": sum(int(getattr(r, "views", 0) or 0) for r in vals),
                 "likes": sum(int(getattr(r, "likes", 0) or 0) for r in vals),
                 "comments": sum(int(getattr(r, "comments", 0) or 0) for r in vals),
+                "retention_avg": _avg("retention_avg"),
+                "completion_rate": _avg("completion_rate"),
             })
         return out
+
+    @staticmethod
+    def _score(d: dict) -> float:
+        """Learning signal that rewards videos people actually WATCHED/engaged with, not
+        just clicked. Uses real free-API data today (views + likes + comments) and folds
+        in retention/completion automatically once the YouTube Analytics API populates
+        them (default 0.0 → factor 1.0, a no-op until real data arrives). Raw views alone
+        rewarded clickbait that tanks session-time — the opposite of what Browse/Suggested
+        and the 4000h threshold reward."""
+        views = max(0, int(d.get("views", 0) or 0))
+        eng = (int(d.get("likes", 0) or 0) + int(d.get("comments", 0) or 0)) / max(1, views)
+        ret = float(d.get("retention_avg", 0.0) or 0.0)
+        comp = float(d.get("completion_rate", 0.0) or 0.0)
+        return views * (1 + min(eng, 1.0)) * (1 + ret + comp)
 
     def account_insights(self, account_id: int | None) -> dict:
         """Structured "what worked / what didn't" for the account (or not-ready)."""
         measured = [d for d in self._measured(account_id) if d["views"] > 0]
         if len(measured) < _MIN_VIDEOS:
             return {"ready": False, "n": len(measured)}
-        measured.sort(key=lambda d: d["views"], reverse=True)
+        measured.sort(key=self._score, reverse=True)
         n = len(measured)
         cut = max(1, n // 3)
         top, bottom = measured[:cut], measured[-cut:]
@@ -88,7 +110,7 @@ class PerformanceInsights:
         for d in top:
             meta = d["job"].seo_metadata if isinstance(d["job"].seo_metadata, dict) else {}
             for tag in ((meta.get("youtube") or {}).get("tags") or [])[:15]:
-                tag_score[tag] += d["views"]
+                tag_score[tag] += int(self._score(d))
         best_tags = [t for t, _ in sorted(tag_score.items(), key=lambda x: x[1], reverse=True)[:12]]
 
         def _titles(items: list[dict]) -> list[str]:

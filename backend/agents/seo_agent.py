@@ -87,6 +87,25 @@ class SEOAgent(BaseAgent):
                     if isinstance(t, str) and t.strip()]
         if len(existing) < 8:
             seo["youtube"]["tags"] = self._merge_tags(existing, script, content_type)
+
+        # Pin the high-CTR title from Packaging. The SEO LLM is told NOT to regenerate
+        # the title, but weak free models sometimes rewrite it anyway and the drifted
+        # title would publish. Force the Packaging recommendation back when present.
+        rec = self._recommended_title()
+        if rec:
+            seo["youtube"]["title"] = rec
+
+        # YouTube shows the first 3 hashtags ABOVE the title — a free discovery surface
+        # the description never used (audit: hashtags never reached YouTube). Append 2-3
+        # deterministic hashtags from seo_keywords; #Shorts goes FIRST for vertical/short
+        # format — the signal native Shorts were missing. Cap at 3 (>15 = all ignored).
+        is_short = (script.get("format") or self.ctx_get("format")) == "short"
+        hashtags = self._yt_hashtags(script.get("seo_keywords") or [], is_short)
+        if hashtags:
+            desc = (seo["youtube"].get("description") or "").rstrip()
+            if not any(h.lower() in desc.lower() for h in hashtags):
+                seo["youtube"]["description"] = (desc + "\n\n" + " ".join(hashtags)).strip()
+
         seo = self._clamp(seo)
         await self._localize(seo)
 
@@ -244,6 +263,36 @@ JSON EXATO (preencha todos os campos, não omita plataformas):
             "seo_score": {"value": 50, "breakdown": {}, "verdict": "ok"},
             "seo_notes": [],
         }
+
+    def _recommended_title(self) -> str | None:
+        """The high-CTR title chosen by the PackagingStrategist, if any. Mirrors the
+        contract _via_llm reads (packaging.youtube_titles + recommended_index)."""
+        packaging = self.ctx_get("packaging") or {}
+        titles = packaging.get("youtube_titles")
+        idx = packaging.get("recommended_index")
+        if isinstance(titles, list) and isinstance(idx, int) and 0 <= idx < len(titles):
+            t = titles[idx]
+            rec = t.get("text", t) if isinstance(t, dict) else t
+            rec = (rec or "").strip()
+            return rec or None
+        return None
+
+    @staticmethod
+    def _yt_hashtags(keywords: list[str], is_short: bool) -> list[str]:
+        """Up to 3 clickable hashtags for the YouTube description (the first 3 render
+        above the title). #Shorts leads for vertical/short format."""
+        out: list[str] = []
+        if is_short:
+            out.append("#Shorts")
+        for k in keywords:
+            if not isinstance(k, str):
+                continue
+            h = "#" + re.sub(r"[^0-9A-Za-zÀ-ÿ]", "", k)
+            if len(h) > 1 and h.lower() not in (t.lower() for t in out):
+                out.append(h)
+            if len(out) >= 3:
+                break
+        return out[:3]
 
     @staticmethod
     def _merge_tags(existing: list[str], script: dict, content_type: str) -> list[str]:
