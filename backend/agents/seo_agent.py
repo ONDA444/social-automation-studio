@@ -78,6 +78,15 @@ class SEOAgent(BaseAgent):
         _cta = runtime_settings.effective_cta()
         if _cta:
             seo["youtube"]["description"] = _cta + "\n\n" + (seo["youtube"]["description"] or "")
+        # Backfill YouTube tags. Weak free models routinely fill title/description but
+        # DROP the "tags" field — the video then publishes with ZERO tags (lost search +
+        # suggested signal; the "Tags 0/500" the user saw). Top up from seo_keywords +
+        # title words so a video is NEVER shipped tagless; the LLM's own tags stay first
+        # (its #1 tag is the exact keyword).
+        existing = [t for t in (seo["youtube"].get("tags") or [])
+                    if isinstance(t, str) and t.strip()]
+        if len(existing) < 8:
+            seo["youtube"]["tags"] = self._merge_tags(existing, script, content_type)
         seo = self._clamp(seo)
         await self._localize(seo)
 
@@ -235,6 +244,28 @@ JSON EXATO (preencha todos os campos, não omita plataformas):
             "seo_score": {"value": 50, "breakdown": {}, "verdict": "ok"},
             "seo_notes": [],
         }
+
+    @staticmethod
+    def _merge_tags(existing: list[str], script: dict, content_type: str) -> list[str]:
+        """Never let a video ship tagless. Keep the LLM's tags first (its #1 tag is the
+        exact keyword), then top up from seo_keywords, the full title (one long-tail
+        tag), salient title words, and a few evergreen tags until there's healthy
+        search/suggested coverage. Case-insensitive dedup; drops over-long tags."""
+        title = (script.get("title") or "").strip()
+        kws = [k for k in (script.get("seo_keywords") or []) if isinstance(k, str) and k.strip()]
+        title_words = re.findall(r"[A-Za-zÀ-ÿ0-9]{4,}", title)
+        generic = ["viral", "shorts", "brasil", content_type.split("_")[0]]
+        out: list[str] = []
+        seen: set[str] = set()
+        for t in [*existing, *kws, title, *title_words, *generic]:
+            t = (t or "").strip()
+            key = t.lower()
+            if t and key not in seen and len(t) <= 60:
+                out.append(t)
+                seen.add(key)
+            if len(out) >= 15:
+                break
+        return out
 
     @staticmethod
     def _chapters(script: dict, narration: dict) -> list[dict]:
