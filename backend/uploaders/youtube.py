@@ -443,3 +443,30 @@ def upload_video(
         else:
             status = "error"
         return {"ok": False, "platform": "youtube", "error": msg, "status": status}
+
+
+def upload_captions(credentials: dict, video_id: str, srt_path: str,
+                    language: str = "pt-BR", name: str = "") -> dict:
+    """Attach an SRT as a real YouTube caption track — search-indexable transcript +
+    closed captions + free auto-translation (the cheapest international-reach lever for
+    a faceless channel). Uses the broad 'youtube' scope already in SCOPES (no re-consent).
+    Strictly best-effort: a failure here must NEVER affect the video publish."""
+    err = _missing_libs()
+    if err:
+        return {"ok": False, "status": "library_missing", "error": err}
+    import os
+    if not (video_id and srt_path and os.path.exists(srt_path)):
+        return {"ok": False, "status": "file_missing"}
+    try:
+        from googleapiclient.http import MediaFileUpload
+
+        yt = _service(credentials)
+        lang = (language or "pt-BR").split("-")[0]  # YouTube caption language = BCP-47 primary
+        body = {"snippet": {"videoId": video_id, "language": lang,
+                            "name": (name or "")[:150], "isDraft": False}}
+        media = MediaFileUpload(srt_path, mimetype="application/octet-stream", resumable=False)
+        resp = yt.captions().insert(part="snippet", body=body, media_body=media).execute()
+        return {"ok": True, "caption_id": resp.get("id")}
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("caption upload failed (video %s): %s", video_id, exc)
+        return {"ok": False, "status": "error", "error": str(exc)[:200]}

@@ -78,7 +78,11 @@ class CaptionAgent(BaseAgent):
         ass_path.write_text(ass, encoding="utf-8")
 
         result = {"ass_path": str(ass_path), "style": style, "mode": mode}
-        if mode == "srt" and words:
+        # Always emit an SRT alongside the burned-in ASS whenever we have word timings:
+        # the ASS is for the render, the SRT is uploaded to YouTube as a REAL caption
+        # track (search-indexable transcript + CC + free auto-translation = the biggest
+        # free international-reach lever). Cheap text file; harmless when unused.
+        if words:
             srt_path = out_dir / "captions.srt"
             srt_path.write_text(self._srt(self._group_words(words)), encoding="utf-8")
             result["srt_path"] = str(srt_path)

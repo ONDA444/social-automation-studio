@@ -233,8 +233,14 @@ async def self_publish_youtube(job, seo, creds, publish_at, shorts, privacy="pri
         return {"ok": False, "platform": "youtube", "status": "file_missing", "error": _FILE_GONE}
     y = seo.get("youtube", {})
     _lang = content_language or "pt-BR"  # BCP-47; stamped as metadata + audio language
+    # Native Short (vertical <60s): stamp #Shorts on the upload title so YouTube's
+    # Shorts classifier files it in the Shorts feed. The description already carries
+    # #Shorts (seo_agent adds it for short format). Derived shorts handled below.
+    main_title = y.get("title", job.title)
+    if getattr(job, "video_format", "long") == "short" and "#short" not in (main_title or "").lower():
+        main_title = (main_title + " #Shorts")[:100]
     main = await _with_retry(
-        yt.upload_video, job.main_video_path, y.get("title", job.title),
+        yt.upload_video, job.main_video_path, main_title,
         y.get("description", ""), y.get("tags", []), creds,
         category_id=y.get("category_id", "22"), privacy=privacy, publish_at=publish_at,
         thumbnail_path=job.thumbnail_path,
@@ -242,6 +248,19 @@ async def self_publish_youtube(job, seo, creds, publish_at, shorts, privacy="pri
     )
     short_results = []
     if main.get("ok"):
+        # Upload the SRT as a real caption track (search transcript + CC + free auto-
+        # translation). The caption_agent writes captions.srt next to the rendered
+        # video; reconstruct that path. Strictly best-effort — never affects the publish.
+        try:
+            vid = main.get("video_id")
+            srt = os.path.join(os.path.dirname(job.main_video_path), "captions.srt")
+            if vid and os.path.exists(srt):
+                cap = await asyncio.to_thread(yt.upload_captions, creds, vid, srt, _lang)
+                if not cap.get("ok"):
+                    logger.info("caption track not attached for job %s: %s",
+                                getattr(job, "id", "?"), cap.get("error") or cap.get("status"))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("caption upload skipped for job %s: %s", getattr(job, "id", "?"), exc)
         # Group the upload into its series/topic playlist for session-time. The
         # playlist_target is produced by the SEO agent and was never consumed.
         # Strictly best-effort: a playlist failure must NOT affect the publish.
@@ -264,12 +283,18 @@ async def self_publish_youtube(job, seo, creds, publish_at, shorts, privacy="pri
                                         settings.default_language, locs)
         except Exception as exc:  # noqa: BLE001
             logger.warning("localization apply failed for job %s: %s", getattr(job, "id", "?"), exc)
+        # Derived shorts ride the long video's SEO; force the Shorts feed signal into
+        # BOTH title and the first description line (#Shorts above the title), since the
+        # long video's description has no #Shorts of its own.
+        short_desc = y.get("description", "")
+        if "#short" not in short_desc.lower():
+            short_desc = "#Shorts\n" + short_desc
         for sp in shorts:
             if sp == job.main_video_path:
                 continue
             short_results.append(await _with_retry(
-                yt.upload_video, sp, (y.get("title", job.title) + " #shorts")[:100],
-                y.get("description", ""), y.get("tags", []), creds,
+                yt.upload_video, sp, (y.get("title", job.title) + " #Shorts")[:100],
+                short_desc, y.get("tags", []), creds,
                 category_id=y.get("category_id", "22"), privacy=privacy,
                 default_language=_lang, default_audio_language=_lang, label="yt-short",
             ))
