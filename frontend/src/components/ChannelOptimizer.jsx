@@ -7,6 +7,14 @@ const ACTION_META = {
   nochange: { label: 'já ok', color: 'var(--text-muted)', bg: 'rgba(255,255,255,0.06)' },
 }
 
+function friendlyError(message) {
+  const text = String(message || '')
+  if (/quota|exceeded|403/i.test(text)) {
+    return 'Quota diaria do YouTube atingida. O Google bloqueou a leitura/otimizacao do canal agora. Aguarde o reset da quota ou solicite aumento no Google Cloud.'
+  }
+  return text
+}
+
 export default function ChannelOptimizer({ account, onClose, onApplied }) {
   const [plan, setPlan] = useState(null)
   const [err, setErr] = useState(null)
@@ -21,7 +29,7 @@ export default function ChannelOptimizer({ account, onClose, onApplied }) {
     try {
       const p = await api.post(`/accounts/${account.id}/optimize/analyze`)
       setPlan(p)
-    } catch (e) { setErr(e.message) }
+    } catch (e) { setErr(friendlyError(e.message)) }
   }
   useEffect(() => {
     analyze()
@@ -43,7 +51,7 @@ export default function ChannelOptimizer({ account, onClose, onApplied }) {
         { confirmed_fields: confirmedFields, proposed }, { timeoutMs: 90000 })
       setResult(res)
       onApplied?.()
-    } catch (e) { setErr(e.message) }
+    } catch (e) { setErr(friendlyError(e.message)) }
     finally { setApplying(false) }
   }
 

@@ -11,6 +11,7 @@ google-api-python-client + google-auth-oauthlib to enable real uploads.
 from __future__ import annotations
 
 import logging
+import json
 
 from backend.config import settings
 
@@ -217,6 +218,38 @@ _BRANDING_WRITABLE = ("keywords", "description", "country", "defaultLanguage",
                       "unsubscribedTrailer")
 
 
+def _friendly_api_error(exc: Exception, action: str = "acessar o YouTube") -> str:
+    """Translate noisy googleapiclient HttpError text into something useful."""
+    raw = str(exc)
+    lowered = raw.lower()
+    reason = ""
+    try:
+        content = getattr(exc, "content", b"")
+        if isinstance(content, bytes):
+            content = content.decode("utf-8", "ignore")
+        if content:
+            payload = json.loads(content)
+            errors = payload.get("error", {}).get("errors") or []
+            reason = (errors[0].get("reason") or "") if errors else ""
+            raw = payload.get("error", {}).get("message") or raw
+            lowered = f"{reason} {raw}".lower()
+    except Exception:  # noqa: BLE001
+        pass
+    if "quota" in lowered or "exceeded" in lowered:
+        return (
+            "Quota diaria da API do YouTube atingida. O Google bloqueou esta acao "
+            f"ao tentar {action}. Aguarde o reset da quota ou solicite aumento de quota no Google Cloud."
+        )
+    if "forbidden" in lowered or "403" in lowered:
+        return (
+            "O YouTube recusou esta acao (403). Verifique se a conta conectada tem permissao "
+            "para gerenciar este canal e tente reconectar o YouTube."
+        )
+    if any(k in lowered for k in ("invalid_grant", "token has been expired", "token_revoked")):
+        return "Login do YouTube expirou. Reconecte este canal e tente novamente."
+    return raw[:300]
+
+
 def get_branding(creds: dict) -> dict:
     """Read the current channel identity. Returns {ok, channel_id, title, branding:{
     keywords, description, country, defaultLanguage, ...}}. Best-effort."""
@@ -237,7 +270,7 @@ def get_branding(creds: dict) -> dict:
         }
     except Exception as exc:  # noqa: BLE001
         logger.warning("get_branding failed: %s", exc)
-        return {"ok": False, "error": str(exc)[:200]}
+        return {"ok": False, "error": _friendly_api_error(exc, "ler a identidade do canal")}
 
 
 # Channel-resource fields that are read-only or deprecated/removed — echoing any of
@@ -297,7 +330,7 @@ def update_branding(creds: dict, patch: dict) -> dict:
         return {"ok": False, "error": str(last_err)[:300]}
     except Exception as exc:  # noqa: BLE001
         logger.warning("update_branding failed: %s", exc)
-        return {"ok": False, "error": str(exc)[:200]}
+        return {"ok": False, "error": _friendly_api_error(exc, "atualizar a identidade do canal")}
 
 
 def list_channel_sections(creds: dict) -> list[dict]:
