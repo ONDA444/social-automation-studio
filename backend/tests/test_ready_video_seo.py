@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import unittest
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from backend.agents.ready_video_seo import build_drive_seo
 from backend.scheduler import _NO_AUTO_RETRY_MARKERS, _ready_video_seo
@@ -76,6 +77,25 @@ class ReadyVideoSeoTests(unittest.TestCase):
         self.assertIn("invalid_grant", markers)
         self.assertIn("expired or revoked", markers)
         self.assertIn("credenciais conectadas", markers)
+
+    def test_legacy_scheduler_helper_applies_monetization_cta_once(self) -> None:
+        ready = SimpleNamespace(name="Academia (1).mp4", folder_path="ACADEMIA", niche="Academia")
+        account = SimpleNamespace(
+            display_name="Canal Fitness",
+            niche="Academia",
+            drive_niche="Academia",
+            target_audience="mulheres",
+        )
+        cta = "Links de afiliado: https://example.com"
+
+        with patch("backend.runtime_settings.effective_cta", return_value=cta), \
+             patch("backend.runtime_settings.effective_localize_langs", return_value=[]):
+            seo = _ready_video_seo("Academia", ready, account, "motivational_speech", "short")
+            seo_again = _ready_video_seo("Academia", ready, account, "motivational_speech", "short")
+
+        self.assertTrue(seo["youtube"]["description"].startswith(cta))
+        self.assertEqual(seo["youtube"]["description"].count(cta), 1)
+        self.assertEqual(seo_again["youtube"]["description"].count(cta), 1)
 
 
 if __name__ == "__main__":

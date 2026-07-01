@@ -19,7 +19,7 @@ from typing import Any
 import httpx
 
 from backend import llm
-from backend.agents.seo_agent import YT_CATEGORY
+from backend.agents.seo_agent import YT_CATEGORY, apply_runtime_youtube_enrichment_sync
 from backend.config import settings
 
 logger = logging.getLogger("studio.ready_video_seo")
@@ -59,6 +59,7 @@ def build_ready_video_package(
     elif analysis.get("aspect_ratio") == "16:9" and context.get("video_format") != "short":
         context["video_format"] = "long"
     seo = build_drive_seo(context=context, analysis=analysis)
+    apply_runtime_youtube_enrichment_sync(seo)
     return analysis, seo
 
 

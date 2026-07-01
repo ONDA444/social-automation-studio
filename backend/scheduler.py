@@ -616,6 +616,7 @@ def _clean_ready_title(name: str | None) -> str:
 
 def _ready_video_seo(title: str, ready, acct, content_type: str, video_format: str) -> dict:
     from backend.agents.ready_video_seo import build_drive_seo
+    from backend.agents.seo_agent import apply_runtime_youtube_enrichment_sync
 
     context = {
         "title_seed": title,
@@ -628,7 +629,8 @@ def _ready_video_seo(title: str, ready, acct, content_type: str, video_format: s
         "content_type": content_type,
         "video_format": video_format,
     }
-    return build_drive_seo(context=context, analysis={})
+    seo = build_drive_seo(context=context, analysis={})
+    return apply_runtime_youtube_enrichment_sync(seo)
 
 
 def _job_consume_themes() -> None:

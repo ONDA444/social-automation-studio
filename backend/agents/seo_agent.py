@@ -39,6 +39,70 @@ YT_CATEGORY = {
 }
 
 
+async def apply_runtime_youtube_enrichment(seo: dict) -> dict:
+    """Apply runtime YouTube settings to an existing SEO package."""
+    seo.setdefault("youtube", {})
+    yt = seo["youtube"]
+
+    cta = runtime_settings.effective_cta()
+    if cta:
+        desc = yt.get("description") or ""
+        if not desc.strip().startswith(cta.strip()):
+            yt["description"] = cta + "\n\n" + desc
+
+    await localize_youtube_metadata(seo)
+    return seo
+
+
+def apply_runtime_youtube_enrichment_sync(seo: dict) -> dict:
+    """Synchronous wrapper for scheduler paths."""
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(apply_runtime_youtube_enrichment(seo))
+    if loop.is_running():
+        logger.debug("runtime SEO localization skipped inside running event loop")
+        cta = runtime_settings.effective_cta()
+        if cta:
+            seo.setdefault("youtube", {})
+            desc = seo["youtube"].get("description") or ""
+            if not desc.strip().startswith(cta.strip()):
+                seo["youtube"]["description"] = cta + "\n\n" + desc
+        return seo
+    return loop.run_until_complete(apply_runtime_youtube_enrichment(seo))
+
+
+async def localize_youtube_metadata(seo: dict) -> None:
+    """Translate title/description into configured YouTube localizations."""
+    langs = runtime_settings.effective_localize_langs()
+    yt = seo.get("youtube", {})
+    title = yt.get("title", "")
+    if not langs or not title:
+        return
+    try:
+        prompt = (
+            f"Traduza o TITULO e a DESCRICAO de um video do YouTube para estes idiomas "
+            f"(codigos ISO): {', '.join(langs)}. Preserve o apelo de clique; NAO traduza "
+            f"nomes proprios, hashtags nem URLs. Responda SOMENTE JSON no formato "
+            f'{{"<lang>": {{"title": "...", "description": "..."}}}}.\n\n'
+            f"TITULO: {title}\n\nDESCRICAO:\n{(yt.get('description') or '')[:1500]}"
+        )
+        out = await llm.complete_json(
+            prompt,
+            system="Tradutor profissional. So JSON valido.",
+            max_tokens=1500,
+        )
+        loc = {}
+        for lang in langs:
+            v = out.get(lang) if isinstance(out, dict) else None
+            if isinstance(v, dict) and v.get("title"):
+                loc[lang] = {"title": v.get("title", ""), "description": v.get("description", "")}
+        if loc:
+            seo["youtube"]["localizations"] = loc
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("localize failed: %s", exc)
+
+
 class SEOAgent(BaseAgent):
     name = "seo_agent"
 
@@ -75,9 +139,6 @@ class SEOAgent(BaseAgent):
         # lines — above the "Show more" fold converts 5-10x. This is the only revenue that
         # does NOT need the channel to be in the YPP. Empty by default (no-op); the user
         # sets it in Settings → Monetização (dashboard) or MONETIZATION_CTA on Railway.
-        _cta = runtime_settings.effective_cta()
-        if _cta:
-            seo["youtube"]["description"] = _cta + "\n\n" + (seo["youtube"]["description"] or "")
         # Backfill YouTube tags. Weak free models routinely fill title/description but
         # DROP the "tags" field — the video then publishes with ZERO tags (lost search +
         # suggested signal; the "Tags 0/500" the user saw). Top up from seo_keywords +
@@ -107,7 +168,7 @@ class SEOAgent(BaseAgent):
                 seo["youtube"]["description"] = (desc + "\n\n" + " ".join(hashtags)).strip()
 
         seo = self._clamp(seo)
-        await self._localize(seo)
+        await apply_runtime_youtube_enrichment(seo)
 
         self.ctx_set("seo", seo)
         self.emit("progress", "SEO pronto (YT/TikTok/IG)", progress=86)

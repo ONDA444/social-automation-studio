@@ -1,8 +1,11 @@
 """Schedule API — per-account config + computed posting slots + calendar."""
 from __future__ import annotations
 
+import re
+from zoneinfo import ZoneInfo
+
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -16,10 +19,40 @@ router = APIRouter(prefix="/schedule", tags=["schedule"])
 class ScheduleConfigIn(BaseModel):
     mode: str = "fixed"
     timezone: str = "America/Sao_Paulo"
-    videos_per_day: int = 1
+    videos_per_day: int = Field(1, ge=1, le=6)
     post_times: list[str] = []
     auto_shorts: bool = True
     shorts_formats: list[int] = []
+
+    @field_validator("mode")
+    @classmethod
+    def validate_mode(cls, value: str) -> str:
+        if value not in {"fixed", "smart", "trending_aware"}:
+            raise ValueError("modo de publicacao invalido")
+        return value
+
+    @field_validator("timezone")
+    @classmethod
+    def validate_timezone(cls, value: str) -> str:
+        try:
+            ZoneInfo(value or "America/Sao_Paulo")
+        except Exception as exc:  # noqa: BLE001
+            raise ValueError("timezone invalido") from exc
+        return value
+
+    @field_validator("post_times")
+    @classmethod
+    def validate_post_times(cls, values: list[str]) -> list[str]:
+        out: list[str] = []
+        for raw in values or []:
+            value = str(raw or "").strip()
+            if not value:
+                continue
+            if not re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", value):
+                raise ValueError("horario invalido; use HH:MM")
+            if value not in out:
+                out.append(value)
+        return out[:6]
 
 
 @router.get("/config/{account_id}")
