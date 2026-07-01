@@ -322,6 +322,28 @@ class DriveLibraryTests(unittest.TestCase):
             self.assertIsNone(rows["reserved"].reserved_job_id)
             self.assertEqual(rows["used"].status, "used")
 
+    def test_clear_account_inventory_does_not_touch_other_channels(self) -> None:
+        engine = create_engine("sqlite:///:memory:", future=True)
+        Base.metadata.create_all(bind=engine)
+        Session = sessionmaker(bind=engine, future=True)
+        with Session() as db:
+            db.add_all(
+                [
+                    ReadyVideo(drive_file_id="selected", name="selected.mp4", account_id=9, status="available"),
+                    ReadyVideo(drive_file_id="other", name="other.mp4", account_id=10, status="available"),
+                    ReadyVideo(drive_file_id="global", name="global.mp4", account_id=None, status="available"),
+                ]
+            )
+            db.commit()
+
+            result = DriveLibraryService(db).clear_account_inventory(9)
+
+            rows = {row.drive_file_id: row.status for row in db.query(ReadyVideo).all()}
+            self.assertEqual(result, {"cleared": 1, "kept_used": 0})
+            self.assertEqual(rows["selected"], "missing")
+            self.assertEqual(rows["other"], "available")
+            self.assertEqual(rows["global"], "available")
+
 
 if __name__ == "__main__":
     unittest.main()
