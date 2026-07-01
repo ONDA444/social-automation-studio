@@ -2,6 +2,11 @@
 .git
 .claude
 .agents
+.env
+.env.*
+*.key
+credentials*.json
+token*.json
 node_modules
 frontend/node_modules
 frontend/src

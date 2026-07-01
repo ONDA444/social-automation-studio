@@ -83,6 +83,7 @@ _ROUTER_MODULES = [
     "backend.routers.analytics",
     "backend.routers.themes",
     "backend.routers.settings",
+    "backend.routers.drive_library",
 ]
 
 

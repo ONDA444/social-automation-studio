@@ -35,6 +35,9 @@ function Row({ job, accounts, selected, onToggleSelect, onChannelChange, onRetry
             {job.video_context?.is_trending && (
               <span className="badge text-[9px] mr-1.5 align-middle" style={{ background: 'rgba(255,182,39,0.16)', color: 'var(--warning)' }}>🔥 do momento</span>
             )}
+            {job.video_context?.source === 'drive_ready_video' && (
+              <span className="badge text-[9px] mr-1.5 align-middle" style={{ background: 'rgba(0,214,143,0.13)', color: 'var(--success)', border: '1px solid rgba(0,214,143,0.22)' }}>Drive</span>
+            )}
             {job.title}
           </p>
           <div className="flex items-center gap-1.5 flex-wrap text-[11px] text-text-muted leading-tight">
@@ -115,6 +118,9 @@ export default function Queue() {
   const [accounts, setAccounts] = useState([])
   const [selected, setSelected] = useState(() => new Set())
   const [modal, setModal]       = useState(false)
+  const [statusFilter, setStatusFilter] = useState('all')
+  const [sourceFilter, setSourceFilter] = useState('all')
+  const [query, setQuery] = useState('')
   const fileRef = useRef(null)
   const { count } = useWs()
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }))
@@ -213,6 +219,14 @@ export default function Queue() {
   }
 
   const errCount = jobs.filter((j) => j.status === 'error').length
+  const filteredJobs = jobs.filter((j) => {
+    const source = j.video_context?.source === 'drive_ready_video' ? 'drive' : 'ai'
+    const matchesStatus = statusFilter === 'all' || j.status === statusFilter
+    const matchesSource = sourceFilter === 'all' || sourceFilter === source
+    const q = query.trim().toLowerCase()
+    const matchesQuery = !q || [j.title, j.content_type, j.topic].filter(Boolean).join(' ').toLowerCase().includes(q)
+    return matchesStatus && matchesSource && matchesQuery
+  })
 
   return (
     <div className="space-y-4 fade-in">
@@ -237,7 +251,28 @@ export default function Queue() {
       </p>
 
       {jobs.length > 0 && (
-        <div className="card p-2.5 flex items-center gap-3 flex-wrap">
+        <div className="card p-3 flex items-center gap-3 flex-wrap">
+          <input
+            className="input text-sm sm:max-w-[260px]"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Buscar por titulo ou tipo"
+          />
+          <select className="input text-sm sm:w-44" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+            <option value="all">Todos status</option>
+            <option value="queued">Na fila</option>
+            <option value="processing">Processando</option>
+            <option value="awaiting_approval">Aguardando aprovacao</option>
+            <option value="approved">Aprovados</option>
+            <option value="published">Publicados</option>
+            <option value="error">Com erro</option>
+          </select>
+          <select className="input text-sm sm:w-36" value={sourceFilter} onChange={(e) => setSourceFilter(e.target.value)}>
+            <option value="all">Toda fonte</option>
+            <option value="drive">Drive</option>
+            <option value="ai">IA</option>
+          </select>
+          <div className="flex-1" />
           <label className="flex items-center gap-2 text-xs text-text-muted cursor-pointer select-none">
             <input type="checkbox" className="accent-accent" checked={allSelected} onChange={toggleSelectAll} />
             Selecionar todos
@@ -245,7 +280,6 @@ export default function Queue() {
           {selected.size > 0 && (
             <span className="text-xs text-text-muted">{selected.size} selecionado(s)</span>
           )}
-          <div className="flex-1" />
           <button className="btn-ghost text-xs" disabled={selected.size === 0} onClick={deleteSelected}>
             🗑 Excluir selecionados
           </button>
@@ -267,11 +301,16 @@ export default function Queue() {
             hint="Crie um vídeo ou importe um CSV para começar."
             action={<button className="btn btn-primary text-sm" onClick={() => setModal(true)}>+ Novo vídeo</button>} />
         </div>
+      ) : filteredJobs.length === 0 ? (
+        <div className="rounded-card" style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)' }}>
+          <EmptyState icon="?" title="Nada encontrado."
+            hint="Ajuste os filtros para ver outros jobs da fila." />
+        </div>
       ) : (
         <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
-          <SortableContext items={jobs.map((j) => j.id)} strategy={verticalListSortingStrategy}>
+          <SortableContext items={filteredJobs.map((j) => j.id)} strategy={verticalListSortingStrategy}>
             <div className="space-y-1.5">
-              {jobs.map((j) => (
+              {filteredJobs.map((j) => (
                 <Row
                   key={j.id}
                   job={j}

@@ -1,66 +1,64 @@
 :root {
-  /* Backgrounds — neutral charcoal (less blue haze), surfaces are near-solid so
-     they read crisp without heavy backdrop-blur. */
-  --bg-base:       #0A0A0F;
-  --bg-surface:    #121218;
-  --bg-elevated:   #1A1A22;
-  --bg-glass:      rgba(19, 19, 26, 0.86);
+  /* Cloud Studio Editorial: light production desk with a calm dark shell. */
+  --bg-base:       #F5F7F2;
+  --bg-surface:    #FFFFFF;
+  --bg-elevated:   #EEF3EC;
+  --bg-panel:      #E7EEE5;
+  --bg-glass:      rgba(255, 255, 255, 0.92);
 
-  /* Borders — a touch more visible for clean definition between dense rows */
-  --border:        rgba(124, 106, 255, 0.16);
-  --border-glow:   rgba(124, 106, 255, 0.40);
-  --border-glass:  rgba(255, 255, 255, 0.08);
+  --sidebar-base:  #111814;
+  --sidebar-soft:  #17231D;
+  --topbar-base:   rgba(255,255,255,0.88);
 
-  /* Accent — violet primary, used with restraint (glow reserved for primary CTA) */
-  --accent:        #7C6AFF;
-  --accent-dim:    rgba(124, 106, 255, 0.14);
-  --accent-glow:   rgba(124, 106, 255, 0.45);
+  --border:        #D7E0D4;
+  --border-glow:   rgba(31, 138, 91, 0.34);
+  --border-glass:  rgba(23, 32, 26, 0.10);
+  --surface-hover: #F0F5EE;
 
-  /* Platforms */
-  --accent-yt:     #FF4444;
-  --accent-tk:     #FF2D78;
+  --accent:        #1F8A5B;
+  --accent-strong: #176B47;
+  --accent-blue:   #2F6FED;
+  --accent-dim:    rgba(31, 138, 91, 0.12);
+  --accent-glow:   rgba(31, 138, 91, 0.28);
+
+  --accent-yt:     #E53935;
+  --accent-tk:     #111827;
   --accent-ig:     #C13584;
 
-  /* Text — brighter muted tone for readability on dense screens */
-  --text-primary:  #ECECF6;
-  --text-muted:    #8A8AAd;
-  --text-dim:      #50506A;
+  --text-primary:  #17201A;
+  --text-muted:    #647067;
+  --text-dim:      #8A978D;
+  --text-inverse:  #F6FAF5;
 
-  /* Status */
-  --success:       #2BD99B;
-  --warning:       #FFB627;
-  --error:         #FF5066;
+  --success:       #1F8A5B;
+  --warning:       #D9822B;
+  --error:         #C2413A;
 
-  /* Radius — tighter, more precise */
-  --radius-card:   12px;
-  --radius-btn:    9px;
+  --radius-card:   10px;
+  --radius-btn:    8px;
   --radius-badge:  7px;
   --radius-pill:   999px;
 
-  /* Shadows — quieter; depth from contrast, not glow */
-  --shadow-xs:     0 1px 2px rgba(0,0,0,0.5);
-  --shadow-sm:     0 1px 3px rgba(0,0,0,0.5);
-  --shadow-md:     0 4px 16px rgba(0,0,0,0.40);
-  --shadow-lg:     0 12px 40px rgba(0,0,0,0.50);
-  --shadow-glow:   0 0 0 1px rgba(124,106,255,0.22), 0 6px 22px rgba(124,106,255,0.16);
-  --shadow-glow-lg: 0 0 0 1px rgba(124,106,255,0.30), 0 10px 30px rgba(124,106,255,0.22);
+  --shadow-xs:     0 1px 2px rgba(20, 32, 24, 0.05);
+  --shadow-sm:     0 1px 3px rgba(20, 32, 24, 0.08);
+  --shadow-md:     0 8px 24px rgba(20, 32, 24, 0.10);
+  --shadow-lg:     0 18px 50px rgba(20, 32, 24, 0.14);
+  --shadow-card:   0 1px 2px rgba(20, 32, 24, 0.05), 0 10px 30px rgba(20, 32, 24, 0.06);
+  --shadow-glow:   0 0 0 1px rgba(31,138,91,0.18), 0 8px 22px rgba(31,138,91,0.12);
+  --shadow-glow-lg: 0 0 0 1px rgba(31,138,91,0.22), 0 12px 30px rgba(31,138,91,0.16);
 
-  /* Gradients */
-  --grad-accent:   linear-gradient(135deg, #8E7CFF 0%, #7C6AFF 55%, #6450E6 100%);
-  --grad-success:  linear-gradient(135deg, #2BD99B 0%, #1FC78C 100%);
-  --grad-danger:   linear-gradient(135deg, #FF6477 0%, #FF5066 100%);
-  --grad-surface:  linear-gradient(180deg, rgba(255,255,255,0.03) 0%, rgba(255,255,255,0) 60%);
-  --grad-glass:    linear-gradient(135deg, rgba(255,255,255,0.06) 0%, rgba(255,255,255,0.015) 100%);
-  /* Ambient backdrop — much subtler so content stays crisp, not hazy */
-  --grad-nebula:   radial-gradient(ellipse 1000px 600px at 12% -15%, rgba(124,106,255,0.10), transparent 60%),
-                   radial-gradient(ellipse 900px 600px at 95% 0%, rgba(43,217,155,0.04), transparent 55%);
+  --grad-accent:   linear-gradient(135deg, #1F8A5B 0%, #176B47 100%);
+  --grad-success:  linear-gradient(135deg, #2E9F6B 0%, #1F8A5B 100%);
+  --grad-danger:   linear-gradient(135deg, #D4564D 0%, #C2413A 100%);
+  --grad-surface:  linear-gradient(180deg, rgba(255,255,255,0.82) 0%, rgba(255,255,255,0) 100%);
+  --grad-glass:    linear-gradient(135deg, rgba(255,255,255,0.9) 0%, rgba(247,250,245,0.72) 100%);
+  --grad-nebula:   radial-gradient(ellipse 900px 480px at 8% -18%, rgba(31,138,91,0.12), transparent 58%),
+                   radial-gradient(ellipse 760px 420px at 96% 0%, rgba(47,111,237,0.08), transparent 58%);
 
-  /* Typography */
-  --font-display:  'Space Grotesk', sans-serif;
+  --font-display:  'Manrope', sans-serif;
   --font-ui:       'Inter', sans-serif;
   --font-mono:     'JetBrains Mono', monospace;
 
-  /* Easing */
   --ease-out:      cubic-bezier(0.22, 1, 0.36, 1);
   --ease-spring:   cubic-bezier(0.34, 1.4, 0.64, 1);
   --ease-smooth:   cubic-bezier(0.4, 0, 0.2, 1);

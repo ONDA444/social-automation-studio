@@ -36,6 +36,11 @@ class AccountUpdate(BaseModel):
     content_tone: str | None = None
     content_language: str | None = None
     music_style: str | None = None  # calm | balanced | energetic
+    video_source_mode: str | None = None  # ai | drive | mixed
+    drive_folder_id: str | None = None
+    drive_folder_url: str | None = None
+    drive_niche: str | None = None
+    drive_recursive: bool | None = None
     ride_trends: bool | None = None          # 🔥 Momento em alta (opt-in)
     trends_per_cycle: int | None = None      # 1..2
     preferred_templates: list[str] | None = None
@@ -82,6 +87,8 @@ def update_account(account_id: int, payload: AccountUpdate, db: Session = Depend
     for k, v in payload.model_dump(exclude_none=True).items():
         if k == "trends_per_cycle":
             v = max(1, min(2, int(v)))  # never let a channel flood: cap at 2/cycle
+        if k == "video_source_mode":
+            v = v if v in {"ai", "drive", "mixed"} else "ai"
         setattr(acct, k, v)
     db.commit()
     db.refresh(acct)

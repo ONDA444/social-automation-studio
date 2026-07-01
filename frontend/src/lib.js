@@ -1,9 +1,9 @@
 export const STATUS_META = {
   queued:                 { label: 'Na fila', color: 'var(--text-muted)' },
-  processing:             { label: 'Processando', color: 'var(--accent)' },
-  awaiting_approval:      { label: 'Aguardando aprovação', color: 'var(--warning)' },
+  processing:             { label: 'Processando', color: 'var(--accent-blue)' },
+  awaiting_approval:      { label: 'Aguardando aprovacao', color: 'var(--warning)' },
   approved:               { label: 'Aprovado', color: 'var(--success)' },
-  publishing:             { label: 'Publicando', color: 'var(--accent)' },
+  publishing:             { label: 'Publicando', color: 'var(--accent-blue)' },
   published:              { label: 'Publicado', color: 'var(--success)' },
   rejected:               { label: 'Rejeitado', color: 'var(--error)' },
   error:                  { label: 'Erro', color: 'var(--error)' },
@@ -11,31 +11,26 @@ export const STATUS_META = {
 }
 
 export const PLATFORM_META = {
-  youtube:   { label: 'YouTube', color: 'var(--accent-yt)', icon: '▶' },
-  tiktok:    { label: 'TikTok', color: 'var(--accent-tk)', icon: '♪' },
-  instagram: { label: 'Instagram', color: 'var(--accent-ig)', icon: '◎' },
+  youtube:   { label: 'YouTube', color: 'var(--accent-yt)', icon: 'YT' },
+  tiktok:    { label: 'TikTok', color: 'var(--accent-tk)', icon: 'TT' },
+  instagram: { label: 'Instagram', color: 'var(--accent-ig)', icon: 'IG' },
 }
 
-// Idiomas suportados por canal. O valor (BCP-47) é gravado em content_language
-// e o backend gera roteiro, título, descrição e voz nesse idioma.
 export const LANGUAGES = [
-  { code: 'pt-BR', label: '🇧🇷 Português' },
-  { code: 'en-US', label: '🇺🇸 English' },
-  { code: 'es-ES', label: '🇪🇸 Español' },
-  { code: 'fr-FR', label: '🇫🇷 Français' },
-  { code: 'de-DE', label: '🇩🇪 Deutsch' },
-  { code: 'it-IT', label: '🇮🇹 Italiano' },
-  { code: 'ja-JP', label: '🇯🇵 日本語' },
-  { code: 'hi-IN', label: '🇮🇳 हिन्दी' },
-  { code: 'ar-SA', label: '🇸🇦 العربية' },
+  { code: 'pt-BR', label: 'Portugues' },
+  { code: 'en-US', label: 'English' },
+  { code: 'es-ES', label: 'Espanol' },
+  { code: 'fr-FR', label: 'Francais' },
+  { code: 'de-DE', label: 'Deutsch' },
+  { code: 'it-IT', label: 'Italiano' },
+  { code: 'ja-JP', label: 'Japanese' },
+  { code: 'hi-IN', label: 'Hindi' },
+  { code: 'ar-SA', label: 'Arabic' },
 ]
 
-// Free edge-tts preset voices (no cloning, $0) — each channel can pick a distinct
-// one so channels don't all sound the same. Grouped by language; the picker shows
-// the voices matching the channel's language. (M)=masculino (F)=feminino.
 export const FREE_VOICES = [
-  { id: 'pt-BR-AntonioNeural', lang: 'pt', label: 'Antônio (M)' },
-  { id: 'pt-BR-FabioNeural', lang: 'pt', label: 'Fábio (M)' },
+  { id: 'pt-BR-AntonioNeural', lang: 'pt', label: 'Antonio (M)' },
+  { id: 'pt-BR-FabioNeural', lang: 'pt', label: 'Fabio (M)' },
   { id: 'pt-BR-DonatoNeural', lang: 'pt', label: 'Donato (M)' },
   { id: 'pt-BR-HumbertoNeural', lang: 'pt', label: 'Humberto (M)' },
   { id: 'pt-BR-NicolauNeural', lang: 'pt', label: 'Nicolau (M)' },
@@ -50,7 +45,7 @@ export const FREE_VOICES = [
   { id: 'en-US-JennyNeural', lang: 'en', label: 'Jenny (F)' },
   { id: 'en-US-AriaNeural', lang: 'en', label: 'Aria (F)' },
   { id: 'en-US-MichelleNeural', lang: 'en', label: 'Michelle (F)' },
-  { id: 'es-ES-AlvaroNeural', lang: 'es', label: 'Álvaro (M)' },
+  { id: 'es-ES-AlvaroNeural', lang: 'es', label: 'Alvaro (M)' },
   { id: 'es-ES-ElviraNeural', lang: 'es', label: 'Elvira (F)' },
   { id: 'fr-FR-HenriNeural', lang: 'fr', label: 'Henri (M)' },
   { id: 'fr-FR-DeniseNeural', lang: 'fr', label: 'Denise (F)' },
@@ -66,7 +61,6 @@ export const FREE_VOICES = [
   { id: 'ar-SA-ZariyahNeural', lang: 'ar', label: 'Zariyah (F)' },
 ]
 
-// Voices available for a channel's language (falls back to all if none match).
 export function voicesForLang(language) {
   const p = (language || 'pt-BR').toLowerCase().split('-')[0]
   const m = FREE_VOICES.filter((v) => v.lang === p)
@@ -78,7 +72,7 @@ export function statusMeta(s) {
 }
 
 export function fmtDate(iso) {
-  if (!iso) return '—'
+  if (!iso) return '-'
   try { return new Date(iso).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }) }
   catch { return iso }
 }

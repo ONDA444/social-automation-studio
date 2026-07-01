@@ -1,183 +1,110 @@
 import { NavLink } from 'react-router-dom'
 
-const NAV = [
-  { to: '/', icon: '📊', label: 'Dashboard' },
-  { to: '/queue', icon: '🎬', label: 'Fila' },
-  { to: '/schedule', icon: '📅', label: 'Agenda' },
-  { to: '/approvals', icon: '✅', label: 'Aprovações' },
-  { to: '/shorts', icon: '📱', label: 'Shorts' },
-  { to: '/remix', icon: '🎨', label: 'Remix' },
-  { to: '/platforms', icon: '🔗', label: 'Plataformas' },
-  { to: '/analytics', icon: '📈', label: 'Analytics' },
-  { to: '/settings', icon: '⚙️', label: 'Config' },
+const NAV_GROUPS = [
+  {
+    label: 'Operacao',
+    items: [
+      { to: '/', icon: 'grid', label: 'Dashboard' },
+      { to: '/queue', icon: 'film', label: 'Fila' },
+      { to: '/schedule', icon: 'calendar', label: 'Agenda' },
+      { to: '/approvals', icon: 'check', label: 'Aprovacoes' },
+    ],
+  },
+  {
+    label: 'Conteudo',
+    items: [
+      { to: '/shorts', icon: 'phone', label: 'Shorts' },
+      { to: '/remix', icon: 'spark', label: 'Remix' },
+    ],
+  },
+  {
+    label: 'Canais',
+    items: [
+      { to: '/platforms', icon: 'link', label: 'Plataformas' },
+      { to: '/analytics', icon: 'chart', label: 'Analytics' },
+      { to: '/settings', icon: 'gear', label: 'Config' },
+    ],
+  },
 ]
 
+function NavIcon({ name }) {
+  const common = { fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round', strokeLinejoin: 'round' }
+  const paths = {
+    grid: <><rect x="3" y="3" width="7" height="7" rx="1.5" /><rect x="14" y="3" width="7" height="7" rx="1.5" /><rect x="3" y="14" width="7" height="7" rx="1.5" /><rect x="14" y="14" width="7" height="7" rx="1.5" /></>,
+    film: <><rect x="4" y="5" width="16" height="14" rx="2" /><path d="M8 5v14M16 5v14M4 10h16M4 14h16" /></>,
+    calendar: <><rect x="4" y="5" width="16" height="16" rx="2" /><path d="M8 3v4M16 3v4M4 10h16" /></>,
+    check: <><path d="M20 6 9 17l-5-5" /></>,
+    phone: <><rect x="8" y="3" width="8" height="18" rx="2" /><path d="M11 18h2" /></>,
+    spark: <><path d="m12 3 1.7 5.3L19 10l-5.3 1.7L12 17l-1.7-5.3L5 10l5.3-1.7L12 3Z" /><path d="M19 16v4M17 18h4" /></>,
+    link: <><path d="M10 13a5 5 0 0 0 7.1 0l2-2a5 5 0 0 0-7.1-7.1l-1.1 1.1" /><path d="M14 11a5 5 0 0 0-7.1 0l-2 2A5 5 0 0 0 12 20.1l1.1-1.1" /></>,
+    chart: <><path d="M4 19V5" /><path d="M4 19h17" /><path d="m7 15 4-4 3 3 5-7" /></>,
+    gear: <><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2 3-.2-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5v.2h-3.4v-.2a1.7 1.7 0 0 0-1-1.5 1.7 1.7 0 0 0-1.9.3l-.2.1-2-3 .1-.1A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.5-1H3v-3.4h.1a1.7 1.7 0 0 0 1.5-1 1.7 1.7 0 0 0-.3-1.9l-.1-.1 2-3 .2.1a1.7 1.7 0 0 0 1.9.3 1.7 1.7 0 0 0 1-1.5V3h3.4v.2a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.2-.1 2 3-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.5 1h.1V14h-.1a1.7 1.7 0 0 0-1.5 1Z" /></>,
+  }
+  return <svg width="18" height="18" viewBox="0 0 24 24" {...common}>{paths[name]}</svg>
+}
+
 const sidebarBase = {
-  background: 'rgba(6,6,12,0.95)',
-  backdropFilter: 'blur(24px)',
-  WebkitBackdropFilter: 'blur(24px)',
-  borderRight: '1px solid rgba(124,106,255,0.15)',
+  background: 'var(--sidebar-base)',
+  borderRight: '1px solid rgba(255,255,255,0.08)',
 }
 
 function SidebarContent({ onItemClick, showCloseBtn, onClose }) {
   return (
     <>
-      {/* ── Logo area ── */}
-      <div style={{ padding: '22px 16px 20px', position: 'relative', display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0 }}>
-        {/* Glow orb */}
-        <div
-          aria-hidden="true"
-          style={{
-            position: 'absolute',
-            left: -8,
-            top: '50%',
-            transform: 'translateY(-50%)',
-            width: 90,
-            height: 90,
-            background: 'radial-gradient(ellipse at center, rgba(124,106,255,0.38) 0%, transparent 70%)',
-            filter: 'blur(18px)',
-            pointerEvents: 'none',
-          }}
-        />
-        {/* SAS badge */}
-        <div
-          style={{
-            position: 'relative',
-            zIndex: 1,
-            width: 40,
-            height: 40,
-            borderRadius: 12,
-            background: 'linear-gradient(135deg, #7C6AFF 0%, #A78BFA 100%)',
-            boxShadow: '0 0 20px rgba(124,106,255,0.5), 0 4px 12px rgba(0,0,0,0.4)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            flexShrink: 0,
-          }}
-        >
-          <span style={{ fontWeight: 900, color: '#fff', fontSize: 12, letterSpacing: '-0.5px' }}>SAS</span>
-        </div>
-        {/* Name */}
-        <div style={{ position: 'relative', zIndex: 1, minWidth: 0, flex: 1 }}>
-          <p style={{ margin: 0, fontWeight: 700, color: '#EEEEFF', fontSize: 13, letterSpacing: '-0.2px', lineHeight: 1.2 }}>
-            Social Automation
-          </p>
-          <p style={{ margin: '2px 0 0', fontSize: 11, color: 'rgba(160,150,220,0.65)', lineHeight: 1.2 }}>
-            Studio
-          </p>
-        </div>
-        {/* Mobile close button */}
-        {showCloseBtn && (
-          <button
-            onClick={onClose}
-            aria-label="Fechar menu"
-            style={{
-              position: 'relative',
-              zIndex: 1,
-              width: 30,
-              height: 30,
-              borderRadius: 8,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              color: 'rgba(160,150,220,0.7)',
-              background: 'transparent',
-              border: 'none',
-              cursor: 'pointer',
-              flexShrink: 0,
-              transition: 'background 150ms',
-            }}
-            onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(255,255,255,0.07)' }}
-            onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent' }}
-          >
-            <svg width="13" height="13" viewBox="0 0 13 13" fill="none">
-              <path d="M1 1L12 12M12 1L1 12" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+      <div className="px-4 pt-5 pb-4 shrink-0">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-btn flex items-center justify-center border"
+            style={{ background: 'var(--sidebar-soft)', borderColor: 'rgba(255,255,255,0.12)', color: 'var(--text-inverse)' }}>
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+              <path d="M5 17V7l7-4 7 4v10l-7 4-7-4Z" stroke="currentColor" strokeWidth="1.8" />
+              <path d="M8 12h8M12 8v8" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
             </svg>
-          </button>
-        )}
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="m-0 text-sm font-bold leading-tight" style={{ color: 'var(--text-inverse)' }}>Social Studio</p>
+            <p className="m-0 mt-0.5 text-[11px]" style={{ color: 'rgba(246,250,245,0.58)' }}>producao automatica</p>
+          </div>
+          {showCloseBtn && (
+            <button className="shell-icon-button" onClick={onClose} aria-label="Fechar menu">
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                <path d="M1.5 1.5 12.5 12.5M12.5 1.5 1.5 12.5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+              </svg>
+            </button>
+          )}
+        </div>
       </div>
 
-      {/* ── Nav items ── */}
-      <nav style={{ display: 'flex', flexDirection: 'column', gap: 2, padding: '0 12px', flex: 1, overflowY: 'auto' }}>
-        {NAV.map((item) => (
-          <NavLink
-            key={item.to}
-            to={item.to}
-            end={item.to === '/'}
-            onClick={onItemClick}
-            className={({ isActive }) =>
-              `flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium border transition-all ${
-                isActive ? 'border-accent/40' : 'border-transparent hover:bg-white/5'
-              }`
-            }
-            style={({ isActive }) =>
-              isActive
-                ? {
-                    background: 'rgba(124,106,255,0.18)',
-                    color: '#A78BFA',
-                    boxShadow: '0 0 14px rgba(124,106,255,0.10)',
-                    transitionDuration: '180ms',
-                  }
-                : {
-                    color: '#7070A0',
-                    transitionDuration: '180ms',
-                  }
-            }
-          >
-            <span
-              style={{
-                width: 28,
-                height: 28,
-                borderRadius: 8,
-                background: 'rgba(255,255,255,0.04)',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                fontSize: 16,
-                lineHeight: 1,
-                flexShrink: 0,
-              }}
-            >
-              {item.icon}
-            </span>
-            <span>{item.label}</span>
-          </NavLink>
+      <nav className="flex-1 overflow-y-auto px-3 pb-3">
+        {NAV_GROUPS.map((group) => (
+          <div key={group.label} className="mb-4">
+            <p className="px-3 mb-1.5 text-[10px] font-bold uppercase" style={{ color: 'rgba(246,250,245,0.42)', letterSpacing: '.08em' }}>
+              {group.label}
+            </p>
+            <div className="space-y-1">
+              {group.items.map((item) => (
+                <NavLink
+                  key={item.to}
+                  to={item.to}
+                  end={item.to === '/'}
+                  onClick={onItemClick}
+                  className={({ isActive }) => `studio-nav-item ${isActive ? 'is-active' : ''}`}
+                >
+                  <span className="studio-nav-icon"><NavIcon name={item.icon} /></span>
+                  <span className="truncate">{item.label}</span>
+                </NavLink>
+              ))}
+            </div>
+          </div>
         ))}
       </nav>
 
-      {/* ── Status footer ── */}
-      <div
-        style={{
-          padding: '14px 16px 20px',
-          borderTop: '1px solid rgba(124,106,255,0.10)',
-          flexShrink: 0,
-        }}
-      >
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 8,
-            padding: '7px 12px',
-            borderRadius: 10,
-            background: 'rgba(0,214,143,0.06)',
-            border: '1px solid rgba(0,214,143,0.15)',
-          }}
-        >
-          <span
-            style={{
-              width: 7,
-              height: 7,
-              borderRadius: '50%',
-              background: '#00D68F',
-              boxShadow: '0 0 7px #00D68F',
-              flexShrink: 0,
-              animation: 'sas-pulse 2.2s ease-in-out infinite',
-            }}
-          />
-          <span style={{ fontSize: 12, color: 'rgba(0,214,143,0.85)', fontWeight: 500 }}>
-            Railway live
-          </span>
+      <div className="p-4 shrink-0" style={{ borderTop: '1px solid rgba(255,255,255,0.08)' }}>
+        <div className="rounded-btn px-3 py-2" style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)' }}>
+          <div className="flex items-center gap-2">
+            <span className="w-2 h-2 rounded-full" style={{ background: 'var(--success)' }} />
+            <span className="text-xs font-semibold" style={{ color: 'var(--text-inverse)' }}>Sistema ativo</span>
+          </div>
+          <p className="mt-1 text-[11px]" style={{ color: 'rgba(246,250,245,0.52)' }}>agenda, fila e publicacao</p>
         </div>
       </div>
     </>
@@ -187,37 +114,19 @@ function SidebarContent({ onItemClick, showCloseBtn, onClose }) {
 export default function Sidebar({ mobileOpen = false, onClose = () => {} }) {
   return (
     <>
-      {/* Keyframe for status dot */}
-      <style>{`
-        @keyframes sas-pulse {
-          0%, 100% { box-shadow: 0 0 5px #00D68F; opacity: 1; }
-          50% { box-shadow: 0 0 13px #00D68F; opacity: 0.65; }
-        }
-      `}</style>
-
-      {/* ── Desktop sidebar ── */}
-      <aside
-        className="hidden md:flex w-64 shrink-0 flex-col"
-        style={{ ...sidebarBase, height: '100vh', position: 'sticky', top: 0 }}
-      >
+      <aside className="hidden md:flex w-64 shrink-0 flex-col" style={{ ...sidebarBase, height: '100vh', position: 'sticky', top: 0 }}>
         <SidebarContent />
       </aside>
 
-      {/* ── Mobile: backdrop ── */}
       <div
-        className={`md:hidden fixed inset-0 z-40 transition-opacity duration-200 ${
-          mobileOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'
-        }`}
-        style={{ background: 'rgba(0,0,0,0.72)', backdropFilter: 'blur(4px)' }}
+        className={`md:hidden fixed inset-0 z-40 transition-opacity duration-200 ${mobileOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
+        style={{ background: 'rgba(17,24,20,0.68)', backdropFilter: 'blur(3px)' }}
         onClick={onClose}
         aria-hidden="true"
       />
 
-      {/* ── Mobile: drawer ── */}
       <aside
-        className={`md:hidden fixed top-0 left-0 z-50 h-full w-64 flex flex-col shadow-2xl transform transition-transform duration-200 ${
-          mobileOpen ? 'translate-x-0' : '-translate-x-full'
-        }`}
+        className={`md:hidden fixed top-0 left-0 z-50 h-full w-64 flex flex-col shadow-2xl transform transition-transform duration-200 ${mobileOpen ? 'translate-x-0' : '-translate-x-full'}`}
         style={sidebarBase}
         aria-hidden={!mobileOpen}
       >

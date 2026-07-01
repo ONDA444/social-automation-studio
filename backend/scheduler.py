@@ -105,6 +105,14 @@ _NO_AUTO_RETRY_MARKERS = (
     "credenciais conectadas",
 )
 
+# The ONLY failures we must NOT auto-retry: a publish interrupted mid-upload. The
+# video may already be on the channel, so re-dispatching risks a DUPLICATE upload.
+# These are parked in ERROR for a human (orphan recovery sets this message).
+_NO_AUTO_RETRY_MARKERS = (
+    "PODE já estar no canal",
+    "Verifique o YouTube",
+)
+
 
 def _job_retry_errored() -> None:
     """Resurrect videos that died on a transient LLM failure (free-tier 429 / daily
@@ -443,8 +451,18 @@ def _slots_due_today(hhmm_times: list[str], per_day: int, tz_name: str | None, n
 
 def _create_theme_job(db, account_id: int, theme, scheduled_naive: datetime) -> int:
     """Create a QUEUED VideoJob from a theme, mark the theme consumed, dispatch it."""
-    from backend.models import JobStatus, VideoJob
+    from backend.models import JobStatus, PlatformAccount, VideoJob
     from backend.pipeline.dispatch import dispatch_job
+
+    acct = db.get(PlatformAccount, account_id)
+    source_mode = getattr(acct, "video_source_mode", "ai") if acct else "ai"
+    if source_mode in {"drive", "mixed"} and acct is not None:
+        ready_job_id = _try_create_ready_video_job(db, acct, theme, scheduled_naive)
+        if ready_job_id:
+            return ready_job_id
+        if source_mode == "drive":
+            logger.info("Drive sem video compativel para conta %s; tema %s permanece pendente.", account_id, theme.id)
+            return 0
 
     job = VideoJob(
         title=theme.theme,
@@ -463,6 +481,115 @@ def _create_theme_job(db, account_id: int, theme, scheduled_naive: datetime) -> 
     db.commit()
     dispatch_job(job.id)
     return job.id
+
+
+def _try_create_ready_video_job(db, acct, theme, scheduled_naive: datetime) -> int | None:
+    """Reserve a Drive ready-video and create a publishable VideoJob."""
+    import asyncio
+
+    from backend.agents.drive_library import DriveLibraryService
+    from backend.agents.seo_agent import SEOAgent
+    from backend.config import settings
+    from backend.models import JobStatus, VideoJob
+
+    drive = DriveLibraryService(db)
+    ready = drive.reserve_next(
+        acct,
+        content_type=theme.content_type or "film_recap_ai_images",
+        video_format=getattr(theme, "video_format", "long") or "long",
+    )
+    if not ready:
+        return None
+
+    title = (theme.theme or ready.name or "Video pronto").strip()
+    video_format = getattr(theme, "video_format", "long") or "long"
+    job = VideoJob(
+        title=title[:300],
+        topic=theme.theme,
+        mode="from_ready_video",
+        content_type=theme.content_type or "film_recap_ai_images",
+        video_format=video_format,
+        target_platforms=theme.target_platforms or ["youtube"],
+        account_id=acct.id,
+        status=JobStatus.AWAITING_APPROVAL,
+        approval_status="pending",
+        scheduled_at=scheduled_naive,
+        progress=100,
+        current_agent="drive_library",
+        video_context={
+            "source": "drive_ready_video",
+            "ready_video_id": ready.id,
+            "drive_file_id": ready.drive_file_id,
+            "drive_name": ready.name,
+            "drive_folder_path": ready.folder_path,
+            "niche": ready.niche or acct.drive_niche or acct.niche,
+        },
+        qc_status="skipped_ready_video",
+        compliance_status="needs_rights_review",
+    )
+    db.add(job)
+    db.flush()
+    ready.reserved_job_id = job.id
+    try:
+        local_path = drive.download_for_job(ready, job.id)
+        job.main_video_path = local_path
+        if video_format == "short":
+            job.shorts_paths = [local_path]
+        script_stub = {
+            "title": title,
+            "content_type": job.content_type,
+            "seo_keywords": [v for v in [ready.niche, acct.niche, title] if v],
+            "scenes": [],
+        }
+        ctx = {
+            "target_platforms": job.target_platforms or ["youtube"],
+            "script": script_stub,
+            "niche": ready.niche or acct.niche,
+        }
+        try:
+            job.seo_metadata = asyncio.run(
+                SEOAgent(job_id=job.id, context=ctx, emit=False).execute(
+                    script=script_stub,
+                    narration={},
+                    content_type=job.content_type,
+                    language=getattr(acct, "content_language", None),
+                )
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("SEO para ready video job %s caiu no basico: %s", job.id, exc)
+            job.seo_metadata = {
+                "youtube": {
+                    "title": title[:100],
+                    "description": f"{title}\n\nVideo pronto selecionado da biblioteca do canal.",
+                    "tags": [t for t in [ready.niche, acct.niche, "video"] if t],
+                    "category_id": "22",
+                },
+                "tiktok": {"caption": f"{title} #fyp #viral"[:150]},
+                "instagram": {"caption": title, "hashtags": ["#reels", "#viral"]},
+            }
+        if settings.auto_publish:
+            job.approval_status = "approved"
+            if job.scheduled_at is None:
+                job.scheduled_at = datetime.utcnow()
+            if (settings.publish_mode or "schedule").lower() == "schedule":
+                job.status = JobStatus.PUBLISHING
+            else:
+                job.status = JobStatus.APPROVED
+        theme.status = "consumed"
+        theme.consumed_job_id = job.id
+        db.commit()
+        if settings.auto_publish and (settings.publish_mode or "schedule").lower() == "schedule":
+            from backend.pipeline.dispatch import dispatch_publish
+
+            dispatch_publish(job.id)
+        return job.id
+    except Exception as exc:  # noqa: BLE001
+        ready.status = "error"
+        job.status = JobStatus.ERROR
+        job.error_message = f"Falha ao baixar video do Drive: {exc}"[:500]
+        db.commit()
+        logger.warning("ready video job failed for account %s: %s", acct.id, exc)
+        return job.id
 
 
 def _job_consume_themes() -> None:
@@ -548,8 +675,9 @@ def _job_consume_themes() -> None:
                         theme = pending[pidx]
                         pidx += 1
                         jid = _create_theme_job(db, acct.id, theme, slot_naive)
-                        logger.info("Agendado: theme %s -> job %s (conta %s, publica %s UTC).",
-                                    theme.id, jid, acct.id, slot_naive)
+                        if jid:
+                            logger.info("Agendado: theme %s -> job %s (conta %s, publica %s UTC).",
+                                        theme.id, jid, acct.id, slot_naive)
                 else:
                     # Immediate mode: generate AT the slot, publish public right away.
                     times = calendar.resolve_post_times(acct.id, cfg, per_day)
@@ -570,8 +698,9 @@ def _job_consume_themes() -> None:
                         continue
                     for theme in pending[:min(budget, len(pending))]:
                         jid = _create_theme_job(db, acct.id, theme, now_utc.replace(tzinfo=None))
-                        logger.info("Slot due -> gerando theme %s como job %s (conta %s).",
-                                    theme.id, jid, acct.id)
+                        if jid:
+                            logger.info("Slot due -> gerando theme %s como job %s (conta %s).",
+                                        theme.id, jid, acct.id)
             except Exception as exc:  # noqa: BLE001 — per-account isolation
                 db.rollback()
                 logger.warning("consume_themes failed for account %s: %s", acct.id, exc)

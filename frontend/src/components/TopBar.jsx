@@ -1,37 +1,55 @@
 import { useEffect, useState } from 'react'
+import { useLocation } from 'react-router-dom'
 import { api } from '../api'
+
+const PAGE_TITLES = {
+  '/': 'Dashboard',
+  '/queue': 'Fila de videos',
+  '/schedule': 'Agenda',
+  '/approvals': 'Aprovacoes',
+  '/shorts': 'Shorts',
+  '/remix': 'Remix',
+  '/platforms': 'Plataformas',
+  '/analytics': 'Analytics',
+  '/settings': 'Configuracoes',
+}
 
 const topBarStyle = {
   position: 'sticky',
   top: 0,
   zIndex: 40,
-  height: 60,
+  height: 62,
   flexShrink: 0,
-  background: 'rgba(6,6,12,0.85)',
-  backdropFilter: 'blur(20px)',
-  WebkitBackdropFilter: 'blur(20px)',
-  borderBottom: '1px solid rgba(124,106,255,0.10)',
+  background: 'var(--topbar-base)',
+  backdropFilter: 'blur(10px)',
+  WebkitBackdropFilter: 'blur(10px)',
+  borderBottom: '1px solid var(--border)',
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'space-between',
   padding: '0 20px',
 }
 
-const badgeBase = {
-  display: 'inline-flex',
-  alignItems: 'center',
-  gap: 6,
-  padding: '5px 10px',
-  borderRadius: 20,
-  fontSize: 12,
-  fontWeight: 500,
-  border: '1px solid transparent',
-  lineHeight: 1,
+function StatusChip({ tone = 'neutral', dot, children }) {
+  const tones = {
+    ok: ['rgba(31,138,91,0.10)', 'rgba(31,138,91,0.22)', 'var(--success)'],
+    warn: ['rgba(217,130,43,0.12)', 'rgba(217,130,43,0.24)', 'var(--warning)'],
+    bad: ['rgba(194,65,58,0.12)', 'rgba(194,65,58,0.24)', 'var(--error)'],
+    neutral: ['rgba(23,32,26,0.05)', 'var(--border)', 'var(--text-muted)'],
+  }
+  const [bg, border, color] = tones[tone] || tones.neutral
+  return (
+    <span className="inline-flex items-center gap-2 px-2.5 py-1.5 rounded-pill border text-xs font-semibold" style={{ background: bg, borderColor: border, color }}>
+      {dot && <span className="w-1.5 h-1.5 rounded-full" style={{ background: color }} />}
+      {children}
+    </span>
+  )
 }
 
 export default function TopBar({ connected, onMenuClick = () => {} }) {
   const [active, setActive] = useState(0)
   const [health, setHealth] = useState('green')
+  const location = useLocation()
 
   useEffect(() => {
     let t
@@ -45,151 +63,49 @@ export default function TopBar({ connected, onMenuClick = () => {} }) {
         ])
         setActive(d.active_jobs || 0)
         setHealth(h.status)
-      } catch { /* backend offline */ setHealth('red') }
+      } catch {
+        setHealth('red')
+      }
       t = setTimeout(poll, 8000)
     }
     poll()
     return () => clearTimeout(t)
   }, [])
 
-  const healthColor = { green: '#00D68F', yellow: '#F59E0B', red: '#FF4757' }[health] || '#00D68F'
+  const pageTitle = PAGE_TITLES[location.pathname] || 'Social Studio'
+  const healthTone = health === 'green' ? 'ok' : health === 'yellow' ? 'warn' : 'bad'
 
   return (
     <header style={topBarStyle}>
-      {/* ── Left: menu button + title (mobile) ── */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
-        {/* Hamburger — mobile only */}
+      <div className="flex items-center gap-3 min-w-0">
         <button
           onClick={onMenuClick}
           aria-label="Abrir menu"
-          className="md:hidden"
-          style={{
-            width: 40,
-            height: 40,
-            borderRadius: 10,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            background: 'transparent',
-            border: 'none',
-            cursor: 'pointer',
-            color: '#EEEEFF',
-            flexShrink: 0,
-            transition: 'background 150ms',
-          }}
-          onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(255,255,255,0.07)' }}
-          onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent' }}
+          className="md:hidden btn btn-ghost btn-sm px-2"
         >
-          {/* Custom hamburger SVG */}
           <svg width="20" height="14" viewBox="0 0 20 14" fill="none">
             <path d="M0 1H20M0 7H14M0 13H20" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
           </svg>
         </button>
-
-        {/* Title — show on mobile only (desktop sidebar has it) */}
-        <div className="md:hidden min-w-0">
-          <span style={{ fontWeight: 700, color: '#EEEEFF', fontSize: 15, letterSpacing: '-0.3px' }}>
-            Social Automation Studio
-          </span>
+        <div className="min-w-0">
+          <p className="heading text-base sm:text-lg font-extrabold truncate" style={{ color: 'var(--text-primary)' }}>{pageTitle}</p>
+          <p className="hidden sm:block text-[11px]" style={{ color: 'var(--text-muted)' }}>Mesa de producao dos seus canais</p>
         </div>
       </div>
 
-      {/* ── Right: status badges ── */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        {/* System health */}
-        <span
-          style={{
-            ...badgeBase,
-            background: `${healthColor}12`,
-            borderColor: `${healthColor}25`,
-            color: healthColor,
-          }}
-        >
-          <span style={{ position: 'relative', display: 'inline-flex', width: 8, height: 8, flexShrink: 0 }}>
-            {health === 'green' && (
-              <span
-                style={{
-                  position: 'absolute',
-                  inset: 0,
-                  borderRadius: '50%',
-                  background: healthColor,
-                  opacity: 0.5,
-                  animation: 'topbar-ping 1.4s ease-out infinite',
-                }}
-              />
-            )}
-            <span
-              style={{
-                position: 'relative',
-                width: 8,
-                height: 8,
-                borderRadius: '50%',
-                background: healthColor,
-                display: 'inline-flex',
-              }}
-            />
-          </span>
-          <span className="hidden sm:inline">sistema</span>
-        </span>
-
-        {/* Active jobs */}
-        <span
-          style={{
-            ...badgeBase,
-            background: active > 0 ? 'rgba(124,106,255,0.12)' : 'rgba(255,255,255,0.05)',
-            borderColor: active > 0 ? 'rgba(124,106,255,0.28)' : 'rgba(255,255,255,0.08)',
-            color: active > 0 ? '#A78BFA' : '#7070A0',
-          }}
-        >
-          <span
-            style={{
-              width: 6,
-              height: 6,
-              borderRadius: '50%',
-              background: active > 0 ? '#7C6AFF' : '#7070A0',
-              flexShrink: 0,
-            }}
-          />
-          <span className="hidden sm:inline">
-            {active} job{active === 1 ? '' : 's'} ativo{active === 1 ? '' : 's'}
-          </span>
+      <div className="flex items-center gap-2">
+        <StatusChip tone={healthTone} dot>
+          <span className="hidden sm:inline">API</span>
+          <span className="sm:hidden">API</span>
+        </StatusChip>
+        <StatusChip tone={active > 0 ? 'warn' : 'neutral'} dot={active > 0}>
+          <span className="hidden sm:inline">{active} ativo{active === 1 ? '' : 's'}</span>
           <span className="sm:hidden">{active}</span>
-        </span>
-
-        {/* WebSocket connection */}
-        <span
-          style={{
-            ...badgeBase,
-            background: connected ? 'rgba(0,214,143,0.12)' : 'rgba(255,71,87,0.12)',
-            borderColor: connected ? 'rgba(0,214,143,0.28)' : 'rgba(255,71,87,0.28)',
-            color: connected ? '#00D68F' : '#FF4757',
-          }}
-        >
-          <span
-            style={{
-              width: 7,
-              height: 7,
-              borderRadius: '50%',
-              background: connected ? '#00D68F' : '#FF4757',
-              boxShadow: connected ? '0 0 7px #00D68F' : 'none',
-              animation: connected ? 'sas-pulse 2.2s ease-in-out infinite' : 'none',
-              flexShrink: 0,
-            }}
-          />
+        </StatusChip>
+        <StatusChip tone={connected ? 'ok' : 'bad'} dot>
           {connected ? 'live' : 'offline'}
-        </span>
+        </StatusChip>
       </div>
-
-      <style>{`
-        @keyframes topbar-ping {
-          0% { transform: scale(1); opacity: 0.5; }
-          75%, 100% { transform: scale(2.2); opacity: 0; }
-        }
-        @keyframes sas-pulse {
-          0%, 100% { box-shadow: 0 0 5px #00D68F; opacity: 1; }
-          50% { box-shadow: 0 0 13px #00D68F; opacity: 0.65; }
-        }
-      `}</style>
     </header>
   )
 }

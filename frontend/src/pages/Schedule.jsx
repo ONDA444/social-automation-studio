@@ -20,9 +20,9 @@ const FALLBACK_CONTENT_TYPES = [
 const parseThemes = (raw) => (raw || '').split(/[\n,]+/).map((t) => t.trim()).filter(Boolean)
 
 const MODE_OPTIONS = [
-  { v: 'fixed',          label: '🕐 Fixo',         desc: 'Você define os horários exatos.' },
-  { v: 'smart',          label: '🧠 Inteligente',   desc: 'O sistema escolhe os melhores horários automaticamente.' },
-  { v: 'trending_aware', label: '🔥 Trending',      desc: 'Publica logo que um trending é detectado.' },
+  { v: 'fixed',          label: 'Fixo',         desc: 'Voce define os horarios exatos.' },
+  { v: 'smart',          label: 'Inteligente',  desc: 'O sistema escolhe os melhores horarios automaticamente.' },
+  { v: 'trending_aware', label: 'Trending',     desc: 'Publica logo que um trending e detectado.' },
 ]
 
 export default function Schedule() {
@@ -45,6 +45,15 @@ export default function Schedule() {
   const [history, setHistory] = useState([])   // consumed themes (already turned into videos)
   const [showHistory, setShowHistory] = useState(false)
   const [busy, setBusy]     = useState(false)
+  const [driveStatus, setDriveStatus] = useState(null)
+  const [driveVideos, setDriveVideos] = useState([])
+  const [driveSyncing, setDriveSyncing] = useState(false)
+  const [driveCfg, setDriveCfg] = useState({
+    video_source_mode: 'ai',
+    drive_folder_url: '',
+    drive_niche: '',
+    drive_recursive: true,
+  })
 
   const selAccount = accounts.find((a) => String(a.id) === sel)
   const platMeta   = selAccount ? (PLATFORM_META[selAccount.platform] || {}) : {}
@@ -65,6 +74,16 @@ export default function Schedule() {
       .then((c) => setCfg((p) => ({ ...p, ...c, post_times: c.post_times?.length ? c.post_times : p.post_times })))
       .catch(() => {})
     api.get(`/schedule/${sel}/slots?count=6`).then((d) => { setSlots(d.slots || []); setSlotsMeta(d) }).catch(() => {})
+    const acct = accounts.find((a) => String(a.id) === sel)
+    if (acct) {
+      setDriveCfg({
+        video_source_mode: acct.video_source_mode || 'ai',
+        drive_folder_url: acct.drive_folder_url || acct.drive_folder_id || '',
+        drive_niche: acct.drive_niche || acct.niche || '',
+        drive_recursive: acct.drive_recursive !== false,
+      })
+    }
+    loadDrive()
   }, [sel])
 
   const loadQueue = () => {
@@ -81,14 +100,61 @@ export default function Schedule() {
     setSaving(true)
     try {
       await api.put(`/schedule/config/${sel}`, cfg)
+      await api.patch(`/accounts/${sel}`, driveCfg)
       const d = await api.get(`/schedule/${sel}/slots?count=6&mode=${cfg.mode}`)
       setSlots(d.slots || [])
       setSlotsMeta(d)
+      const fresh = await api.get('/accounts')
+      setAccounts(fresh.accounts || [])
+      await loadDrive()
     } catch (e) { alert(e.message) } finally { setSaving(false) }
   }
 
   const openOAuth = (acct) => {
-    window.open(`${BASE_API}/auth/${acct.platform}/begin?account_id=${acct.id}`, 'oauth', 'width=500,height=640')
+    window.open(`${BASE_API}/auth/${acct.platform}/start?account_id=${acct.id}`, 'oauth', 'width=500,height=640')
+  }
+
+  const openDriveOAuth = async () => {
+    const popup = window.open('', 'drive-oauth', 'width=520,height=680')
+    try {
+      const r = await api.get('/drive-library/auth/start')
+      if (popup) popup.location = r.auth_url
+      else window.location.href = r.auth_url
+    } catch (e) {
+      if (popup) popup.close()
+      alert(e.message)
+    }
+  }
+
+  const loadDrive = async () => {
+    if (!sel) return
+    try {
+      const [status, videos] = await Promise.all([
+        api.get('/drive-library/status').catch(() => null),
+        api.get(`/drive-library/videos?account_id=${sel}&limit=8`).catch(() => ({ videos: [] })),
+      ])
+      setDriveStatus(status)
+      setDriveVideos(videos.videos || [])
+    } catch {
+      setDriveVideos([])
+    }
+  }
+
+  const syncDrive = async () => {
+    if (!sel) return alert('Selecione uma conta primeiro')
+    if (!driveStatus?.has_credentials && !driveStatus?.api_key_configured) {
+      await openDriveOAuth()
+      return
+    }
+    setDriveSyncing(true)
+    try {
+      await api.patch(`/accounts/${sel}`, driveCfg)
+      const r = await api.post(`/drive-library/accounts/${sel}/sync`)
+      alert(`Drive sincronizado: ${r.imported || 0} novo(s), ${r.updated || 0} atualizado(s).`)
+      const fresh = await api.get('/accounts')
+      setAccounts(fresh.accounts || [])
+      await loadDrive()
+    } catch (e) { alert(e.message) } finally { setDriveSyncing(false) }
   }
 
   const parsedThemes = parseThemes(themesText)
@@ -134,7 +200,7 @@ export default function Schedule() {
 
   return (
     <div className="space-y-6 fade-in">
-      <PageHeader title="Agenda" sub="Horários de publicação, modo inteligente e automação por temas." />
+      <PageHeader title="Agenda" sub="Organize horarios, escolha entre IA ou Drive e deixe a fila pronta para publicar." />
 
       <div className="grid lg:grid-cols-3 gap-6">
         {/* Calendário */}
@@ -144,7 +210,10 @@ export default function Schedule() {
 
         {/* Painel de configuração */}
         <div className="card p-5 space-y-4 h-fit">
-          <h3 className="heading font-semibold text-base">Configuração de slots</h3>
+          <div>
+            <h3 className="heading font-extrabold text-base">Cadencia do canal</h3>
+            <p className="text-xs text-text-muted mt-1">Conta, horarios, fonte dos videos e proximas publicacoes.</p>
+          </div>
 
           {/* Seletor de conta */}
           <div>
@@ -238,6 +307,104 @@ export default function Schedule() {
                 <p className="text-[11px] text-text-muted mt-1.5 ml-[26px]">
                   Cada vídeo longo também gera uma versão vertical 9:16 (Shorts/Reels) no mesmo slot — sem precisar criar um tema separado.
                 </p>
+              </div>
+
+              <div className="p-4 rounded-card border border-border space-y-4" style={{ background: 'linear-gradient(180deg, #FFFFFF 0%, #F3F7F1 100%)' }}>
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-bold">Fonte dos videos</p>
+                    <p className="text-xs text-text-muted mt-0.5">
+                      Escolha como esse canal vai produzir: temas com IA, biblioteca do Drive ou os dois.
+                    </p>
+                  </div>
+                  <span className="badge shrink-0"
+                    style={{ background: 'var(--accent-dim)', color: 'var(--accent)', border: '1px solid rgba(31,138,91,0.22)' }}>
+                    {driveCfg.video_source_mode === 'ai' ? 'IA' : driveCfg.video_source_mode === 'drive' ? 'Drive' : 'Misto'}
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-3 gap-1 p-1 rounded-btn bg-elevated border border-border">
+                  {[
+                    { v: 'ai', label: 'IA', hint: 'gera' },
+                    { v: 'drive', label: 'Drive', hint: 'prontos' },
+                    { v: 'mixed', label: 'Misto', hint: 'fallback' },
+                  ].map((m) => (
+                    <button key={m.v} type="button"
+                      onClick={() => setDriveCfg({ ...driveCfg, video_source_mode: m.v })}
+                      className={`py-2 px-1 rounded-btn font-semibold transition-all duration-150 leading-tight ${
+                        driveCfg.video_source_mode === m.v
+                          ? 'bg-accent text-white shadow-sm'
+                          : 'text-text-muted hover:text-text-primary'
+                      }`}>
+                      <span className="block text-xs">{m.label}</span>
+                      <span className="block text-[10px] opacity-70">{m.hint}</span>
+                    </button>
+                  ))}
+                </div>
+
+                {driveCfg.video_source_mode !== 'ai' && (
+                  <div className="space-y-2 slide-down">
+                    <div className="flex items-center justify-between gap-2 rounded-btn border border-border bg-white px-3 py-2">
+                      <div>
+                        <p className="text-xs font-semibold">Google Drive</p>
+                        <p className="text-[11px] text-text-muted">
+                          {driveStatus?.has_credentials || driveStatus?.api_key_configured ? 'Conectado e pronto para indexar.' : 'Conecte para ler pastas privadas.'}
+                        </p>
+                      </div>
+                      {!driveStatus?.has_credentials && (
+                        <button type="button" className="btn btn-ghost btn-sm" onClick={openDriveOAuth}>
+                          Conectar Drive
+                        </button>
+                      )}
+                    </div>
+
+                    <div>
+                      <label className="text-xs text-text-muted mb-1 block">Pasta do Drive</label>
+                      <input className="input text-xs" value={driveCfg.drive_folder_url}
+                        onChange={(e) => setDriveCfg({ ...driveCfg, drive_folder_url: e.target.value })}
+                        placeholder="https://drive.google.com/drive/folders/..." />
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="text-xs text-text-muted mb-1 block">Nicho</label>
+                        <input className="input text-xs" value={driveCfg.drive_niche}
+                          onChange={(e) => setDriveCfg({ ...driveCfg, drive_niche: e.target.value })}
+                          placeholder={selAccount?.niche || 'saude, filmes, memes...'} />
+                      </div>
+                      <label className="flex items-center gap-2 text-xs text-text-muted mt-6">
+                        <input type="checkbox" className="accent-accent"
+                          checked={driveCfg.drive_recursive}
+                          onChange={(e) => setDriveCfg({ ...driveCfg, drive_recursive: e.target.checked })} />
+                        Ler subpastas
+                      </label>
+                    </div>
+
+                    <button type="button" className="btn btn-ghost w-full text-xs" disabled={driveSyncing} onClick={syncDrive}>
+                      {driveSyncing ? 'Sincronizando...' : 'Sincronizar pasta agora'}
+                    </button>
+
+                    <div className="rounded-card border border-border bg-white p-3">
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <p className="text-xs font-semibold">Estoque indexado</p>
+                          <p className="text-[11px] text-text-muted">Videos prontos que o agendador pode reservar.</p>
+                        </div>
+                        <span className="heading text-xl font-extrabold" style={{ color: 'var(--accent)' }}>{driveStatus?.stats?.available || 0}</span>
+                      </div>
+                      {driveVideos.length > 0 && (
+                        <ul className="mt-2 space-y-1 max-h-28 overflow-y-auto pr-1">
+                          {driveVideos.slice(0, 5).map((v) => (
+                            <li key={v.id} className="flex items-center justify-between gap-2 text-[11px]">
+                              <span className="truncate" title={v.name}>{v.name}</span>
+                              <span className="text-text-muted shrink-0">{v.status}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
+                  </div>
+                )}
               </div>
 
               <button className="btn-primary w-full" onClick={saveCfg} disabled={saving}>

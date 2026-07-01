@@ -34,6 +34,15 @@ class PlatformAccount(Base):
     # beds. Applied on top of the per-content-type mood in EditingDirector.
     music_style: Mapped[str] = mapped_column(String(20), default="balanced")
 
+    # --- Ready videos from Google Drive ---
+    # ai = current generator only; drive = ready videos only; mixed = Drive first,
+    # then AI fallback when inventory is empty.
+    video_source_mode: Mapped[str] = mapped_column(String(20), default="ai")
+    drive_folder_id: Mapped[str | None] = mapped_column(String(160), default=None)
+    drive_folder_url: Mapped[str | None] = mapped_column(Text, default=None)
+    drive_niche: Mapped[str | None] = mapped_column(String(120), default=None)
+    drive_recursive: Mapped[bool] = mapped_column(default=True)
+
     # --- "Momento em alta": opt-in trending-moment videos for this channel ---
     # When ON, the system catches what's hot in this niche RIGHT NOW (e.g. a World
     # Cup moment for a football channel) and generates 1–2 approval-gated videos.
@@ -87,6 +96,11 @@ class PlatformAccount(Base):
             "content_language": self.content_language,
             "music_style": getattr(self, "music_style", None) or "balanced",
             "channel_optimization": getattr(self, "channel_optimization", None) or {},
+            "video_source_mode": getattr(self, "video_source_mode", None) or "ai",
+            "drive_folder_id": getattr(self, "drive_folder_id", None),
+            "drive_folder_url": getattr(self, "drive_folder_url", None),
+            "drive_niche": getattr(self, "drive_niche", None),
+            "drive_recursive": bool(getattr(self, "drive_recursive", True)),
             "ride_trends": bool(getattr(self, "ride_trends", False)),
             "trends_per_cycle": int(getattr(self, "trends_per_cycle", 1) or 1),
             "schedule": self.schedule or {},

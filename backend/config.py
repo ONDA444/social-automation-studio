@@ -87,6 +87,8 @@ class Settings(BaseSettings):
     google_client_id: str = ""
     google_client_secret: str = ""
     google_redirect_uri: str = "http://localhost:8000/auth/youtube/callback"
+    google_drive_redirect_uri: str = "http://localhost:8000/drive-library/auth/callback"
+    google_drive_api_key: str = ""
 
     # ---- TikTok ----
     tiktok_client_key: str = ""
@@ -186,6 +188,7 @@ class Settings(BaseSettings):
             return self
         for attr, path in (
             ("google_redirect_uri", "/auth/youtube/callback"),
+            ("google_drive_redirect_uri", "/drive-library/auth/callback"),
             ("tiktok_redirect_uri", "/auth/tiktok/callback"),
             ("meta_redirect_uri", "/auth/instagram/callback"),
         ):
