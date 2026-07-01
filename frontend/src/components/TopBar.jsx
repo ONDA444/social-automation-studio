@@ -46,7 +46,7 @@ function StatusChip({ tone = 'neutral', dot, children }) {
   )
 }
 
-export default function TopBar({ connected, onMenuClick = () => {} }) {
+export default function TopBar({ connected, onMenuClick = () => {}, theme = 'dark', onToggleTheme = () => {} }) {
   const [active, setActive] = useState(0)
   const [health, setHealth] = useState('green')
   const location = useLocation()
@@ -94,6 +94,15 @@ export default function TopBar({ connected, onMenuClick = () => {} }) {
       </div>
 
       <div className="flex items-center gap-2">
+        <button
+          type="button"
+          className="btn-ghost btn-sm hidden sm:inline-flex"
+          onClick={onToggleTheme}
+          title={theme === 'dark' ? 'Usar tema claro' : 'Usar tema escuro'}
+          aria-label={theme === 'dark' ? 'Usar tema claro' : 'Usar tema escuro'}
+        >
+          {theme === 'dark' ? 'Claro' : 'Escuro'}
+        </button>
         <StatusChip tone={healthTone} dot>
           <span className="hidden sm:inline">API</span>
           <span className="sm:hidden">API</span>

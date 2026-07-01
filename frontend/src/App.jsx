@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, lazy, Suspense } from 'react'
+import { createContext, useContext, useEffect, useState, lazy, Suspense } from 'react'
 import { Routes, Route, Navigate } from 'react-router-dom'
 import Sidebar from './components/Sidebar.jsx'
 import TopBar from './components/TopBar.jsx'
@@ -34,13 +34,27 @@ export const useWs = () => useContext(WsContext)
 export default function App() {
   const ws = useWebSocket(250)
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
+  const [theme, setTheme] = useState(() => localStorage.getItem('studio-theme') || 'dark')
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme
+    document.documentElement.style.colorScheme = theme
+    localStorage.setItem('studio-theme', theme)
+  }, [theme])
+
+  const toggleTheme = () => setTheme((value) => value === 'dark' ? 'light' : 'dark')
 
   return (
     <WsContext.Provider value={ws}>
       <div className="flex h-screen overflow-hidden">
         <Sidebar mobileOpen={mobileNavOpen} onClose={() => setMobileNavOpen(false)} />
         <div className="flex-1 flex flex-col min-w-0">
-          <TopBar connected={ws.connected} onMenuClick={() => setMobileNavOpen(true)} />
+          <TopBar
+            connected={ws.connected}
+            onMenuClick={() => setMobileNavOpen(true)}
+            theme={theme}
+            onToggleTheme={toggleTheme}
+          />
           <main className="flex-1 overflow-y-auto p-4 sm:p-6">
             <ErrorBoundary>
             <Suspense fallback={<RouteFallback />}>

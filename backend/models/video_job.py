@@ -21,6 +21,7 @@ class JobStatus(str, enum.Enum):
     ERROR = "error"
     # Platform-specific holding states
     TIKTOK_PENDING_APPROVAL = "tiktok_pending_approval"
+    AWAITING_QUOTA = "awaiting_quota"
 
 
 class VideoJob(Base):

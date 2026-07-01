@@ -183,7 +183,12 @@ async def run_publish(job_id: int) -> dict:
         _finish_ready_video_if_published(db, job, results)
         # Surface a human, actionable reason on the job row instead of a cryptic
         # "[Errno 2] No such file..." so the user knows to REGENERATE, not retry.
-        if job.status == JobStatus.ERROR:
+        if job.status == JobStatus.AWAITING_QUOTA:
+            job.error_message = (
+                "Quota diaria do YouTube atingida. O video ficou aguardando "
+                "o reset da quota e sera retomado automaticamente."
+            )
+        elif job.status == JobStatus.ERROR:
             if any((r or {}).get("status") == "file_missing" for r in results.values()):
                 job.error_message = _FILE_GONE
             elif any((r or {}).get("status") == "auth_error" for r in results.values()):
@@ -424,6 +429,8 @@ def _overall_status(results: dict) -> JobStatus:
         return JobStatus.PUBLISHED
     if "tiktok_pending_approval" in statuses:
         return JobStatus.TIKTOK_PENDING_APPROVAL
+    if "quota_exceeded" in statuses:
+        return JobStatus.AWAITING_QUOTA
     return JobStatus.ERROR
 
 

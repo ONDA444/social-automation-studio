@@ -1,15 +1,10 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { api } from '../api'
 import PlatformCard from '../components/PlatformCard.jsx'
 import { PageHeader, SectionCard, EmptyState } from '../components/ui.jsx'
+import { PLATFORM_META } from '../lib'
 
 const PLATFORMS = ['youtube', 'tiktok', 'instagram']
-
-const PLAT_META = {
-  youtube: { label: 'YouTube', icon: '🎬' },
-  tiktok: { label: 'TikTok', icon: '📱' },
-  instagram: { label: 'Instagram', icon: '📸' },
-}
 
 export default function Platforms() {
   const [accounts, setAccounts] = useState([])
@@ -19,64 +14,92 @@ export default function Platforms() {
   const load = () => api.get('/accounts').then((d) => setAccounts(d.accounts || [])).catch(() => {})
   useEffect(() => { load() }, [])
 
+  const totals = useMemo(() => ({
+    all: accounts.length,
+    active: accounts.filter((a) => a.status === 'active').length,
+    blocked: accounts.filter((a) => a.status === 'quota_exceeded').length,
+  }), [accounts])
+
   const create = async () => {
     if (!form.display_name.trim()) return alert('Informe o nome do canal/conta')
     await api.post('/accounts', form)
-    setForm({ platform: 'youtube', display_name: '', niche: '' }); setAdding(false); load()
+    setForm({ platform: 'youtube', display_name: '', niche: '' })
+    setAdding(false)
+    load()
   }
 
   return (
     <div className="space-y-6 fade-in">
-      <PageHeader title="Plataformas & Canais" sub="Conecte e gerencie seus canais de publicação.">
-        <button className="btn btn-primary" onClick={() => setAdding((a) => !a)}>+ Conectar canal</button>
+      <PageHeader title="Plataformas & Canais" sub="Controle conexoes, quota e padroes de publicacao.">
+        <button className="btn btn-primary" onClick={() => setAdding((a) => !a)}>Conectar canal</button>
       </PageHeader>
+
+      <div className="grid sm:grid-cols-3 gap-3">
+        <div className="card p-4">
+          <p className="text-sm font-semibold" style={{ color: 'var(--text-muted)' }}>Canais</p>
+          <p className="data text-2xl font-black mt-1">{totals.all}</p>
+        </div>
+        <div className="card p-4">
+          <p className="text-sm font-semibold" style={{ color: 'var(--text-muted)' }}>Ativos</p>
+          <p className="data text-2xl font-black mt-1" style={{ color: 'var(--success)' }}>{totals.active}</p>
+        </div>
+        <div className="card p-4">
+          <p className="text-sm font-semibold" style={{ color: 'var(--text-muted)' }}>Aguardando quota</p>
+          <p className="data text-2xl font-black mt-1" style={{ color: totals.blocked ? 'var(--warning)' : 'var(--text-primary)' }}>{totals.blocked}</p>
+        </div>
+      </div>
 
       {adding && (
         <SectionCard className="grid md:grid-cols-4 gap-3 items-end slide-down">
           <div>
-            <label className="text-xs text-text-muted">Plataforma</label>
+            <label className="text-sm font-semibold" style={{ color: 'var(--text-muted)' }}>Plataforma</label>
             <select className="input mt-1" value={form.platform} onChange={(e) => setForm({ ...form, platform: e.target.value })}>
-              <option value="youtube">🎬 YouTube</option>
-              <option value="tiktok">📱 TikTok</option>
-              <option value="instagram">📸 Instagram</option>
+              <option value="youtube">YouTube</option>
+              <option value="tiktok">TikTok</option>
+              <option value="instagram">Instagram</option>
             </select>
           </div>
           <div>
-            <label className="text-xs text-text-muted">Nome do canal</label>
+            <label className="text-sm font-semibold" style={{ color: 'var(--text-muted)' }}>Nome do canal</label>
             <input className="input mt-1" value={form.display_name} onChange={(e) => setForm({ ...form, display_name: e.target.value })} />
           </div>
           <div>
-            <label className="text-xs text-text-muted">Nicho</label>
+            <label className="text-sm font-semibold" style={{ color: 'var(--text-muted)' }}>Nicho</label>
             <input className="input mt-1" value={form.niche} onChange={(e) => setForm({ ...form, niche: e.target.value })} />
           </div>
-          <button className="btn btn-primary" onClick={create}>Criar</button>
+          <button className="btn btn-primary" onClick={create}>Criar canal</button>
         </SectionCard>
       )}
 
       {PLATFORMS.map((plat) => {
         const list = accounts.filter((a) => a.platform === plat)
         if (list.length === 0) return null
-        const meta = PLAT_META[plat]
+        const meta = PLATFORM_META[plat] || { label: plat, icon: plat.slice(0, 2).toUpperCase() }
         return (
-          <div key={plat}>
-            <div className="flex items-center gap-3 mb-4">
-              <span className="text-lg">{meta.icon}</span>
-              <h3 className="heading font-semibold">{meta.label}</h3>
-              <span className="badge" style={{ background: 'var(--accent-dim)', color: 'var(--accent)', border: '1px solid var(--border)' }}>{list.length}</span>
-              <div className="flex-1 h-px" style={{ background: 'rgba(255,255,255,0.06)' }} />
+          <section key={plat} className="space-y-4">
+            <div className="flex items-center gap-3">
+              <span className="data text-sm font-black px-2 py-1 rounded-btn" style={{ background: 'var(--bg-elevated)', color: meta.color }}>
+                {meta.icon}
+              </span>
+              <h3 className="heading text-lg font-bold">{meta.label}</h3>
+              <span className="badge" style={{ background: 'var(--accent-dim)', color: 'var(--accent)' }}>{list.length}</span>
+              <div className="flex-1 h-px" style={{ background: 'var(--border-glass)' }} />
             </div>
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3">
+            <div className="grid xl:grid-cols-2 gap-4">
               {list.map((a) => <PlatformCard key={a.id} account={a} onChange={load} onChanged={load} />)}
             </div>
-          </div>
+          </section>
         )
       })}
 
       {accounts.length === 0 && (
         <div className="rounded-card" style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)' }}>
-          <EmptyState icon="🔗" title="Nenhum canal conectado"
-            hint="Conecte um canal para começar a publicar."
-            action={<button className="btn btn-primary" onClick={() => setAdding(true)}>+ Conectar canal</button>} />
+          <EmptyState
+            icon="CH"
+            title="Nenhum canal conectado"
+            hint="Conecte um canal para comecar a publicar."
+            action={<button className="btn btn-primary" onClick={() => setAdding(true)}>Conectar canal</button>}
+          />
         </div>
       )}
     </div>

@@ -75,13 +75,29 @@ def _job_heartbeat() -> None:
 
 
 def _job_quota_reset() -> None:
+    from sqlalchemy import select
+
     from backend.agents.account_profile import AccountProfileService
+    from backend.models import JobStatus, VideoJob
+    from backend.pipeline.dispatch import dispatch_publish
 
     db = SessionLocal()
     try:
         n = AccountProfileService(db).reset_daily_quota()
+        held = db.execute(
+            select(VideoJob).where(VideoJob.status == JobStatus.AWAITING_QUOTA)
+        ).scalars().all()
+        resumed = []
+        for job in held:
+            job.status = JobStatus.APPROVED
+            job.error_message = None
+            job.approval_status = "approved"
+            resumed.append(job.id)
+        db.commit()
+        for job_id in resumed:
+            dispatch_publish(job_id)
         logger.info("Daily quota reset for %s accounts.", n)
-        publish_event({"type": "quota_reset", "accounts": n})
+        publish_event({"type": "quota_reset", "accounts": n, "resumed_jobs": resumed})
     finally:
         db.close()
 

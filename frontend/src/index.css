@@ -6,7 +6,7 @@
 
 /* ===== Base ===== */
 html, body, #root { height: 100%; }
-html { color-scheme: light; }
+html { color-scheme: light dark; }
 
 body {
   margin: 0;
@@ -22,11 +22,11 @@ body {
 
 /* Custom scrollbar */
 ::-webkit-scrollbar { width: 9px; height: 9px; }
-::-webkit-scrollbar-track { background: rgba(215,224,212,0.28); }
+::-webkit-scrollbar-track { background: color-mix(in srgb, var(--bg-base) 70%, var(--border)); }
 ::-webkit-scrollbar-thumb {
-  background: rgba(100, 112, 103, 0.38);
+  background: color-mix(in srgb, var(--text-muted) 42%, transparent);
   border-radius: 999px;
-  border: 2px solid rgba(245,247,242,0.8);
+  border: 2px solid var(--bg-base);
 }
 ::-webkit-scrollbar-thumb:hover { background: rgba(31, 138, 91, 0.52); }
 
@@ -207,7 +207,7 @@ body {
     font-weight: 600;
     border-width: 1px;
     color: var(--text-primary);
-    background-color: rgba(255,255,255,0.84);
+    background-color: var(--bg-glass);
     border-color: var(--border-glass);
     box-shadow: var(--shadow-xs);
   }
@@ -246,7 +246,7 @@ body {
   /* ----- Input ----- */
   .input {
     width: 100%;
-    background: #fff;
+    background: var(--bg-surface);
     border: 1px solid var(--border-glass);
     border-radius: var(--radius-btn);
     padding: .6rem .9rem;
@@ -261,7 +261,7 @@ body {
   .input:hover { border-color: rgba(31,138,91,0.32); }
   .input:focus {
     border-color: var(--accent);
-    background: #fff;
+    background: var(--bg-surface);
     box-shadow: 0 0 0 3px rgba(31,138,91,0.16), inset 0 1px 2px rgba(20,32,24,0.04);
   }
 
@@ -307,7 +307,7 @@ body {
 
 /* ===== Utilities ===== */
 .text-gradient {
-  background: linear-gradient(120deg, #17201A 0%, #1F8A5B 52%, #2F6FED 100%);
+  background: linear-gradient(120deg, var(--text-primary) 0%, var(--accent) 52%, var(--accent-blue) 100%);
   -webkit-background-clip: text; background-clip: text;
   -webkit-text-fill-color: transparent; color: transparent;
 }

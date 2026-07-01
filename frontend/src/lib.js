@@ -8,6 +8,7 @@ export const STATUS_META = {
   rejected:               { label: 'Rejeitado', color: 'var(--error)' },
   error:                  { label: 'Erro', color: 'var(--error)' },
   tiktok_pending_approval:{ label: 'TikTok pendente', color: 'var(--warning)' },
+  awaiting_quota:         { label: 'Aguardando quota', color: 'var(--warning)' },
 }
 
 export const PLATFORM_META = {
