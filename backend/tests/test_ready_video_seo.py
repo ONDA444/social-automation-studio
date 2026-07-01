@@ -49,9 +49,58 @@ class ReadyVideoSeoTests(unittest.TestCase):
         )
 
         yt = seo["youtube"]
-        self.assertEqual(yt["title"], "Essa cena do Woody nunca envelhece #Shorts")
+        self.assertEqual(yt["title"], "Essa cena do Woody nunca envelhece — olha o detalhe #Shorts")
         self.assertEqual(yt["tags"][0], "woody")
         self.assertEqual(seo["seo_score"]["verdict"], "drive_video_strong")
+
+    def test_drive_shorts_apply_viral_feed_packaging(self) -> None:
+        seo = build_drive_seo(
+            context={
+                "drive_name": "Monetize - Religiosos (85).mp4",
+                "folder_path": "VIDEOS RELIGIOSOS / Cortes series",
+                "niche": "Videos Religiosos",
+                "content_type": "reaction_commentary",
+                "video_format": "short",
+            },
+            analysis={},
+        )
+
+        yt = seo["youtube"]
+        title = yt["title"]
+        self.assertIn("#Shorts", title)
+        self.assertRegex(title.lower(), r"(mas|olha|final|detalhe|mudou)")
+        self.assertNotIn("Monetize", title)
+        self.assertNotIn("biblioteca", yt["description"].lower())
+        self.assertNotIn("drive", yt["description"].lower())
+        self.assertIn("viral_shorts_profile", seo["feed"])
+        self.assertEqual(seo["feed"]["viral_shorts_profile"]["target"], "feed_dos_shorts")
+        self.assertGreaterEqual(seo["seo_score"]["breakdown"]["shorts_feed_packaging"], 10)
+        self.assertLessEqual(len(title), 100)
+
+    def test_specific_analysis_title_gets_retention_cue_without_clickbait(self) -> None:
+        seo = build_drive_seo(
+            context={
+                "drive_name": "autografo.mp4",
+                "folder_path": "VIDEOS SATISFATORIOS",
+                "niche": "Videos Satisfatorios",
+                "content_type": "reaction_commentary",
+                "video_format": "short",
+            },
+            analysis={
+                "analysis_source": "vision_llm",
+                "summary": "Uma fa tenta conseguir um autografo durante um evento publico.",
+                "topics": ["autografo", "fa", "evento"],
+                "entities": ["fa", "artista"],
+                "title_options": ["O autografo falhou"],
+                "hook": "O autografo falhou na hora mais inesperada.",
+            },
+        )
+
+        yt = seo["youtube"]
+        self.assertIn("olha o detalhe", yt["title"].lower())
+        self.assertNotIn("voce nao vai acreditar", yt["title"].lower())
+        self.assertEqual(yt["tags"][0], "artista")
+        self.assertTrue(yt["description"].splitlines()[0].startswith("O autografo falhou"))
 
     def test_legacy_scheduler_helper_no_longer_uses_internal_description(self) -> None:
         ready = SimpleNamespace(

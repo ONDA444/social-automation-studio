@@ -33,7 +33,21 @@ OPERATIONAL_WORDS = {
     "pronto", "postar", "corte", "cortes", "parte", "part", "short", "shorts",
     "reels", "tiktok", "youtube", "yt", "fullhd", "hd", "fhd",
     "legendado", "legenda", "legendas", "subtitle", "subtitles",
+    "monetize", "monetizacao", "monetização", "monetizar",
 }
+VIRAL_SHORTS_LEARNINGS = {
+    "source": "user_top_short_2026_07",
+    "views": 5_950_751,
+    "subscribers": 5_400,
+    "shorts_feed_share": 0.948,
+    "retention_continued": 0.775,
+    "duration_seconds": 18,
+    "avg_view_seconds": 19,
+}
+VIRAL_TITLE_MARKERS = (
+    "mas", "olha", "depois", "chocou", "final", "detalhe", "ninguém",
+    "ninguem", "percebeu", "resolveu", "falhou", "mudou",
+)
 
 
 def build_ready_video_package(
@@ -104,6 +118,7 @@ def build_drive_seo(context: dict, analysis: dict | None = None) -> dict:
     niche = _clean_text(context.get("niche") or context.get("account_niche") or "")
 
     title = _title_from_analysis(topic, analysis, content_type, video_format)
+    title = _apply_viral_shorts_title(title, topic, analysis, content_type, video_format)
     if video_format == "short" and "#short" not in title.lower():
         title = f"{title} #Shorts"
     title = title[:100]
@@ -116,7 +131,8 @@ def build_drive_seo(context: dict, analysis: dict | None = None) -> dict:
     summary = _clean_text(analysis.get("summary") or "")
     if not summary:
         summary = _summary(topic, niche, content_type)
-    description = _description(hook, summary, yt_hashtags)
+    viral_profile = _viral_shorts_profile(title, topic, hook, summary, tags, video_format)
+    description = _description(hook, summary, yt_hashtags, viral_profile)
     score = _score(title, description, tags, yt_hashtags, analysis)
 
     return {
@@ -130,6 +146,7 @@ def build_drive_seo(context: dict, analysis: dict | None = None) -> dict:
             "cluster_terms": topics[:6] or tags[:5],
             "suggested_next_to": _suggested_next_to(niche, content_type),
             "playlist_target": _playlist_target(niche, content_type),
+            "viral_shorts_profile": viral_profile,
         },
         "fyp": {
             "tiktok": {
@@ -155,6 +172,7 @@ def build_drive_seo(context: dict, analysis: dict | None = None) -> dict:
             "tags": tags,
             "category_id": YT_CATEGORY.get(content_type, "22"),
             "thumbnail_text": _thumbnail_text(title),
+            "pinned_comment": viral_profile["comment_prompt"],
         },
         "tiktok": {
             "caption": f"{_strip_shorts(title)} {' '.join(social_hashtags[:5])} #fyp"[:150],
@@ -327,7 +345,7 @@ Responda JSON:
   "topics": ["3-6 temas"],
   "entities": ["nomes/personagens/objetos se visiveis ou inferiveis com seguranca"],
   "hook": "gancho curto e honesto para titulo/descricao",
-  "title_options": ["3 titulos de alta curiosidade, sem clickbait falso"],
+  "title_options": ["3 titulos de alta curiosidade, no padrao: situacao falhou/virou + mas/depois/olha + consequencia honesta"],
   "keywords": ["8-12 keywords de busca/sugeridos"],
   "warnings": []
 }}
@@ -392,6 +410,42 @@ def _title_from_analysis(topic: str, analysis: dict, content_type: str, video_fo
     if video_format == "short":
         return _shorten_title(templates.get(content_type, f"{base}: espera o final"))
     return templates.get(content_type, f"{base}: o detalhe que prende ate o fim")[:95]
+
+
+def _apply_viral_shorts_title(title: str, topic: str, analysis: dict, content_type: str, video_format: str) -> str:
+    """Shape Drive Shorts after the user's proven winner.
+
+    The winning pattern was not keyword stuffing: it was a compact curiosity
+    loop ("something failed" -> "but what happened next...") on an 18s video
+    with very high Shorts-feed retention. Keep strong model-provided titles, but
+    upgrade generic fallbacks so Drive videos do not publish with flat labels.
+    """
+    title = _strip_shorts(_clean_text(title))
+    if video_format != "short":
+        return title
+    low = title.lower()
+    if any(marker in low for marker in VIRAL_TITLE_MARKERS) and len(title) < 28:
+        return _shorten_title(f"{title} — olha o detalhe")
+    if (
+        any(marker in low for marker in VIRAL_TITLE_MARKERS)
+        and not _generic_viral_title(low)
+        and 28 <= len(title) <= 82
+    ):
+        return _shorten_title(title)
+
+    base = _compact_topic(topic)
+    if analysis.get("analysis_source") in {"vision_llm", "text_llm"} and len(_title_terms(title)) >= 4:
+        return _shorten_title(f"{title} — olha o detalhe")
+
+    templates = {
+        "sports_highlights": f"{base} parecia normal — ate esse lance mudar tudo",
+        "motivational_speech": f"{base} parecia simples — mas essa frase vira a chave",
+        "reddit_story": f"{base} parecia comum — mas o final entregou tudo",
+        "true_crime_mystery": f"{base} parecia resolvido — mas faltava um detalhe",
+        "explainer_curiosity": f"{base} parecia simples — mas tem um detalhe escondido",
+        "reaction_commentary": f"{base} parecia so uma cena comum — mas olha o detalhe",
+    }
+    return _shorten_title(templates.get(content_type, f"{base} parecia comum — mas olha o final"))
 
 
 def _clean_filename(name: str | None) -> str:
@@ -471,11 +525,40 @@ def _social_hashtags(tags: list[str], video_format: str) -> list[str]:
     return out[:12]
 
 
-def _description(hook: str, summary: str, hashtags: list[str]) -> str:
+def _viral_shorts_profile(title: str, topic: str, hook: str, summary: str, tags: list[str], video_format: str) -> dict:
+    short = video_format == "short"
+    curiosity = any(marker in title.lower() for marker in VIRAL_TITLE_MARKERS)
+    clean_hook = _clean_text(hook)
+    first_line = _strip_shorts(title) if _generic_viral_title(clean_hook.lower()) else (clean_hook or _strip_shorts(title))
+    return {
+        "source": VIRAL_SHORTS_LEARNINGS["source"],
+        "target": "feed_dos_shorts" if short else "browse_suggested",
+        "retention_target": "75%+ continuam assistindo" if short else "boa duracao media",
+        "title_pattern": "quebra de expectativa + consequencia honesta" if curiosity else "curiosidade direta",
+        "first_line": first_line,
+        "comment_prompt": _first_comment(topic, "reaction_commentary"),
+        "signals": {
+            "shorts_feed_share_reference": VIRAL_SHORTS_LEARNINGS["shorts_feed_share"],
+            "retention_reference": VIRAL_SHORTS_LEARNINGS["retention_continued"],
+            "avg_view_vs_duration": "maior que 100%",
+            "tag_specificity": min(len(tags), 18),
+        },
+        "anti_patterns": [
+            "descricao generica de biblioteca",
+            "titulo so com nome do arquivo",
+            "tags amplas antes da keyword especifica",
+        ],
+        "summary": _clean_text(summary),
+    }
+
+
+def _description(hook: str, summary: str, hashtags: list[str], viral_profile: dict | None = None) -> str:
+    first_line = _clean_text((viral_profile or {}).get("first_line") or hook)
     desc = (
-        f"{hook}\n\n"
+        f"{first_line}\n\n"
         f"{summary}\n\n"
-        f"Comenta qual detalhe voce percebeu primeiro e se inscreve para mais cortes como esse.\n\n"
+        f"{(viral_profile or {}).get('comment_prompt') or 'Comenta qual detalhe voce percebeu primeiro.'} "
+        f"Se inscreve para mais cortes como esse.\n\n"
         f"{' '.join(hashtags[:3])}"
     )
     return _remove_internal_words(desc).strip()
@@ -501,6 +584,7 @@ def _score(title: str, description: str, tags: list[str], hashtags: list[str], a
         "tags_quality": 16 if len(tags) >= 8 else 8,
         "hashtag_quality": 10 if len(hashtags) >= 2 else 5,
         "format_fit": 10 if ("#Shorts" in title or "#Shorts" not in hashtags) else 7,
+        "shorts_feed_packaging": 12 if _has_viral_title_shape(title) else 6,
     }
     value = min(95, sum(breakdown.values()))
     return {
@@ -517,6 +601,26 @@ def _notes(score: dict, analysis: dict) -> list[str]:
     if score.get("value", 0) < 75:
         notes.append("Score abaixo do ideal porque o conteudo real do video foi inferido com sinais limitados.")
     return notes
+
+
+def _has_viral_title_shape(title: str) -> bool:
+    clean = _strip_shorts(title).lower()
+    return (
+        24 <= len(clean) <= 82
+        and any(marker in clean for marker in VIRAL_TITLE_MARKERS)
+        and not _generic_viral_title(clean)
+    )
+
+
+def _generic_viral_title(clean_lower_title: str) -> bool:
+    weak = (
+        "detalhe que chamou atencao",
+        "detalhe que chamou atenção",
+        "detalhe que prende ate o fim",
+        "detalhe que prende até o fim",
+        "espera o final",
+    )
+    return any(piece in clean_lower_title for piece in weak)
 
 
 def _summary(topic: str, niche: str, content_type: str) -> str:
