@@ -17,3 +17,8 @@ cache/
 logs/
 *.log
 assets/music/_synth_backup/
+frontend/.codex*.png
+docs/superpowers/
+skills-lock.json
+tiktok_app_icon.png
+=3
