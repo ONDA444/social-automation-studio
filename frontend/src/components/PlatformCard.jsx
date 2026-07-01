@@ -105,10 +105,10 @@ export default function PlatformCard({ account, onChange, onChanged, onDone }) {
   }
 
   return (
-    <div className="card card-hover p-4" style={{ borderColor: blocked ? 'rgba(217,154,61,0.46)' : 'var(--border-glass)' }}>
-      <div className="flex items-start gap-4">
+    <div className="card card-hover p-3 sm:p-3.5" style={{ borderColor: blocked ? 'rgba(217,154,61,0.46)' : 'var(--border-glass)' }}>
+      <div className="flex items-start gap-3">
         <div
-          className="w-12 h-12 rounded-btn flex items-center justify-center font-black data shrink-0"
+          className="w-10 h-10 rounded-btn flex items-center justify-center font-black data shrink-0"
           style={{
             color: m.color,
             background: 'var(--accent-dim)',
@@ -119,10 +119,10 @@ export default function PlatformCard({ account, onChange, onChanged, onDone }) {
         </div>
 
         <div className="min-w-0 flex-1">
-          <div className="flex items-start justify-between gap-3">
+          <div className="flex items-start justify-between gap-2">
             <div className="min-w-0">
               <h3 className="heading text-base leading-tight truncate" title={account.display_name}>{account.display_name}</h3>
-              <p className="text-sm mt-0.5 truncate" style={{ color: 'var(--text-muted)' }}>{account.niche || m.label}</p>
+              <p className="text-xs mt-0.5 truncate" style={{ color: 'var(--text-muted)' }}>{account.niche || m.label}</p>
             </div>
             <span className="badge shrink-0" style={{ color: statusColor, background: 'var(--bg-elevated)' }}>
               <span className="w-1.5 h-1.5 rounded-full" style={{ background: connected ? 'var(--success)' : statusColor }} />
@@ -130,34 +130,34 @@ export default function PlatformCard({ account, onChange, onChanged, onDone }) {
             </span>
           </div>
 
-          <div className="mt-4 grid grid-cols-2 gap-3">
-            <div className="rounded-btn p-3" style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border-glass)' }}>
-              <p className="text-xs font-semibold" style={{ color: 'var(--text-muted)' }}>Uploads restantes</p>
-              <p className="data text-xl font-bold mt-1" style={{ color: blocked ? 'var(--warning)' : 'var(--text-primary)' }}>
-                {uploadsLeft == null ? '-' : uploadsLeft}
-              </p>
+          <div className="mt-3 rounded-btn px-3 py-2" style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border-glass)' }}>
+            <div className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-3">
+              <div className="min-w-0">
+                <p className="text-[10px] font-semibold uppercase" style={{ color: 'var(--text-dim)', letterSpacing: '.06em' }}>Uso hoje</p>
+                <p className="text-[11px] truncate" style={{ color: blocked ? 'var(--warning)' : 'var(--text-muted)' }}>
+                  {blocked ? 'Aguardando reset da quota' : `${account.quota_used_today}/${account.quota_limit} unidades`}
+                </p>
+              </div>
+              <div className="text-right">
+                <p className="data text-lg font-bold leading-none" style={{ color: blocked ? 'var(--warning)' : 'var(--text-primary)' }}>
+                  {uploadsLeft == null ? '-' : uploadsLeft}
+                </p>
+                <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>uploads</p>
+              </div>
+              <div className="text-right">
+                <p className="data text-lg font-bold leading-none">{quotaPct}<span className="text-xs">%</span></p>
+                <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>quota</p>
+              </div>
             </div>
-            <div className="rounded-btn p-3" style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border-glass)' }}>
-              <p className="text-xs font-semibold" style={{ color: 'var(--text-muted)' }}>Quota usada</p>
-              <p className="data text-xl font-bold mt-1">{quotaPct}<span className="text-sm">%</span></p>
-            </div>
-          </div>
-
-          <div className="mt-3">
-            <div className="h-2 rounded-full overflow-hidden" style={{ background: 'var(--bg-panel)' }}>
+            <div className="mt-2 h-1.5 rounded-full overflow-hidden" style={{ background: 'var(--bg-panel)' }}>
               <div
                 className="h-full rounded-full transition-all"
                 style={{ width: `${quotaPct}%`, background: blocked ? 'var(--warning)' : quotaPct > 85 ? 'var(--warning)' : m.color }}
               />
             </div>
-            <p className="text-xs mt-2" style={{ color: blocked ? 'var(--warning)' : 'var(--text-muted)' }}>
-              {blocked
-                ? 'Sem margem para novo upload hoje. O sistema deve aguardar o reset da quota.'
-                : `${account.quota_used_today}/${account.quota_limit} unidades usadas hoje.`}
-            </p>
           </div>
 
-          <div className="mt-4 flex flex-wrap gap-2">
+          <div className="mt-3 flex flex-wrap gap-2">
             {connected
               ? <button className="btn-ghost btn-sm" style={{ color: 'var(--error)' }} onClick={disconnect}>Desconectar</button>
               : <button className="btn-primary btn-sm" onClick={connect}>Conectar {m.label}</button>

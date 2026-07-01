@@ -29,28 +29,30 @@ export default function Platforms() {
   }
 
   return (
-    <div className="space-y-6 fade-in">
-      <PageHeader title="Plataformas & Canais" sub="Controle conexoes, quota e padroes de publicacao.">
-        <button className="btn btn-primary" onClick={() => setAdding((a) => !a)}>Conectar canal</button>
+    <div className="space-y-4 sm:space-y-5 fade-in">
+      <PageHeader title="Plataformas & Canais" sub="Conexoes, quota e padroes de publicacao em uma visao compacta.">
+        <button className="btn btn-primary w-full sm:w-auto" onClick={() => setAdding((a) => !a)}>
+          {adding ? 'Fechar' : 'Conectar canal'}
+        </button>
       </PageHeader>
 
-      <div className="grid sm:grid-cols-3 gap-3">
-        <div className="card p-4">
-          <p className="text-sm font-semibold" style={{ color: 'var(--text-muted)' }}>Canais</p>
-          <p className="data text-2xl font-black mt-1">{totals.all}</p>
+      <div className="grid grid-cols-3 gap-2 sm:gap-3">
+        <div className="card p-3 sm:p-4">
+          <p className="text-[10px] sm:text-xs font-semibold uppercase" style={{ color: 'var(--text-muted)', letterSpacing: '.06em' }}>Canais</p>
+          <p className="data text-xl sm:text-2xl font-black mt-1">{totals.all}</p>
         </div>
-        <div className="card p-4">
-          <p className="text-sm font-semibold" style={{ color: 'var(--text-muted)' }}>Ativos</p>
-          <p className="data text-2xl font-black mt-1" style={{ color: 'var(--success)' }}>{totals.active}</p>
+        <div className="card p-3 sm:p-4">
+          <p className="text-[10px] sm:text-xs font-semibold uppercase" style={{ color: 'var(--text-muted)', letterSpacing: '.06em' }}>Ativos</p>
+          <p className="data text-xl sm:text-2xl font-black mt-1" style={{ color: 'var(--success)' }}>{totals.active}</p>
         </div>
-        <div className="card p-4">
-          <p className="text-sm font-semibold" style={{ color: 'var(--text-muted)' }}>Aguardando quota</p>
-          <p className="data text-2xl font-black mt-1" style={{ color: totals.blocked ? 'var(--warning)' : 'var(--text-primary)' }}>{totals.blocked}</p>
+        <div className="card p-3 sm:p-4">
+          <p className="text-[10px] sm:text-xs font-semibold uppercase truncate" style={{ color: 'var(--text-muted)', letterSpacing: '.06em' }}>Quota</p>
+          <p className="data text-xl sm:text-2xl font-black mt-1" style={{ color: totals.blocked ? 'var(--warning)' : 'var(--text-primary)' }}>{totals.blocked}</p>
         </div>
       </div>
 
       {adding && (
-        <SectionCard className="grid md:grid-cols-4 gap-3 items-end slide-down">
+        <SectionCard className="grid sm:grid-cols-2 xl:grid-cols-[180px_minmax(0,1fr)_minmax(0,1fr)_150px] gap-3 items-end slide-down">
           <div>
             <label className="text-sm font-semibold" style={{ color: 'var(--text-muted)' }}>Plataforma</label>
             <select className="input mt-1" value={form.platform} onChange={(e) => setForm({ ...form, platform: e.target.value })}>
@@ -67,7 +69,7 @@ export default function Platforms() {
             <label className="text-sm font-semibold" style={{ color: 'var(--text-muted)' }}>Nicho</label>
             <input className="input mt-1" value={form.niche} onChange={(e) => setForm({ ...form, niche: e.target.value })} />
           </div>
-          <button className="btn btn-primary" onClick={create}>Criar canal</button>
+          <button className="btn btn-primary w-full" onClick={create}>Criar canal</button>
         </SectionCard>
       )}
 
@@ -76,16 +78,16 @@ export default function Platforms() {
         if (list.length === 0) return null
         const meta = PLATFORM_META[plat] || { label: plat, icon: plat.slice(0, 2).toUpperCase() }
         return (
-          <section key={plat} className="space-y-4">
-            <div className="flex items-center gap-3">
+          <section key={plat} className="space-y-3">
+            <div className="flex items-center gap-2 sm:gap-3">
               <span className="data text-sm font-black px-2 py-1 rounded-btn" style={{ background: 'var(--bg-elevated)', color: meta.color }}>
                 {meta.icon}
               </span>
-              <h3 className="heading text-lg font-bold">{meta.label}</h3>
+              <h3 className="heading text-base sm:text-lg font-bold">{meta.label}</h3>
               <span className="badge" style={{ background: 'var(--accent-dim)', color: 'var(--accent)' }}>{list.length}</span>
               <div className="flex-1 h-px" style={{ background: 'var(--border-glass)' }} />
             </div>
-            <div className="grid xl:grid-cols-2 gap-4">
+            <div className="grid lg:grid-cols-2 gap-3">
               {list.map((a) => <PlatformCard key={a.id} account={a} onChange={load} onChanged={load} />)}
             </div>
           </section>
