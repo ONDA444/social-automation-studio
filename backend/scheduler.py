@@ -121,15 +121,6 @@ _NO_AUTO_RETRY_MARKERS = (
     "credenciais conectadas",
 )
 
-# The ONLY failures we must NOT auto-retry: a publish interrupted mid-upload. The
-# video may already be on the channel, so re-dispatching risks a DUPLICATE upload.
-# These are parked in ERROR for a human (orphan recovery sets this message).
-_NO_AUTO_RETRY_MARKERS = (
-    "PODE já estar no canal",
-    "Verifique o YouTube",
-)
-
-
 def _job_retry_errored() -> None:
     """Resurrect videos that died on a transient LLM failure (free-tier 429 / daily
     quota window) so a scheduled post isn't lost forever. Resets them to QUEUED and
@@ -504,6 +495,7 @@ def _create_theme_job(db, account_id: int, theme, scheduled_naive: datetime) -> 
 def _try_create_ready_video_job(db, acct, scheduled_naive: datetime, theme=None) -> int | None:
     """Reserve a Drive ready-video and create a publishable VideoJob."""
     from backend.agents.drive_library import DriveLibraryService
+    from backend.agents.ready_video_seo import build_ready_video_package
     from backend.config import settings
     from backend.models import JobStatus, VideoJob
 
@@ -554,7 +546,39 @@ def _try_create_ready_video_job(db, acct, scheduled_naive: datetime, theme=None)
         job.main_video_path = local_path
         if video_format == "short":
             job.shorts_paths = [local_path]
-        job.seo_metadata = _ready_video_seo(title, ready, acct, job.content_type, video_format)
+        analysis, seo = build_ready_video_package(
+            job_id=job.id,
+            local_path=local_path,
+            ready=ready,
+            account=acct,
+            content_type=job.content_type,
+            video_format=video_format,
+            title_seed=title,
+        )
+        job.seo_metadata = seo
+        yt_title = ((seo.get("youtube") or {}).get("title") or title).strip()
+        if yt_title:
+            job.title = yt_title[:300]
+            job.topic = yt_title
+        ctx = dict(job.video_context or {})
+        ctx["content_analysis"] = analysis
+        ctx["seo_source"] = (analysis or {}).get("analysis_source") or "fallback"
+        job.video_context = ctx
+        if analysis.get("duration"):
+            ready.duration_seconds = int(float(analysis.get("duration") or 0))
+        if analysis.get("aspect_ratio") == "9:16":
+            ready.video_format = "short"
+            job.video_format = "short"
+            job.shorts_paths = [local_path]
+        elif analysis.get("aspect_ratio") == "16:9" and video_format != "short":
+            ready.video_format = "long"
+        meta = dict(ready.metadata_json or {})
+        meta["analysis"] = {
+            k: v
+            for k, v in (analysis or {}).items()
+            if k not in {"title_options"} and not (k == "warnings" and not v)
+        }
+        ready.metadata_json = meta
         if settings.auto_publish:
             job.approval_status = "approved"
             if job.scheduled_at is None:
@@ -591,39 +615,20 @@ def _clean_ready_title(name: str | None) -> str:
 
 
 def _ready_video_seo(title: str, ready, acct, content_type: str, video_format: str) -> dict:
-    import re
+    from backend.agents.ready_video_seo import build_drive_seo
 
-    raw_terms = [title, getattr(ready, "niche", None), getattr(acct, "niche", None), getattr(acct, "drive_niche", None)]
-    if getattr(ready, "folder_path", None):
-        raw_terms.extend(str(ready.folder_path).split("/"))
-    tags = []
-    for term in raw_terms:
-        for piece in re.split(r"[,/|()-]+", term or ""):
-            clean = re.sub(r"\s+", " ", piece).strip().lower()
-            if clean and clean not in tags:
-                tags.append(clean)
-    tags = (tags + ["video", "viral", "youtube"])[:15]
-    hashtags = ["#" + re.sub(r"[^0-9A-Za-zÀ-ÿ]", "", t.title()) for t in tags[:5]]
-    if video_format == "short" and "#Shorts" not in hashtags:
-        hashtags.insert(0, "#Shorts")
-    description = (
-        f"{title}\n\n"
-        "Video pronto da biblioteca do canal, publicado automaticamente pelo Social Studio.\n\n"
-        + " ".join(hashtags[:3])
-    ).strip()
-    return {
-        "youtube": {
-            "title": title[:100],
-            "description": description,
-            "tags": tags,
-            "category_id": "22",
-            "thumbnail_text": " ".join(title.split()[:3]).upper()[:30],
-        },
-        "tiktok": {"caption": f"{title} {' '.join(hashtags[:4])} #fyp"[:150]},
-        "instagram": {"caption": title, "hashtags": hashtags[:10] + ["#reels", "#viral"]},
-        "seo_score": {"value": 55, "breakdown": {}, "verdict": "ready_video"},
-        "seo_notes": ["SEO deterministico para video pronto do Drive."],
+    context = {
+        "title_seed": title,
+        "drive_name": getattr(ready, "name", "") or "",
+        "folder_path": getattr(ready, "folder_path", "") or "",
+        "niche": getattr(ready, "niche", None) or getattr(acct, "drive_niche", None) or getattr(acct, "niche", None) or "",
+        "account_niche": getattr(acct, "niche", "") or "",
+        "display_name": getattr(acct, "display_name", "") or "",
+        "target_audience": getattr(acct, "target_audience", "") or "",
+        "content_type": content_type,
+        "video_format": video_format,
     }
+    return build_drive_seo(context=context, analysis={})
 
 
 def _job_consume_themes() -> None:
