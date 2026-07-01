@@ -9,6 +9,7 @@ from backend.agents.drive_library import (
     extract_search_query,
     is_audio_file,
     is_video_file,
+    normalize_drive_name,
 )
 
 
@@ -20,21 +21,34 @@ class _FakeListRequest:
         return {"files": self._files}
 
 
+class _FakeGetRequest:
+    def __init__(self, item):
+        self._item = item
+
+    def execute(self):
+        return self._item or {}
+
+
 class _FakeFiles:
-    def __init__(self, tree):
+    def __init__(self, tree, names=None):
         self._tree = tree
+        self._names = names or {}
 
     def list(self, *, q, **_kwargs):
         folder_id = q.split("'")[1]
         return _FakeListRequest(self._tree.get(folder_id, []))
 
+    def get(self, *, fileId, **_kwargs):
+        return _FakeGetRequest({"id": fileId, "name": self._names.get(fileId, fileId), "mimeType": FOLDER_MIME})
+
 
 class _FakeDrive:
-    def __init__(self, tree):
+    def __init__(self, tree, names=None):
         self._tree = tree
+        self._names = names or {}
 
     def files(self):
-        return _FakeFiles(self._tree)
+        return _FakeFiles(self._tree, self._names)
 
 
 class DriveLibraryTests(unittest.TestCase):
@@ -50,6 +64,9 @@ class DriveLibraryTests(unittest.TestCase):
             "CORTES FAMILY GUY",
         )
         self.assertIsNone(extract_search_query("https://drive.google.com/drive/folders/abc123DEF456"))
+
+    def test_normalize_drive_name_ignores_accents(self) -> None:
+        self.assertEqual(normalize_drive_name("VÍDEOS RELIGIOSOS"), "videos religiosos")
 
     def test_walk_folder_descends_nested_subfolders_in_order(self) -> None:
         svc = _FakeDrive(
@@ -104,6 +121,38 @@ class DriveLibraryTests(unittest.TestCase):
         self.assertEqual(
             [(item["id"], path) for item, path in rows],
             [("weekly-video", ["Atualizados Semanalmente", "Family Guy semana 01.mp4"])],
+        )
+
+    def test_resolve_niche_root_inside_package_folder(self) -> None:
+        svc = _FakeDrive(
+            {
+                "package-root": [
+                    {"id": "religious", "name": "VÍDEOS RELIGIOSOS", "mimeType": FOLDER_MIME},
+                    {"id": "cars", "name": "CARROS E CAMINHÕES", "mimeType": FOLDER_MIME},
+                ],
+                "religious": [
+                    {"id": "videos", "name": "Videos", "mimeType": FOLDER_MIME},
+                    {"id": "series", "name": "Cortes séries", "mimeType": FOLDER_MIME},
+                    {"id": "root-video", "name": "Monetize - Religiosos (85).mp4", "mimeType": "video/mp4"},
+                ],
+                "videos": [{"id": "video-a", "name": "01.mp4", "mimeType": "video/mp4"}],
+                "series": [{"id": "video-b", "name": "serie-01.mp4", "mimeType": "application/octet-stream"}],
+            },
+            names={"package-root": "80 MIL CORTES VIRAIS", "religious": "VÍDEOS RELIGIOSOS"},
+        )
+        service = DriveLibraryService(db=None)
+
+        roots = service._resolve_niche_roots(svc, "package-root", "VIDEOS RELIGIOSOS")
+        rows = list(service._walk_folder(svc, roots[0][0], recursive=True))
+
+        self.assertEqual(roots, [("religious", "VÍDEOS RELIGIOSOS")])
+        self.assertEqual(
+            [(item["id"], path) for item, path in rows],
+            [
+                ("video-a", ["Videos", "01.mp4"]),
+                ("video-b", ["Cortes séries", "serie-01.mp4"]),
+                ("root-video", ["Monetize - Religiosos (85).mp4"]),
+            ],
         )
 
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import re
+import unicodedata
 from datetime import datetime
 from typing import Iterable
 from urllib.parse import parse_qs, unquote_plus, urlparse
@@ -73,6 +74,12 @@ def is_audio_file(name: str, mime_type: str | None = None) -> bool:
         return True
     lowered = (name or "").lower()
     return any(lowered.endswith(ext) for ext in (".mp3", ".wav", ".m4a", ".aac", ".ogg", ".flac"))
+
+
+def normalize_drive_name(value: str | None) -> str:
+    text = unicodedata.normalize("NFKD", value or "")
+    ascii_text = "".join(ch for ch in text if not unicodedata.combining(ch))
+    return re.sub(r"[^a-z0-9]+", " ", ascii_text.lower()).strip()
 
 
 class DriveLibraryService:
@@ -238,6 +245,55 @@ class DriveLibraryService:
                 total[key] += int(result.get(key) or 0)
         return total
 
+    def index_niche_tree(
+        self,
+        root_folder_id_or_url: str,
+        *,
+        niche: str | None,
+        content_type: str = "auto",
+        video_format: str | None = None,
+        account_id: int | None = None,
+        recursive: bool = True,
+    ) -> dict:
+        """Index the selected niche folder, or find it below a package/root folder.
+
+        Users often paste the shared package/root folder and type a niche like
+        "VIDEOS RELIGIOSOS". The actual Drive folder may be named
+        "VÍDEOS RELIGIOSOS", then contain subfolders such as "Videos" and
+        "Cortes séries". This resolves the niche folder first and then indexes
+        every video below that folder.
+        """
+        folder_id = extract_folder_id(root_folder_id_or_url)
+        if not folder_id:
+            raise ValueError("Pasta do Drive invalida.")
+        svc = self._service()
+        roots = self._resolve_niche_roots(svc, folder_id, niche)
+        if not roots:
+            roots = [(folder_id, self._get_folder_name(svc, folder_id) or "")]
+        total = {
+            "folder_id": ",".join(folder_id for folder_id, _ in roots),
+            "matched_folders": len(roots),
+            "imported": 0,
+            "updated": 0,
+            "seen": 0,
+            "files_seen": 0,
+            "ignored_audio": 0,
+            "ignored_non_video": 0,
+        }
+        for resolved_folder_id, resolved_name in roots:
+            result = self._index_folder_id(
+                svc,
+                resolved_folder_id,
+                niche=niche or resolved_name,
+                content_type=content_type,
+                video_format=video_format,
+                account_id=account_id,
+                recursive=recursive,
+            )
+            for key in ("imported", "updated", "seen", "files_seen", "ignored_audio", "ignored_non_video"):
+                total[key] += int(result.get(key) or 0)
+        return total
+
     def _index_folder_id(
         self,
         svc,
@@ -328,6 +384,70 @@ class DriveLibraryService:
             if not page_token:
                 break
         return folders
+
+    def _get_folder_name(self, svc, folder_id: str) -> str | None:
+        try:
+            resp = svc.files().get(
+                fileId=folder_id,
+                fields="id,name,mimeType,shortcutDetails(targetId,targetMimeType)",
+                supportsAllDrives=True,
+            ).execute()
+        except Exception:  # noqa: BLE001 - best-effort metadata only
+            return None
+        return resp.get("name")
+
+    def _resolve_niche_roots(self, svc, folder_id: str, niche: str | None) -> list[tuple[str, str]]:
+        wanted = normalize_drive_name(niche)
+        if not wanted:
+            return [(folder_id, self._get_folder_name(svc, folder_id) or "")]
+        root_name = self._get_folder_name(svc, folder_id) or ""
+        if normalize_drive_name(root_name) == wanted:
+            return [(folder_id, root_name)]
+
+        exact: list[tuple[str, str]] = []
+        partial: list[tuple[str, str]] = []
+        for item, path in self._walk_folders(svc, folder_id):
+            item_name = item.get("name") or ""
+            normalized = normalize_drive_name(item_name)
+            row = (item["id"], item_name)
+            if normalized == wanted:
+                exact.append(row)
+            elif wanted in normalized or normalized in wanted:
+                partial.append(row)
+        return exact or partial
+
+    def _walk_folders(self, svc, folder_id: str, *, path: list[str] | None = None):
+        path = path or []
+        page_token = None
+        while True:
+            resp = svc.files().list(
+                q=f"'{folder_id}' in parents and trashed=false",
+                fields=(
+                    "nextPageToken, files("
+                    "id,name,mimeType,shortcutDetails(targetId,targetMimeType)"
+                    ")"
+                ),
+                orderBy="folder,name_natural",
+                pageSize=1000,
+                pageToken=page_token,
+                supportsAllDrives=True,
+                includeItemsFromAllDrives=True,
+            ).execute()
+            for item in resp.get("files", []):
+                item_path = [*path, item.get("name") or ""]
+                mime_type = item.get("mimeType")
+                shortcut = item.get("shortcutDetails") or {}
+                if mime_type == SHORTCUT_MIME and shortcut.get("targetId"):
+                    if shortcut.get("targetMimeType") == FOLDER_MIME:
+                        folder_item = {**item, "id": shortcut["targetId"], "mimeType": FOLDER_MIME}
+                        yield folder_item, item_path
+                        yield from self._walk_folders(svc, shortcut["targetId"], path=item_path)
+                elif mime_type == FOLDER_MIME:
+                    yield item, item_path
+                    yield from self._walk_folders(svc, item["id"], path=item_path)
+            page_token = resp.get("nextPageToken")
+            if not page_token:
+                break
 
     def _walk_folder(self, svc, folder_id: str, *, recursive: bool, path: list[str] | None = None):
         path = path or []

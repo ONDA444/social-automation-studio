@@ -96,7 +96,7 @@ def sync_account_folder(account_id: int, db: Session = Depends(get_db)):
     try:
         service = DriveLibraryService(db)
         if folder:
-            return service.index_folder(
+            return service.index_niche_tree(
                 folder,
                 niche=acct.drive_niche or acct.niche,
                 content_type="auto",
