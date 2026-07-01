@@ -8,6 +8,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from backend.agents.drive_library import DriveLibraryService, extract_folder_id
+from backend.config import settings
 from backend.database import get_db
 from backend.models import PlatformAccount, ReadyVideo
 
@@ -28,7 +29,11 @@ def status(db: Session = Depends(get_db)):
     stats = dict(
         db.execute(select(ReadyVideo.status, func.count(ReadyVideo.id)).group_by(ReadyVideo.status)).all()
     )
-    return {**DriveLibraryService(db).status(), "stats": stats}
+    return {
+        **DriveLibraryService(db).status(),
+        "redirect_uri": settings.google_drive_redirect_uri,
+        "stats": stats,
+    }
 
 
 @router.get("/auth/start")
@@ -39,7 +44,7 @@ def auth_start(db: Session = Depends(get_db)):
         raise HTTPException(400, f"Falha ao iniciar Google Drive: {exc}") from exc
     if not result.get("ok"):
         raise HTTPException(400, result.get("error", "Drive OAuth indisponivel."))
-    return {"auth_url": result["auth_url"]}
+    return {"auth_url": result["auth_url"], "redirect_uri": settings.google_drive_redirect_uri}
 
 
 @router.get("/auth/callback", response_class=HTMLResponse)

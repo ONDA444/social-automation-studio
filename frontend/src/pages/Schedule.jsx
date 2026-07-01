@@ -126,6 +126,16 @@ export default function Schedule() {
     }
   }
 
+  const copyDriveRedirect = async () => {
+    if (!driveStatus?.redirect_uri) return
+    try {
+      await navigator.clipboard.writeText(driveStatus.redirect_uri)
+      alert('Callback do Drive copiado.')
+    } catch {
+      alert(driveStatus.redirect_uri)
+    }
+  }
+
   const loadDrive = async () => {
     if (!sel) return
     try {
@@ -357,6 +367,25 @@ export default function Schedule() {
                         </button>
                       )}
                     </div>
+
+                    {!driveStatus?.has_credentials && driveStatus?.redirect_uri && (
+                      <div className="rounded-btn border border-warning/25 bg-warning/10 p-3">
+                        <p className="text-[11px] font-semibold text-text-primary">
+                          Callback para autorizar no Google Cloud
+                        </p>
+                        <div className="mt-1 flex items-center gap-2">
+                          <code className="min-w-0 flex-1 truncate rounded-md border border-border bg-white px-2 py-1 text-[10px] text-text-muted">
+                            {driveStatus.redirect_uri}
+                          </code>
+                          <button type="button" className="btn btn-ghost btn-sm shrink-0" onClick={copyDriveRedirect}>
+                            Copiar
+                          </button>
+                        </div>
+                        <p className="mt-1 text-[10px] text-text-muted">
+                          Se o Google mostrar redirect_uri_mismatch, adicione esse callback em APIs e servicos &gt; Credenciais &gt; OAuth Client.
+                        </p>
+                      </div>
+                    )}
 
                     <div>
                       <label className="text-xs text-text-muted mb-1 block">Pasta do Drive</label>
