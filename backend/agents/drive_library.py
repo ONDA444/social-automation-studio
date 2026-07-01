@@ -412,7 +412,7 @@ class DriveLibraryService:
             row = (item["id"], item_name)
             if normalized == wanted:
                 exact.append(row)
-            elif wanted in normalized or normalized in wanted:
+            elif wanted in normalized:
                 partial.append(row)
         return exact or partial
 

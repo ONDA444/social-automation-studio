@@ -29,6 +29,11 @@ class _FakeGetRequest:
         return self._item or {}
 
 
+class _FakeFailingGetRequest:
+    def execute(self):
+        raise RuntimeError("metadata unavailable")
+
+
 class _FakeFiles:
     def __init__(self, tree, names=None):
         self._tree = tree
@@ -42,6 +47,11 @@ class _FakeFiles:
         return _FakeGetRequest({"id": fileId, "name": self._names.get(fileId, fileId), "mimeType": FOLDER_MIME})
 
 
+class _FakeFilesWithoutGet(_FakeFiles):
+    def get(self, *, fileId, **_kwargs):
+        return _FakeFailingGetRequest()
+
+
 class _FakeDrive:
     def __init__(self, tree, names=None):
         self._tree = tree
@@ -49,6 +59,11 @@ class _FakeDrive:
 
     def files(self):
         return _FakeFiles(self._tree, self._names)
+
+
+class _FakeDriveWithoutGet(_FakeDrive):
+    def files(self):
+        return _FakeFilesWithoutGet(self._tree, self._names)
 
 
 class DriveLibraryTests(unittest.TestCase):
@@ -154,6 +169,22 @@ class DriveLibraryTests(unittest.TestCase):
                 ("root-video", ["Monetize - Religiosos (85).mp4"]),
             ],
         )
+
+    def test_resolve_niche_does_not_choose_generic_child_folder(self) -> None:
+        svc = _FakeDriveWithoutGet(
+            {
+                "religious": [
+                    {"id": "videos", "name": "Videos", "mimeType": FOLDER_MIME},
+                    {"id": "series", "name": "Cortes séries", "mimeType": FOLDER_MIME},
+                ],
+                "videos": [{"id": "video-a", "name": "01.mp4", "mimeType": "video/mp4"}],
+                "series": [{"id": "video-b", "name": "serie-01.mp4", "mimeType": "video/mp4"}],
+            }
+        )
+
+        roots = DriveLibraryService(db=None)._resolve_niche_roots(svc, "religious", "VIDEOS RELIGIOSOS")
+
+        self.assertEqual(roots, [])
 
 
 if __name__ == "__main__":
