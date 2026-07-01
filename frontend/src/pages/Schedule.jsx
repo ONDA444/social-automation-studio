@@ -25,6 +25,13 @@ const MODE_OPTIONS = [
   { v: 'trending_aware', label: 'Trending',     desc: 'Publica logo que um trending e detectado.' },
 ]
 
+const driveConfigFromAccount = (acct) => ({
+  video_source_mode: acct?.video_source_mode || 'ai',
+  drive_folder_url: acct?.drive_folder_url || acct?.drive_folder_id || '',
+  drive_niche: acct?.drive_niche || acct?.niche || '',
+  drive_recursive: acct?.drive_recursive !== false,
+})
+
 export default function Schedule() {
   const [events, setEvents]     = useState([])
   const [accounts, setAccounts] = useState([])
@@ -87,15 +94,13 @@ export default function Schedule() {
     api.get(`/schedule/${sel}/slots?count=6`).then((d) => { setSlots(d.slots || []); setSlotsMeta(d) }).catch(() => {})
     const acct = accounts.find((a) => String(a.id) === sel)
     if (acct) {
-      setDriveCfg({
-        video_source_mode: acct.video_source_mode || 'ai',
-        drive_folder_url: acct.drive_folder_url || acct.drive_folder_id || '',
-        drive_niche: acct.drive_niche || acct.niche || '',
-        drive_recursive: acct.drive_recursive !== false,
-      })
+      const nextDriveCfg = driveConfigFromAccount(acct)
+      setDriveCfg(nextDriveCfg)
+      loadDrive(nextDriveCfg, acct)
+    } else {
+      loadDrive()
     }
-    loadDrive()
-  }, [sel])
+  }, [sel, accounts])
 
   const loadQueue = () => {
     if (!sel) { setQueue([]); setHistory([]); return }
@@ -115,18 +120,14 @@ export default function Schedule() {
       const savedCfg = await api.put(`/schedule/config/${sel}`, cfg, { timeoutMs: 20000 })
       const savedAccount = await api.patch(`/accounts/${sel}`, driveCfg, { timeoutMs: 20000 })
       setCfg((p) => ({ ...p, ...savedCfg, post_times: savedCfg.post_times?.length ? savedCfg.post_times : p.post_times }))
-      setDriveCfg({
-        video_source_mode: savedAccount.video_source_mode || 'ai',
-        drive_folder_url: savedAccount.drive_folder_url || savedAccount.drive_folder_id || '',
-        drive_niche: savedAccount.drive_niche || savedAccount.niche || '',
-        drive_recursive: savedAccount.drive_recursive !== false,
-      })
+      const savedDriveCfg = driveConfigFromAccount(savedAccount)
+      setDriveCfg(savedDriveCfg)
       const d = await api.get(`/schedule/${sel}/slots?count=6&mode=${savedCfg.mode || cfg.mode}`, { timeoutMs: 20000 })
       setSlots(d.slots || [])
       setSlotsMeta(d)
       const fresh = await api.get('/accounts', { timeoutMs: 20000 })
       setAccounts(fresh.accounts || [])
-      await loadDrive()
+      await loadDrive(savedDriveCfg, savedAccount)
       setSaveState({ status: 'saved', message: `Salvo com sucesso as ${new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}.` })
     } catch (e) {
       setSaveState({ status: 'error', message: e.message || 'Falha ao salvar configuracao.' })
@@ -171,15 +172,17 @@ export default function Schedule() {
     }
   }
 
-  const loadDrive = async () => {
-    if (!sel) return
+  const loadDrive = async (cfgOverride = null, acctOverride = null, accountIdOverride = null) => {
+    const accountId = accountIdOverride || sel
+    if (!accountId) return
     try {
-      const acct = accounts.find((a) => String(a.id) === sel)
-      const niche = (driveCfg.drive_niche || acct?.drive_niche || acct?.niche || '').trim()
+      const acct = acctOverride || accounts.find((a) => String(a.id) === String(accountId))
+      const effectiveDriveCfg = cfgOverride || driveCfg
+      const niche = (effectiveDriveCfg.drive_niche || acct?.drive_niche || acct?.niche || '').trim()
       const nicheParam = niche ? `&niche=${encodeURIComponent(niche)}` : ''
       const [status, videos] = await Promise.all([
         api.get('/drive-library/status').catch(() => null),
-        api.get(`/drive-library/videos?account_id=${sel}&status=available&limit=500${nicheParam}`).catch(() => ({ videos: [] })),
+        api.get(`/drive-library/videos?account_id=${accountId}&status=available&limit=500${nicheParam}`).catch(() => ({ videos: [] })),
       ])
       setDriveStatus(status)
       setDriveVideos(videos.videos || [])
@@ -204,7 +207,8 @@ export default function Schedule() {
       alert(`Drive sincronizado: ${r.imported || 0} novo(s), ${r.updated || 0} atualizado(s), ${r.stale || 0} antigo(s) removido(s) do estoque ativo, ${ignored} ignorado(s) que nao eram video.`)
       const fresh = await api.get('/accounts')
       setAccounts(fresh.accounts || [])
-      await loadDrive()
+      const freshAccount = (fresh.accounts || []).find((a) => String(a.id) === sel)
+      await loadDrive(driveConfigFromAccount(freshAccount), freshAccount)
     } catch (e) { alert(e.message) } finally { setDriveSyncing(false) }
   }
 
