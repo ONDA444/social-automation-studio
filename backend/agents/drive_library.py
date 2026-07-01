@@ -390,6 +390,24 @@ class DriveLibraryService:
             self.db.commit()
         return changed
 
+    def clear_account_inventory(self, account_id: int) -> dict:
+        rows = self.db.execute(
+            select(ReadyVideo).where(ReadyVideo.account_id == account_id)
+        ).scalars().all()
+        cleared = 0
+        kept_used = 0
+        for row in rows:
+            if row.status == "used":
+                kept_used += 1
+                continue
+            if row.status != "missing":
+                row.status = "missing"
+                row.reserved_job_id = None
+                row.reserved_at = None
+                cleared += 1
+        self.db.commit()
+        return {"cleared": cleared, "kept_used": kept_used}
+
     def _find_folders_by_name(self, svc, query: str) -> list[str]:
         escaped = query.replace("\\", "\\\\").replace("'", "\\'")
         page_token = None

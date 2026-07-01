@@ -299,6 +299,29 @@ class DriveLibraryTests(unittest.TestCase):
             self.assertEqual(rows["cars-current"], "available")
             self.assertEqual(rows["family-used"], "used")
 
+    def test_clear_account_inventory_preserves_used_history(self) -> None:
+        engine = create_engine("sqlite:///:memory:", future=True)
+        Base.metadata.create_all(bind=engine)
+        Session = sessionmaker(bind=engine, future=True)
+        with Session() as db:
+            db.add_all(
+                [
+                    ReadyVideo(drive_file_id="available", name="a.mp4", account_id=9, status="available"),
+                    ReadyVideo(drive_file_id="reserved", name="r.mp4", account_id=9, status="reserved", reserved_job_id=10),
+                    ReadyVideo(drive_file_id="used", name="u.mp4", account_id=9, status="used"),
+                ]
+            )
+            db.commit()
+
+            result = DriveLibraryService(db).clear_account_inventory(9)
+
+            rows = {row.drive_file_id: row for row in db.query(ReadyVideo).all()}
+            self.assertEqual(result, {"cleared": 2, "kept_used": 1})
+            self.assertEqual(rows["available"].status, "missing")
+            self.assertEqual(rows["reserved"].status, "missing")
+            self.assertIsNone(rows["reserved"].reserved_job_id)
+            self.assertEqual(rows["used"].status, "used")
+
 
 if __name__ == "__main__":
     unittest.main()

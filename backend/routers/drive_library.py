@@ -114,6 +114,14 @@ def sync_account_folder(account_id: int, db: Session = Depends(get_db)):
         raise HTTPException(400, _friendly_drive_error(exc))
 
 
+@router.post("/accounts/{account_id}/clear")
+def clear_account_inventory(account_id: int, db: Session = Depends(get_db)):
+    acct = db.get(PlatformAccount, account_id)
+    if not acct:
+        raise HTTPException(404, "conta nao encontrada")
+    return DriveLibraryService(db).clear_account_inventory(account_id)
+
+
 @router.get("/videos")
 def list_videos(
     account_id: int | None = Query(None),

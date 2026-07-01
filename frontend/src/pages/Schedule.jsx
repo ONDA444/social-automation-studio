@@ -179,7 +179,7 @@ export default function Schedule() {
       const nicheParam = niche ? `&niche=${encodeURIComponent(niche)}` : ''
       const [status, videos] = await Promise.all([
         api.get('/drive-library/status').catch(() => null),
-        api.get(`/drive-library/videos?account_id=${sel}&limit=500${nicheParam}`).catch(() => ({ videos: [] })),
+        api.get(`/drive-library/videos?account_id=${sel}&status=available&limit=500${nicheParam}`).catch(() => ({ videos: [] })),
       ])
       setDriveStatus(status)
       setDriveVideos(videos.videos || [])
@@ -206,6 +206,21 @@ export default function Schedule() {
       setAccounts(fresh.accounts || [])
       await loadDrive()
     } catch (e) { alert(e.message) } finally { setDriveSyncing(false) }
+  }
+
+  const clearDriveInventory = async () => {
+    if (!sel) return alert('Selecione uma conta primeiro')
+    if (!confirm('Limpar o estoque ativo deste canal? Videos ja usados ficam guardados no historico, mas os disponiveis/reservados saem da lista.')) return
+    setDriveSyncing(true)
+    try {
+      const r = await api.post(`/drive-library/accounts/${sel}/clear`)
+      alert(`Estoque limpo: ${r.cleared || 0} video(s) removido(s) do estoque ativo.`)
+      await loadDrive()
+    } catch (e) {
+      alert(e.message)
+    } finally {
+      setDriveSyncing(false)
+    }
   }
 
   const parsedThemes = parseThemes(themesText)
@@ -464,6 +479,9 @@ export default function Schedule() {
 
                     <button type="button" className="btn btn-ghost w-full text-xs" disabled={driveSyncing} onClick={syncDrive}>
                       {driveSyncing ? 'Sincronizando...' : 'Sincronizar pasta agora'}
+                    </button>
+                    <button type="button" className="btn btn-ghost w-full text-xs text-danger" disabled={driveSyncing} onClick={clearDriveInventory}>
+                      Limpar estoque deste canal
                     </button>
 
                     <div className="rounded-card border border-border p-3" style={{ background: 'var(--bg-surface)' }}>
