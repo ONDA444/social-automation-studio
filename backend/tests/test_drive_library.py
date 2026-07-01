@@ -35,16 +35,20 @@ class _FakeFailingGetRequest:
 
 
 class _FakeFiles:
-    def __init__(self, tree, names=None):
+    def __init__(self, tree, names=None, metadata=None):
         self._tree = tree
         self._names = names or {}
+        self._metadata = metadata or {}
 
     def list(self, *, q, **_kwargs):
         folder_id = q.split("'")[1]
         return _FakeListRequest(self._tree.get(folder_id, []))
 
     def get(self, *, fileId, **_kwargs):
-        return _FakeGetRequest({"id": fileId, "name": self._names.get(fileId, fileId), "mimeType": FOLDER_MIME})
+        return _FakeGetRequest(
+            self._metadata.get(fileId)
+            or {"id": fileId, "name": self._names.get(fileId, fileId), "mimeType": FOLDER_MIME}
+        )
 
 
 class _FakeFilesWithoutGet(_FakeFiles):
@@ -53,12 +57,13 @@ class _FakeFilesWithoutGet(_FakeFiles):
 
 
 class _FakeDrive:
-    def __init__(self, tree, names=None):
+    def __init__(self, tree, names=None, metadata=None):
         self._tree = tree
         self._names = names or {}
+        self._metadata = metadata or {}
 
     def files(self):
-        return _FakeFiles(self._tree, self._names)
+        return _FakeFiles(self._tree, self._names, self._metadata)
 
 
 class _FakeDriveWithoutGet(_FakeDrive):
@@ -185,6 +190,69 @@ class DriveLibraryTests(unittest.TestCase):
         roots = DriveLibraryService(db=None)._resolve_niche_roots(svc, "religious", "VIDEOS RELIGIOSOS")
 
         self.assertEqual(roots, [])
+
+    def test_resolve_niche_climbs_from_generic_child_folder_to_parent(self) -> None:
+        svc = _FakeDrive(
+            {
+                "religious": [
+                    {"id": "videos", "name": "Videos", "mimeType": FOLDER_MIME},
+                    {"id": "series", "name": "Cortes séries", "mimeType": FOLDER_MIME},
+                ],
+                "videos": [{"id": "video-a", "name": "01.mp4", "mimeType": "video/mp4"}],
+                "series": [{"id": "video-b", "name": "serie-01.mp4", "mimeType": "video/mp4"}],
+            },
+            metadata={
+                "videos": {"id": "videos", "name": "Videos", "mimeType": FOLDER_MIME, "parents": ["religious"]},
+                "religious": {"id": "religious", "name": "VÍDEOS RELIGIOSOS", "mimeType": FOLDER_MIME},
+            },
+        )
+        service = DriveLibraryService(db=None)
+
+        roots = service._resolve_niche_roots(svc, "videos", "VIDEOS RELIGIOSOS")
+        rows = list(service._walk_folder(svc, roots[0][0], recursive=True))
+
+        self.assertEqual(roots, [("religious", "VÍDEOS RELIGIOSOS")])
+        self.assertEqual(
+            [(item["id"], path) for item, path in rows],
+            [
+                ("video-a", ["Videos", "01.mp4"]),
+                ("video-b", ["Cortes séries", "serie-01.mp4"]),
+            ],
+        )
+
+    def test_resolve_niche_climbs_from_partial_child_folder_to_exact_parent(self) -> None:
+        svc = _FakeDrive(
+            {
+                "family-root": [
+                    {"id": "weekly", "name": "Atualizados Semanalmente", "mimeType": FOLDER_MIME},
+                    {"id": "plus-350", "name": "+ 350 Cortes Family Guy", "mimeType": FOLDER_MIME},
+                ],
+                "weekly": [{"id": "weekly-video", "name": "semana.mp4", "mimeType": "video/mp4"}],
+                "plus-350": [{"id": "video-350", "name": "Cortes Family Guy (1).mp4", "mimeType": "video/mp4"}],
+            },
+            metadata={
+                "plus-350": {
+                    "id": "plus-350",
+                    "name": "+ 350 Cortes Family Guy",
+                    "mimeType": FOLDER_MIME,
+                    "parents": ["family-root"],
+                },
+                "family-root": {"id": "family-root", "name": "CORTES FAMILY GUY", "mimeType": FOLDER_MIME},
+            },
+        )
+        service = DriveLibraryService(db=None)
+
+        roots = service._resolve_niche_roots(svc, "plus-350", "CORTES FAMILY GUY")
+        rows = list(service._walk_folder(svc, roots[0][0], recursive=True))
+
+        self.assertEqual(roots, [("family-root", "CORTES FAMILY GUY")])
+        self.assertEqual(
+            [(item["id"], path) for item, path in rows],
+            [
+                ("weekly-video", ["Atualizados Semanalmente", "semana.mp4"]),
+                ("video-350", ["+ 350 Cortes Family Guy", "Cortes Family Guy (1).mp4"]),
+            ],
+        )
 
 
 if __name__ == "__main__":

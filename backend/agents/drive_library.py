@@ -385,14 +385,19 @@ class DriveLibraryService:
                 break
         return folders
 
-    def _get_folder_name(self, svc, folder_id: str) -> str | None:
+    def _get_folder_metadata(self, svc, folder_id: str) -> dict:
         try:
-            resp = svc.files().get(
+            return svc.files().get(
                 fileId=folder_id,
-                fields="id,name,mimeType,shortcutDetails(targetId,targetMimeType)",
+                fields="id,name,mimeType,parents,shortcutDetails(targetId,targetMimeType)",
                 supportsAllDrives=True,
             ).execute()
         except Exception:  # noqa: BLE001 - best-effort metadata only
+            return {}
+
+    def _get_folder_name(self, svc, folder_id: str) -> str | None:
+        resp = self._get_folder_metadata(svc, folder_id)
+        if not resp:
             return None
         return resp.get("name")
 
@@ -400,9 +405,10 @@ class DriveLibraryService:
         wanted = normalize_drive_name(niche)
         if not wanted:
             return [(folder_id, self._get_folder_name(svc, folder_id) or "")]
-        root_name = self._get_folder_name(svc, folder_id) or ""
-        if normalize_drive_name(root_name) == wanted:
-            return [(folder_id, root_name)]
+
+        ancestor_roots = self._resolve_niche_from_ancestors(svc, folder_id, wanted)
+        if ancestor_roots:
+            return ancestor_roots
 
         exact: list[tuple[str, str]] = []
         partial: list[tuple[str, str]] = []
@@ -414,6 +420,29 @@ class DriveLibraryService:
                 exact.append(row)
             elif wanted in normalized:
                 partial.append(row)
+        return exact or partial
+
+    def _resolve_niche_from_ancestors(self, svc, folder_id: str, wanted: str) -> list[tuple[str, str]]:
+        exact: list[tuple[str, str]] = []
+        partial: list[tuple[str, str]] = []
+        queue: list[tuple[str, int]] = [(folder_id, 0)]
+        visited: set[str] = set()
+        while queue:
+            current_id, depth = queue.pop(0)
+            if current_id in visited or depth > 8:
+                continue
+            visited.add(current_id)
+            meta = self._get_folder_metadata(svc, current_id)
+            current_name = meta.get("name") or ""
+            normalized = normalize_drive_name(current_name)
+            row = (current_id, current_name)
+            if normalized == wanted:
+                exact.append(row)
+            elif wanted in normalized:
+                partial.append(row)
+            for parent_id in meta.get("parents") or []:
+                if parent_id not in visited:
+                    queue.append((parent_id, depth + 1))
         return exact or partial
 
     def _walk_folders(self, svc, folder_id: str, *, path: list[str] | None = None):
