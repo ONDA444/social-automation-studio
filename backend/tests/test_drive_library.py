@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import unittest
 
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+
 from backend.agents.drive_library import (
     DriveLibraryService,
     FOLDER_MIME,
@@ -11,6 +14,8 @@ from backend.agents.drive_library import (
     is_video_file,
     normalize_drive_name,
 )
+from backend.database import Base
+from backend.models import ReadyVideo
 
 
 class _FakeListRequest:
@@ -253,6 +258,46 @@ class DriveLibraryTests(unittest.TestCase):
                 ("video-350", ["+ 350 Cortes Family Guy", "Cortes Family Guy (1).mp4"]),
             ],
         )
+
+    def test_mark_stale_account_videos_keeps_only_current_sync_active(self) -> None:
+        engine = create_engine("sqlite:///:memory:", future=True)
+        Base.metadata.create_all(bind=engine)
+        Session = sessionmaker(bind=engine, future=True)
+        with Session() as db:
+            db.add_all(
+                [
+                    ReadyVideo(
+                        drive_file_id="family-old",
+                        name="Cortes Family Guy (1).mp4",
+                        niche="CORTES FAMILY GUY",
+                        account_id=7,
+                        status="available",
+                    ),
+                    ReadyVideo(
+                        drive_file_id="cars-current",
+                        name="caminhao.mp4",
+                        niche="CARROS E CAMINHÕES",
+                        account_id=7,
+                        status="available",
+                    ),
+                    ReadyVideo(
+                        drive_file_id="family-used",
+                        name="family usado.mp4",
+                        niche="CORTES FAMILY GUY",
+                        account_id=7,
+                        status="used",
+                    ),
+                ]
+            )
+            db.commit()
+
+            stale = DriveLibraryService(db)._mark_stale_account_videos(7, {"cars-current"})
+
+            rows = {row.drive_file_id: row.status for row in db.query(ReadyVideo).all()}
+            self.assertEqual(stale, 1)
+            self.assertEqual(rows["family-old"], "missing")
+            self.assertEqual(rows["cars-current"], "available")
+            self.assertEqual(rows["family-used"], "used")
 
 
 if __name__ == "__main__":

@@ -174,9 +174,12 @@ export default function Schedule() {
   const loadDrive = async () => {
     if (!sel) return
     try {
+      const acct = accounts.find((a) => String(a.id) === sel)
+      const niche = (driveCfg.drive_niche || acct?.drive_niche || acct?.niche || '').trim()
+      const nicheParam = niche ? `&niche=${encodeURIComponent(niche)}` : ''
       const [status, videos] = await Promise.all([
         api.get('/drive-library/status').catch(() => null),
-        api.get(`/drive-library/videos?account_id=${sel}&limit=500`).catch(() => ({ videos: [] })),
+        api.get(`/drive-library/videos?account_id=${sel}&limit=500${nicheParam}`).catch(() => ({ videos: [] })),
       ])
       setDriveStatus(status)
       setDriveVideos(videos.videos || [])
@@ -198,7 +201,7 @@ export default function Schedule() {
       await api.patch(`/accounts/${sel}`, driveCfg)
       const r = await api.post(`/drive-library/accounts/${sel}/sync`)
       const ignored = Number(r.ignored_audio || 0) + Number(r.ignored_non_video || 0)
-      alert(`Drive sincronizado: ${r.imported || 0} novo(s), ${r.updated || 0} atualizado(s), ${ignored} ignorado(s) que nao eram video.`)
+      alert(`Drive sincronizado: ${r.imported || 0} novo(s), ${r.updated || 0} atualizado(s), ${r.stale || 0} antigo(s) removido(s) do estoque ativo, ${ignored} ignorado(s) que nao eram video.`)
       const fresh = await api.get('/accounts')
       setAccounts(fresh.accounts || [])
       await loadDrive()

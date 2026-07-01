@@ -230,7 +230,9 @@ class DriveLibraryService:
             "files_seen": 0,
             "ignored_audio": 0,
             "ignored_non_video": 0,
+            "stale": 0,
         }
+        seen_file_ids: set[str] = set()
         for folder_id in folder_ids:
             result = self._index_folder_id(
                 svc,
@@ -243,6 +245,8 @@ class DriveLibraryService:
             )
             for key in ("imported", "updated", "seen", "files_seen", "ignored_audio", "ignored_non_video"):
                 total[key] += int(result.get(key) or 0)
+            seen_file_ids.update(result.get("seen_file_ids") or [])
+        total["stale"] = self._mark_stale_account_videos(account_id, seen_file_ids)
         return total
 
     def index_niche_tree(
@@ -279,7 +283,9 @@ class DriveLibraryService:
             "files_seen": 0,
             "ignored_audio": 0,
             "ignored_non_video": 0,
+            "stale": 0,
         }
+        seen_file_ids: set[str] = set()
         for resolved_folder_id, resolved_name in roots:
             result = self._index_folder_id(
                 svc,
@@ -292,6 +298,8 @@ class DriveLibraryService:
             )
             for key in ("imported", "updated", "seen", "files_seen", "ignored_audio", "ignored_non_video"):
                 total[key] += int(result.get(key) or 0)
+            seen_file_ids.update(result.get("seen_file_ids") or [])
+        total["stale"] = self._mark_stale_account_videos(account_id, seen_file_ids)
         return total
 
     def _index_folder_id(
@@ -357,10 +365,30 @@ class DriveLibraryService:
             "imported": imported,
             "updated": updated,
             "seen": len(seen),
+            "seen_file_ids": list(seen),
             "files_seen": files_seen,
             "ignored_audio": ignored_audio,
             "ignored_non_video": ignored_non_video,
         }
+
+    def _mark_stale_account_videos(self, account_id: int | None, seen_file_ids: set[str]) -> int:
+        if not account_id or self.db is None:
+            return 0
+        stale_statuses = {"available", "reserved", "rejected", "error", "missing"}
+        rows = self.db.execute(
+            select(ReadyVideo).where(ReadyVideo.account_id == account_id)
+        ).scalars().all()
+        changed = 0
+        for row in rows:
+            if row.drive_file_id in seen_file_ids or row.status == "used" or row.status not in stale_statuses:
+                continue
+            row.status = "missing"
+            row.reserved_job_id = None
+            row.reserved_at = None
+            changed += 1
+        if changed:
+            self.db.commit()
+        return changed
 
     def _find_folders_by_name(self, svc, query: str) -> list[str]:
         escaped = query.replace("\\", "\\\\").replace("'", "\\'")
