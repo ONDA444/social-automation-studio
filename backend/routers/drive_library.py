@@ -112,15 +112,21 @@ def list_videos(
     limit: int = Query(100, ge=1, le=500),
     db: Session = Depends(get_db),
 ):
-    stmt = select(ReadyVideo).order_by(ReadyVideo.created_at.desc()).limit(limit)
+    conditions = []
     if account_id is not None:
-        stmt = stmt.where((ReadyVideo.account_id == account_id) | (ReadyVideo.account_id.is_(None)))
+        conditions.append((ReadyVideo.account_id == account_id) | (ReadyVideo.account_id.is_(None)))
     if status_filter:
-        stmt = stmt.where(ReadyVideo.status == status_filter)
+        conditions.append(ReadyVideo.status == status_filter)
     if niche:
-        stmt = stmt.where(ReadyVideo.niche.ilike(f"%{niche.strip()}%"))
+        conditions.append(ReadyVideo.niche.ilike(f"%{niche.strip()}%"))
+    stmt = select(ReadyVideo).order_by(ReadyVideo.created_at.desc()).limit(limit)
+    count_stmt = select(ReadyVideo.status, func.count(ReadyVideo.id)).group_by(ReadyVideo.status)
+    for condition in conditions:
+        stmt = stmt.where(condition)
+        count_stmt = count_stmt.where(condition)
     rows = db.execute(stmt).scalars().all()
-    return {"videos": [r.to_dict() for r in rows]}
+    stats = dict(db.execute(count_stmt).all())
+    return {"videos": [r.to_dict() for r in rows], "stats": stats}
 
 
 def _html(msg: str) -> HTMLResponse:

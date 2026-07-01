@@ -71,10 +71,14 @@ async def run_publish(job_id: int) -> dict:
         # uploaded video (publish_status.youtube.ok + video_id) must NOT be
         # re-sent — that is exactly what produced the duplicate videos on the
         # channel. Mark it PUBLISHED and bail.
+        platforms = job.target_platforms or ["youtube"]
         prior = job.publish_status or {}
         if isinstance(prior, dict):
+            results = dict(prior)
             yt_prior = prior.get("youtube") or {}
-            if yt_prior.get("ok") and yt_prior.get("video_id"):
+            if yt_prior.get("ok") and yt_prior.get("video_id") and all(
+                (prior.get(platform) or {}).get("ok") for platform in platforms
+            ):
                 if job.status != JobStatus.PUBLISHED:
                     job.status = JobStatus.PUBLISHED
                     db.commit()
@@ -85,11 +89,11 @@ async def run_publish(job_id: int) -> dict:
 
         svc = AccountProfileService(db)
         seo = job.seo_metadata or {}
-        platforms = job.target_platforms or ["youtube"]
         job.status = JobStatus.PUBLISHING
         db.commit()
         _emit(job_id, status="publishing")
 
+        _ensure_ready_video_local(db, job)
         shorts = job.shorts_paths or []
         # YouTube's publishAt must be in the FUTURE. In the slot-gated/auto-publish
         # model the slot has already arrived (scheduled_at <= now), so a past value
@@ -115,6 +119,9 @@ async def run_publish(job_id: int) -> dict:
         pinned = svc.get(job.account_id) if job.account_id else None
 
         for platform in platforms:
+            if isinstance(results.get(platform), dict) and results[platform].get("ok"):
+                _emit(job_id, platform=platform, status=results[platform].get("status", "already_published"))
+                continue
             # Isolate each platform: a crash uploading to one must never abort the
             # others (or leave the whole multi-platform job stuck/ERROR).
             try:
@@ -173,6 +180,7 @@ async def run_publish(job_id: int) -> dict:
 
         job.publish_status = results
         job.status = _overall_status(results)
+        _finish_ready_video_if_published(db, job, results)
         # Surface a human, actionable reason on the job row instead of a cryptic
         # "[Errno 2] No such file..." so the user knows to REGENERATE, not retry.
         if job.status == JobStatus.ERROR:
@@ -187,6 +195,12 @@ async def run_publish(job_id: int) -> dict:
                 first_err = next((r.get("error") for r in results.values()
                                   if isinstance(r, dict) and r.get("error")), None)
                 job.error_message = (first_err or "Falha na publicação.")[:500]
+        else:
+            failed = [p for p, r in results.items() if not (r or {}).get("ok")]
+            job.error_message = (
+                f"Publicado parcialmente; falha em: {', '.join(failed)}."[:500]
+                if failed else None
+            )
         db.commit()
         _emit(job_id, status=job.status.value, results=results)
 
@@ -364,6 +378,44 @@ def _pick_short(shorts: list[str], prefer: int) -> str | None:
         if f"_short_{prefer}." in s:
             return s
     return shorts[0] if shorts else None
+
+
+def _ready_video_id(job) -> int | None:
+    ctx = job.video_context or {}
+    try:
+        return int(ctx.get("ready_video_id") or 0) or None
+    except (TypeError, ValueError):
+        return None
+
+
+def _ensure_ready_video_local(db, job) -> None:
+    ready_id = _ready_video_id(job)
+    if not ready_id:
+        return
+    if job.main_video_path and os.path.exists(job.main_video_path):
+        return
+    from backend.agents.drive_library import DriveLibraryService
+    from backend.models import ReadyVideo
+
+    ready = db.get(ReadyVideo, ready_id)
+    if not ready:
+        return
+    path = DriveLibraryService(db).download_for_job(ready, job.id)
+    job.main_video_path = path
+    if (job.video_format or "long") == "short":
+        job.shorts_paths = [path]
+    db.commit()
+
+
+def _finish_ready_video_if_published(db, job, results: dict) -> None:
+    if not any((r or {}).get("ok") for r in results.values()):
+        return
+    ready_id = _ready_video_id(job)
+    if not ready_id:
+        return
+    from backend.agents.drive_library import DriveLibraryService
+
+    DriveLibraryService(db).mark_used(ready_id, job.id)
 
 
 def _overall_status(results: dict) -> JobStatus:

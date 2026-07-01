@@ -497,12 +497,13 @@ def _try_create_ready_video_job(db, acct, theme, scheduled_naive: datetime) -> i
         acct,
         content_type=theme.content_type or "film_recap_ai_images",
         video_format=getattr(theme, "video_format", "long") or "long",
+        fallback_format="long" if (getattr(theme, "video_format", "long") or "long") == "short" else None,
     )
     if not ready:
         return None
 
     title = (theme.theme or ready.name or "Video pronto").strip()
-    video_format = getattr(theme, "video_format", "long") or "long"
+    video_format = ready.video_format or getattr(theme, "video_format", "long") or "long"
     job = VideoJob(
         title=title[:300],
         topic=theme.theme,

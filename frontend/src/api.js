@@ -55,11 +55,11 @@ async function req(method, path, body, { timeoutMs } = {}) {
 }
 
 export const api = {
-  get: (p) => req('GET', p),
+  get: (p, opts) => req('GET', p, undefined, opts),
   post: (p, b, opts) => req('POST', p, b, opts),
-  patch: (p, b) => req('PATCH', p, b),
-  put: (p, b) => req('PUT', p, b),
-  del: (p) => req('DELETE', p),
+  patch: (p, b, opts) => req('PATCH', p, b, opts),
+  put: (p, b, opts) => req('PUT', p, b, opts),
+  del: (p, opts) => req('DELETE', p, undefined, opts),
 
   // multipart upload (CSV import, voice recording)
   async upload(path, file) {

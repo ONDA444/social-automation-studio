@@ -222,7 +222,20 @@ class DriveLibraryService:
         return parts[0] if parts else None
 
     # ---- selection/download --------------------------------------------
-    def reserve_next(self, account: PlatformAccount, *, content_type: str, video_format: str) -> ReadyVideo | None:
+    def reserve_next(
+        self,
+        account: PlatformAccount,
+        *,
+        content_type: str,
+        video_format: str,
+        fallback_format: str | None = None,
+    ) -> ReadyVideo | None:
+        row = self._reserve_matching(account, content_type=content_type, video_format=video_format)
+        if row or not fallback_format or fallback_format == video_format:
+            return row
+        return self._reserve_matching(account, content_type=content_type, video_format=fallback_format)
+
+    def _reserve_matching(self, account: PlatformAccount, *, content_type: str, video_format: str) -> ReadyVideo | None:
         niche = (account.drive_niche or account.niche or "").strip().lower()
         conditions = [
             ReadyVideo.status == "available",

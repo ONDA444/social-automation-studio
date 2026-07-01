@@ -36,6 +36,7 @@ export default function Schedule() {
   const [slots, setSlots]       = useState([])
   const [slotsMeta, setSlotsMeta] = useState(null)
   const [saving, setSaving]     = useState(false)
+  const [saveState, setSaveState] = useState({ status: 'idle', message: '' })
 
   const [themesText, setThemesText]   = useState('')
   const [themeType, setThemeType]     = useState('film_recap_ai_images')
@@ -47,6 +48,7 @@ export default function Schedule() {
   const [busy, setBusy]     = useState(false)
   const [driveStatus, setDriveStatus] = useState(null)
   const [driveVideos, setDriveVideos] = useState([])
+  const [driveVideoStats, setDriveVideoStats] = useState({})
   const [driveSyncing, setDriveSyncing] = useState(false)
   const [driveCfg, setDriveCfg] = useState({
     video_source_mode: 'ai',
@@ -57,6 +59,15 @@ export default function Schedule() {
 
   const selAccount = accounts.find((a) => String(a.id) === sel)
   const platMeta   = selAccount ? (PLATFORM_META[selAccount.platform] || {}) : {}
+  const saveStateClass = saveState.status === 'saved'
+    ? 'border-success/25 bg-success/10 text-success'
+    : saveState.status === 'error'
+      ? 'border-danger/25 bg-danger/10 text-danger'
+      : 'border-warning/25 bg-warning/10 text-text-muted'
+
+  const markDirty = () => {
+    setSaveState((s) => s.status === 'saving' ? s : { status: 'dirty', message: 'Alteracoes ainda nao salvas.' })
+  }
 
   useEffect(() => {
     api.get('/schedule/calendar').then((d) => setEvents(d.events || [])).catch(() => {})
@@ -97,17 +108,30 @@ export default function Schedule() {
   useEffect(() => { loadQueue() }, [sel])
 
   const saveCfg = async () => {
+    if (!sel) return alert('Selecione uma conta primeiro')
     setSaving(true)
+    setSaveState({ status: 'saving', message: 'Salvando configuracao...' })
     try {
-      await api.put(`/schedule/config/${sel}`, cfg)
-      await api.patch(`/accounts/${sel}`, driveCfg)
-      const d = await api.get(`/schedule/${sel}/slots?count=6&mode=${cfg.mode}`)
+      const savedCfg = await api.put(`/schedule/config/${sel}`, cfg, { timeoutMs: 20000 })
+      const savedAccount = await api.patch(`/accounts/${sel}`, driveCfg, { timeoutMs: 20000 })
+      setCfg((p) => ({ ...p, ...savedCfg, post_times: savedCfg.post_times?.length ? savedCfg.post_times : p.post_times }))
+      setDriveCfg({
+        video_source_mode: savedAccount.video_source_mode || 'ai',
+        drive_folder_url: savedAccount.drive_folder_url || savedAccount.drive_folder_id || '',
+        drive_niche: savedAccount.drive_niche || savedAccount.niche || '',
+        drive_recursive: savedAccount.drive_recursive !== false,
+      })
+      const d = await api.get(`/schedule/${sel}/slots?count=6&mode=${savedCfg.mode || cfg.mode}`, { timeoutMs: 20000 })
       setSlots(d.slots || [])
       setSlotsMeta(d)
-      const fresh = await api.get('/accounts')
+      const fresh = await api.get('/accounts', { timeoutMs: 20000 })
       setAccounts(fresh.accounts || [])
       await loadDrive()
-    } catch (e) { alert(e.message) } finally { setSaving(false) }
+      setSaveState({ status: 'saved', message: `Salvo com sucesso as ${new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}.` })
+    } catch (e) {
+      setSaveState({ status: 'error', message: e.message || 'Falha ao salvar configuracao.' })
+      alert(e.message)
+    } finally { setSaving(false) }
   }
 
   const openOAuth = (acct) => {
@@ -156,8 +180,10 @@ export default function Schedule() {
       ])
       setDriveStatus(status)
       setDriveVideos(videos.videos || [])
+      setDriveVideoStats(videos.stats || {})
     } catch {
       setDriveVideos([])
+      setDriveVideoStats({})
     }
   }
 
@@ -280,7 +306,7 @@ export default function Schedule() {
                 <div className="grid grid-cols-3 gap-1 p-1 rounded-xl bg-elevated border border-border">
                   {MODE_OPTIONS.map((m) => (
                     <button key={m.v} type="button"
-                      onClick={() => setCfg({ ...cfg, mode: m.v })}
+                      onClick={() => { setCfg({ ...cfg, mode: m.v }); markDirty() }}
                       className={`text-[11px] py-1.5 px-1 rounded-lg font-semibold transition-all duration-150 leading-tight ${
                         cfg.mode === m.v
                           ? 'bg-accent text-white shadow-sm'
@@ -302,7 +328,7 @@ export default function Schedule() {
                 <label className="text-xs text-text-muted mb-1 block">Vídeos por dia</label>
                 <input type="number" min="1" max="6" className="input"
                   value={cfg.videos_per_day}
-                  onChange={(e) => setCfg({ ...cfg, videos_per_day: Number(e.target.value) })} />
+                  onChange={(e) => { setCfg({ ...cfg, videos_per_day: Number(e.target.value) }); markDirty() }} />
               </div>
 
               {/* Horários — só visível no modo fixo */}
@@ -311,7 +337,7 @@ export default function Schedule() {
                   <label className="text-xs text-text-muted mb-1 block">Horários (vírgula)</label>
                   <input className="input font-mono"
                     value={(cfg.post_times || []).join(', ')}
-                    onChange={(e) => setCfg({ ...cfg, post_times: e.target.value.split(',').map((s) => s.trim()) })}
+                    onChange={(e) => { setCfg({ ...cfg, post_times: e.target.value.split(',').map((s) => s.trim()) }); markDirty() }}
                     placeholder="19:00, 21:00" />
                   <p className="text-[11px] text-text-muted mt-1">Ex: 10:00, 14:30, 19:00</p>
                 </div>
@@ -322,7 +348,7 @@ export default function Schedule() {
                 <label className="flex items-center gap-2.5 text-sm cursor-pointer select-none">
                   <input type="checkbox" className="accent-accent w-4 h-4 shrink-0"
                     checked={cfg.auto_shorts}
-                    onChange={(e) => setCfg({ ...cfg, auto_shorts: e.target.checked })} />
+                    onChange={(e) => { setCfg({ ...cfg, auto_shorts: e.target.checked }); markDirty() }} />
                   <span className="font-medium">Gerar Shorts automaticamente</span>
                 </label>
                 <p className="text-[11px] text-text-muted mt-1.5 ml-[26px]">
@@ -351,7 +377,7 @@ export default function Schedule() {
                     { v: 'mixed', label: 'Misto', hint: 'fallback' },
                   ].map((m) => (
                     <button key={m.v} type="button"
-                      onClick={() => setDriveCfg({ ...driveCfg, video_source_mode: m.v })}
+                      onClick={() => { setDriveCfg({ ...driveCfg, video_source_mode: m.v }); markDirty() }}
                       className={`py-2 px-1 rounded-btn font-semibold transition-all duration-150 leading-tight ${
                         driveCfg.video_source_mode === m.v
                           ? 'bg-accent text-white shadow-sm'
@@ -413,7 +439,7 @@ export default function Schedule() {
                     <div>
                       <label className="text-xs text-text-muted mb-1 block">Pasta do Drive</label>
                       <input className="input text-xs" value={driveCfg.drive_folder_url}
-                        onChange={(e) => setDriveCfg({ ...driveCfg, drive_folder_url: e.target.value })}
+                        onChange={(e) => { setDriveCfg({ ...driveCfg, drive_folder_url: e.target.value }); markDirty() }}
                         placeholder="https://drive.google.com/drive/folders/..." />
                     </div>
 
@@ -421,13 +447,13 @@ export default function Schedule() {
                       <div>
                         <label className="text-xs text-text-muted mb-1 block">Nicho</label>
                         <input className="input text-xs" value={driveCfg.drive_niche}
-                          onChange={(e) => setDriveCfg({ ...driveCfg, drive_niche: e.target.value })}
+                          onChange={(e) => { setDriveCfg({ ...driveCfg, drive_niche: e.target.value }); markDirty() }}
                           placeholder={selAccount?.niche || 'saude, filmes, memes...'} />
                       </div>
                       <label className="flex items-center gap-2 text-xs text-text-muted mt-6">
                         <input type="checkbox" className="accent-accent"
                           checked={driveCfg.drive_recursive}
-                          onChange={(e) => setDriveCfg({ ...driveCfg, drive_recursive: e.target.checked })} />
+                          onChange={(e) => { setDriveCfg({ ...driveCfg, drive_recursive: e.target.checked }); markDirty() }} />
                         Ler subpastas
                       </label>
                     </div>
@@ -442,7 +468,7 @@ export default function Schedule() {
                           <p className="text-xs font-semibold">Estoque indexado</p>
                           <p className="text-[11px] text-text-muted">Videos prontos que o agendador pode reservar.</p>
                         </div>
-                        <span className="heading text-xl font-extrabold" style={{ color: 'var(--accent)' }}>{driveStatus?.stats?.available || 0}</span>
+                        <span className="heading text-xl font-extrabold" style={{ color: 'var(--accent)' }}>{driveVideoStats.available || 0}</span>
                       </div>
                       {driveVideos.length > 0 && (
                         <ul className="mt-2 space-y-1 max-h-28 overflow-y-auto pr-1">
@@ -460,8 +486,13 @@ export default function Schedule() {
               </div>
 
               <button className="btn-primary w-full" onClick={saveCfg} disabled={saving}>
-                {saving ? 'Salvando…' : 'Salvar configuração'}
+                {saving ? 'Salvando...' : saveState.status === 'saved' ? 'Salvo' : 'Salvar configuracao'}
               </button>
+              {saveState.message && (
+                <div className={`rounded-btn border px-3 py-2 text-[11px] ${saveStateClass}`}>
+                  {saveState.message}
+                </div>
+              )}
 
               {/* Próximos slots */}
               {slots.length > 0 && (
