@@ -136,6 +136,17 @@ export default function Schedule() {
     }
   }
 
+  const disconnectDrive = async () => {
+    if (!confirm('Desconectar o Google Drive deste sistema? Os canais em modo Drive/Misto vao parar de sincronizar ate conectar novamente.')) return
+    try {
+      await api.post('/drive-library/disconnect')
+      setDriveVideos([])
+      await loadDrive()
+    } catch (e) {
+      alert(e.message)
+    }
+  }
+
   const loadDrive = async () => {
     if (!sel) return
     try {
@@ -358,15 +369,27 @@ export default function Schedule() {
                       <div>
                         <p className="text-xs font-semibold">Google Drive</p>
                         <p className="text-[11px] text-text-muted">
-                          {driveStatus?.has_credentials || driveStatus?.api_key_configured ? 'Conectado e pronto para indexar.' : 'Conecte para ler pastas privadas.'}
+                          {driveStatus?.has_credentials || driveStatus?.api_key_configured ? 'Conexao unica da biblioteca do Drive.' : 'Conecte para ler pastas privadas.'}
                         </p>
                       </div>
-                      {!driveStatus?.has_credentials && (
+                      {driveStatus?.has_credentials ? (
+                        <button type="button" className="btn btn-ghost btn-sm" onClick={disconnectDrive}>
+                          Desconectar
+                        </button>
+                      ) : (
                         <button type="button" className="btn btn-ghost btn-sm" onClick={openDriveOAuth}>
                           Conectar Drive
                         </button>
                       )}
                     </div>
+
+                    {driveStatus?.has_credentials && (
+                      <div className="rounded-btn border border-border bg-white p-3">
+                        <p className="text-[11px] text-text-muted">
+                          Esta conexao vale para todos os canais. Cada canal decide se usa IA, Drive ou Misto, mas a conta Google Drive conectada e uma so.
+                        </p>
+                      </div>
+                    )}
 
                     {!driveStatus?.has_credentials && driveStatus?.redirect_uri && (
                       <div className="rounded-btn border border-warning/25 bg-warning/10 p-3">

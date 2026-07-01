@@ -77,7 +77,7 @@ def import_folder(payload: ImportRequest, db: Session = Depends(get_db)):
             recursive=payload.recursive,
         )
     except Exception as exc:  # noqa: BLE001
-        raise HTTPException(400, str(exc))
+        raise HTTPException(400, _friendly_drive_error(exc))
     return result
 
 
@@ -101,7 +101,7 @@ def sync_account_folder(account_id: int, db: Session = Depends(get_db)):
             recursive=bool(getattr(acct, "drive_recursive", True)),
         )
     except Exception as exc:  # noqa: BLE001
-        raise HTTPException(400, str(exc))
+        raise HTTPException(400, _friendly_drive_error(exc))
 
 
 @router.get("/videos")
@@ -131,3 +131,18 @@ def _html(msg: str) -> HTMLResponse:
         <div style="text-align:center"><h2>{msg}</h2>
         <script>setTimeout(()=>window.close(),2500)</script></div></body></html>"""
     )
+
+
+def _friendly_drive_error(exc: Exception) -> str:
+    msg = str(exc)
+    if "Google Drive API has not been used" in msg or "drive.googleapis.com" in msg:
+        return (
+            "A Google Drive API ainda nao esta ativa ou ainda esta propagando no Google Cloud. "
+            "Ative a Google Drive API no mesmo projeto OAuth e tente novamente em alguns minutos."
+        )
+    if "insufficient" in msg.lower() or "forbidden" in msg.lower() or "HttpError 403" in msg:
+        return (
+            "O Drive conectado nao tem permissao para ler essa pasta. "
+            "Conecte a conta que tem acesso aos videos ou compartilhe a pasta com a conta conectada."
+        )
+    return msg
