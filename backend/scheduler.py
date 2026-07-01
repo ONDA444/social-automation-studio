@@ -364,6 +364,8 @@ def _job_ride_trends() -> None:
         ).scalars().all()
         for acct in accounts:
             try:
+                if getattr(acct, "video_source_mode", "ai") == "drive":
+                    continue
                 # Don't render a moment the channel can't even upload (quota/creds).
                 try:
                     if not profile.can_upload(acct.id):
@@ -473,7 +475,7 @@ def _create_theme_job(db, account_id: int, theme, scheduled_naive: datetime) -> 
     acct = db.get(PlatformAccount, account_id)
     source_mode = getattr(acct, "video_source_mode", "ai") if acct else "ai"
     if source_mode in {"drive", "mixed"} and acct is not None:
-        ready_job_id = _try_create_ready_video_job(db, acct, theme, scheduled_naive)
+        ready_job_id = _try_create_ready_video_job(db, acct, scheduled_naive, theme=theme)
         if ready_job_id:
             return ready_job_id
         if source_mode == "drive":
@@ -499,34 +501,34 @@ def _create_theme_job(db, account_id: int, theme, scheduled_naive: datetime) -> 
     return job.id
 
 
-def _try_create_ready_video_job(db, acct, theme, scheduled_naive: datetime) -> int | None:
+def _try_create_ready_video_job(db, acct, scheduled_naive: datetime, theme=None) -> int | None:
     """Reserve a Drive ready-video and create a publishable VideoJob."""
-    import asyncio
-
     from backend.agents.drive_library import DriveLibraryService
-    from backend.agents.seo_agent import SEOAgent
     from backend.config import settings
     from backend.models import JobStatus, VideoJob
 
     drive = DriveLibraryService(db)
+    theme_text = (getattr(theme, "theme", None) or "").strip()
+    content_type = getattr(theme, "content_type", None) or "film_recap_ai_images"
+    requested_format = getattr(theme, "video_format", None) or "long"
     ready = drive.reserve_next(
         acct,
-        content_type=theme.content_type or "film_recap_ai_images",
-        video_format=getattr(theme, "video_format", "long") or "long",
-        fallback_format="long" if (getattr(theme, "video_format", "long") or "long") == "short" else None,
+        content_type=content_type,
+        video_format=requested_format,
+        fallback_format="long" if requested_format == "short" else None,
     )
     if not ready:
         return None
 
-    title = (theme.theme or ready.name or "Video pronto").strip()
-    video_format = ready.video_format or getattr(theme, "video_format", "long") or "long"
+    title = (theme_text or _clean_ready_title(ready.name) or "Video pronto").strip()
+    video_format = ready.video_format or requested_format or "long"
     job = VideoJob(
         title=title[:300],
-        topic=theme.theme,
+        topic=theme_text or ready.name,
         mode="from_ready_video",
-        content_type=theme.content_type or "film_recap_ai_images",
+        content_type=content_type,
         video_format=video_format,
-        target_platforms=theme.target_platforms or ["youtube"],
+        target_platforms=(getattr(theme, "target_platforms", None) or ["youtube"]),
         account_id=acct.id,
         status=JobStatus.AWAITING_APPROVAL,
         approval_status="pending",
@@ -552,38 +554,7 @@ def _try_create_ready_video_job(db, acct, theme, scheduled_naive: datetime) -> i
         job.main_video_path = local_path
         if video_format == "short":
             job.shorts_paths = [local_path]
-        script_stub = {
-            "title": title,
-            "content_type": job.content_type,
-            "seo_keywords": [v for v in [ready.niche, acct.niche, title] if v],
-            "scenes": [],
-        }
-        ctx = {
-            "target_platforms": job.target_platforms or ["youtube"],
-            "script": script_stub,
-            "niche": ready.niche or acct.niche,
-        }
-        try:
-            job.seo_metadata = asyncio.run(
-                SEOAgent(job_id=job.id, context=ctx, emit=False).execute(
-                    script=script_stub,
-                    narration={},
-                    content_type=job.content_type,
-                    language=getattr(acct, "content_language", None),
-                )
-            )
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("SEO para ready video job %s caiu no basico: %s", job.id, exc)
-            job.seo_metadata = {
-                "youtube": {
-                    "title": title[:100],
-                    "description": f"{title}\n\nVideo pronto selecionado da biblioteca do canal.",
-                    "tags": [t for t in [ready.niche, acct.niche, "video"] if t],
-                    "category_id": "22",
-                },
-                "tiktok": {"caption": f"{title} #fyp #viral"[:150]},
-                "instagram": {"caption": title, "hashtags": ["#reels", "#viral"]},
-            }
+        job.seo_metadata = _ready_video_seo(title, ready, acct, job.content_type, video_format)
         if settings.auto_publish:
             job.approval_status = "approved"
             if job.scheduled_at is None:
@@ -592,8 +563,9 @@ def _try_create_ready_video_job(db, acct, theme, scheduled_naive: datetime) -> i
                 job.status = JobStatus.PUBLISHING
             else:
                 job.status = JobStatus.APPROVED
-        theme.status = "consumed"
-        theme.consumed_job_id = job.id
+        if theme is not None:
+            theme.status = "consumed"
+            theme.consumed_job_id = job.id
         db.commit()
         if settings.auto_publish and (settings.publish_mode or "schedule").lower() == "schedule":
             from backend.pipeline.dispatch import dispatch_publish
@@ -607,6 +579,51 @@ def _try_create_ready_video_job(db, acct, theme, scheduled_naive: datetime) -> i
         db.commit()
         logger.warning("ready video job failed for account %s: %s", acct.id, exc)
         return job.id
+
+
+def _clean_ready_title(name: str | None) -> str:
+    import re
+
+    value = re.sub(r"\.[A-Za-z0-9]{2,5}$", "", name or "").strip()
+    value = re.sub(r"[_-]+", " ", value)
+    value = re.sub(r"\s+", " ", value)
+    return value[:100]
+
+
+def _ready_video_seo(title: str, ready, acct, content_type: str, video_format: str) -> dict:
+    import re
+
+    raw_terms = [title, getattr(ready, "niche", None), getattr(acct, "niche", None), getattr(acct, "drive_niche", None)]
+    if getattr(ready, "folder_path", None):
+        raw_terms.extend(str(ready.folder_path).split("/"))
+    tags = []
+    for term in raw_terms:
+        for piece in re.split(r"[,/|()-]+", term or ""):
+            clean = re.sub(r"\s+", " ", piece).strip().lower()
+            if clean and clean not in tags:
+                tags.append(clean)
+    tags = (tags + ["video", "viral", "youtube"])[:15]
+    hashtags = ["#" + re.sub(r"[^0-9A-Za-zÀ-ÿ]", "", t.title()) for t in tags[:5]]
+    if video_format == "short" and "#Shorts" not in hashtags:
+        hashtags.insert(0, "#Shorts")
+    description = (
+        f"{title}\n\n"
+        "Video pronto da biblioteca do canal, publicado automaticamente pelo Social Studio.\n\n"
+        + " ".join(hashtags[:3])
+    ).strip()
+    return {
+        "youtube": {
+            "title": title[:100],
+            "description": description,
+            "tags": tags,
+            "category_id": "22",
+            "thumbnail_text": " ".join(title.split()[:3]).upper()[:30],
+        },
+        "tiktok": {"caption": f"{title} {' '.join(hashtags[:4])} #fyp"[:150]},
+        "instagram": {"caption": title, "hashtags": hashtags[:10] + ["#reels", "#viral"]},
+        "seo_score": {"value": 55, "breakdown": {}, "verdict": "ready_video"},
+        "seo_notes": ["SEO deterministico para video pronto do Drive."],
+    }
 
 
 def _job_consume_themes() -> None:
@@ -647,6 +664,7 @@ def _job_consume_themes() -> None:
                 ).scalars().first()
                 if cfg is None:
                     continue  # no schedule configured -> account opts out of automation
+                source_mode = getattr(acct, "video_source_mode", "ai")
 
                 pending = db.execute(
                     select(ThemeQueue)
@@ -656,7 +674,7 @@ def _job_consume_themes() -> None:
                     )
                     .order_by(ThemeQueue.position.asc(), ThemeQueue.created_at.asc())
                 ).scalars().all()
-                if not pending:
+                if not pending and source_mode != "drive":
                     continue
 
                 per_day = max(1, cfg.videos_per_day or 1)
@@ -687,14 +705,21 @@ def _job_consume_themes() -> None:
                         ).first()
                         if clash:
                             continue  # already generated for this slot
-                        if pidx >= len(pending):
+                        theme = None
+                        if pidx < len(pending):
+                            theme = pending[pidx]
+                            pidx += 1
+                        elif source_mode != "drive":
                             break
-                        theme = pending[pidx]
-                        pidx += 1
-                        jid = _create_theme_job(db, acct.id, theme, slot_naive)
+                        jid = (
+                            _create_theme_job(db, acct.id, theme, slot_naive)
+                            if theme is not None
+                            else _try_create_ready_video_job(db, acct, slot_naive)
+                        )
                         if jid:
-                            logger.info("Agendado: theme %s -> job %s (conta %s, publica %s UTC).",
-                                        theme.id, jid, acct.id, slot_naive)
+                            logger.info("Agendado: %s -> job %s (conta %s, publica %s UTC).",
+                                        f"theme {theme.id}" if theme is not None else "Drive ready video",
+                                        jid, acct.id, slot_naive)
                 else:
                     # Immediate mode: generate AT the slot, publish public right away.
                     times = calendar.resolve_post_times(acct.id, cfg, per_day)
@@ -713,11 +738,19 @@ def _job_consume_themes() -> None:
                     budget = int(due) - int(generated_today)
                     if budget <= 0:
                         continue
-                    for theme in pending[:min(budget, len(pending))]:
-                        jid = _create_theme_job(db, acct.id, theme, now_utc.replace(tzinfo=None))
+                    for idx in range(budget):
+                        theme = pending[idx] if idx < len(pending) else None
+                        if theme is None and source_mode != "drive":
+                            break
+                        jid = (
+                            _create_theme_job(db, acct.id, theme, now_utc.replace(tzinfo=None))
+                            if theme is not None
+                            else _try_create_ready_video_job(db, acct, now_utc.replace(tzinfo=None))
+                        )
                         if jid:
-                            logger.info("Slot due -> gerando theme %s como job %s (conta %s).",
-                                        theme.id, jid, acct.id)
+                            logger.info("Slot due -> gerando %s como job %s (conta %s).",
+                                        f"theme {theme.id}" if theme is not None else "Drive ready video",
+                                        jid, acct.id)
             except Exception as exc:  # noqa: BLE001 — per-account isolation
                 db.rollback()
                 logger.warning("consume_themes failed for account %s: %s", acct.id, exc)

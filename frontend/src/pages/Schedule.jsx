@@ -176,7 +176,7 @@ export default function Schedule() {
     try {
       const [status, videos] = await Promise.all([
         api.get('/drive-library/status').catch(() => null),
-        api.get(`/drive-library/videos?account_id=${sel}&limit=8`).catch(() => ({ videos: [] })),
+        api.get(`/drive-library/videos?account_id=${sel}&limit=500`).catch(() => ({ videos: [] })),
       ])
       setDriveStatus(status)
       setDriveVideos(videos.videos || [])
@@ -356,7 +356,7 @@ export default function Schedule() {
                 </p>
               </div>
 
-              <div className="p-4 rounded-card border border-border space-y-4" style={{ background: 'linear-gradient(180deg, #FFFFFF 0%, #F3F7F1 100%)' }}>
+              <div className="p-4 rounded-card border border-border space-y-4" style={{ background: 'var(--bg-surface)' }}>
                 <div className="flex items-start justify-between gap-3">
                   <div>
                     <p className="text-sm font-bold">Fonte dos videos</p>
@@ -391,7 +391,7 @@ export default function Schedule() {
 
                 {driveCfg.video_source_mode !== 'ai' && (
                   <div className="space-y-2 slide-down">
-                    <div className="flex items-center justify-between gap-2 rounded-btn border border-border bg-white px-3 py-2">
+                    <div className="flex items-center justify-between gap-2 rounded-btn border border-border px-3 py-2" style={{ background: 'var(--bg-elevated)' }}>
                       <div>
                         <p className="text-xs font-semibold">Google Drive</p>
                         <p className="text-[11px] text-text-muted">
@@ -410,7 +410,7 @@ export default function Schedule() {
                     </div>
 
                     {driveStatus?.has_credentials && (
-                      <div className="rounded-btn border border-border bg-white p-3">
+                      <div className="rounded-btn border border-border p-3" style={{ background: 'var(--bg-elevated)' }}>
                         <p className="text-[11px] text-text-muted">
                           Esta conexao vale para todos os canais. Cada canal decide se usa IA, Drive ou Misto, mas a conta Google Drive conectada e uma so.
                         </p>
@@ -423,7 +423,7 @@ export default function Schedule() {
                           Callback para autorizar no Google Cloud
                         </p>
                         <div className="mt-1 flex items-center gap-2">
-                          <code className="min-w-0 flex-1 truncate rounded-md border border-border bg-white px-2 py-1 text-[10px] text-text-muted">
+                          <code className="min-w-0 flex-1 truncate rounded-md border border-border px-2 py-1 text-[10px] text-text-muted" style={{ background: 'var(--bg-elevated)' }}>
                             {driveStatus.redirect_uri}
                           </code>
                           <button type="button" className="btn btn-ghost btn-sm shrink-0" onClick={copyDriveRedirect}>
@@ -462,23 +462,32 @@ export default function Schedule() {
                       {driveSyncing ? 'Sincronizando...' : 'Sincronizar pasta agora'}
                     </button>
 
-                    <div className="rounded-card border border-border bg-white p-3">
+                    <div className="rounded-card border border-border p-3" style={{ background: 'var(--bg-surface)' }}>
                       <div className="flex items-center justify-between gap-3">
                         <div>
                           <p className="text-xs font-semibold">Estoque indexado</p>
-                          <p className="text-[11px] text-text-muted">Videos prontos que o agendador pode reservar.</p>
+                          <p className="text-[11px] text-text-muted">
+                            Videos prontos em ordem de uso. O agendador reserva de cima para baixo e nao repete usados.
+                          </p>
                         </div>
                         <span className="heading text-xl font-extrabold" style={{ color: 'var(--accent)' }}>{driveVideoStats.available || 0}</span>
                       </div>
                       {driveVideos.length > 0 && (
-                        <ul className="mt-2 space-y-1 max-h-28 overflow-y-auto pr-1">
-                          {driveVideos.slice(0, 5).map((v) => (
-                            <li key={v.id} className="flex items-center justify-between gap-2 text-[11px]">
-                              <span className="truncate" title={v.name}>{v.name}</span>
-                              <span className="text-text-muted shrink-0">{v.status}</span>
+                        <ul className="mt-3 space-y-1 max-h-72 overflow-y-auto pr-1">
+                          {driveVideos.map((v, idx) => (
+                            <li key={v.id} className="grid grid-cols-[34px_minmax(0,1fr)_72px] items-center gap-2 rounded-md px-2 py-1 text-[11px]"
+                              style={{ background: v.status === 'available' ? 'var(--bg-elevated)' : 'transparent' }}>
+                              <span className="data text-text-muted">#{idx + 1}</span>
+                              <span className="truncate" title={`${v.folder_path || ''} / ${v.name}`}>{v.name}</span>
+                              <span className="text-text-muted shrink-0 text-right">{v.status}</span>
                             </li>
                           ))}
                         </ul>
+                      )}
+                      {(driveVideoStats.available || 0) > driveVideos.length && (
+                        <p className="mt-2 text-[11px] text-text-muted">
+                          Mostrando {driveVideos.length} de {driveVideoStats.available} disponiveis.
+                        </p>
                       )}
                     </div>
                   </div>

@@ -119,7 +119,7 @@ def list_videos(
         conditions.append(ReadyVideo.status == status_filter)
     if niche:
         conditions.append(ReadyVideo.niche.ilike(f"%{niche.strip()}%"))
-    stmt = select(ReadyVideo).order_by(ReadyVideo.created_at.desc()).limit(limit)
+    stmt = select(ReadyVideo).order_by(ReadyVideo.created_at.asc(), ReadyVideo.id.asc()).limit(limit)
     count_stmt = select(ReadyVideo.status, func.count(ReadyVideo.id)).group_by(ReadyVideo.status)
     for condition in conditions:
         stmt = stmt.where(condition)
