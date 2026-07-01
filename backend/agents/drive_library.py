@@ -5,6 +5,7 @@ import logging
 import re
 from datetime import datetime
 from typing import Iterable
+from urllib.parse import parse_qs, unquote_plus, urlparse
 
 from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
@@ -17,7 +18,10 @@ logger = logging.getLogger("studio.drive_library")
 
 DRIVE_SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
 VIDEO_MIME_PREFIX = "video/"
+AUDIO_MIME_PREFIX = "audio/"
 FOLDER_MIME = "application/vnd.google-apps.folder"
+SHORTCUT_MIME = "application/vnd.google-apps.shortcut"
+VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v", ".mpeg", ".mpg"}
 
 
 def extract_folder_id(value: str | None) -> str | None:
@@ -36,11 +40,39 @@ def extract_folder_id(value: str | None) -> str | None:
     return value if re.fullmatch(r"[A-Za-z0-9_-]{10,}", value) else None
 
 
+def extract_search_query(value: str | None) -> str | None:
+    if not value:
+        return None
+    raw = value.strip()
+    parsed = urlparse(raw)
+    if "/drive/search" in parsed.path:
+        query = parse_qs(parsed.query).get("q", [""])[0]
+        return unquote_plus(query).strip() or None
+    return None
+
+
 def guess_format(name: str, mime_type: str | None = None) -> str:
     text = f"{name} {mime_type or ''}".lower()
     if any(token in text for token in ("short", "reels", "tiktok", "9x16", "vertical")):
         return "short"
     return "long"
+
+
+def is_video_file(name: str, mime_type: str | None = None) -> bool:
+    """Drive sometimes returns generic MIME types for shared video files."""
+    mime = (mime_type or "").lower()
+    if mime.startswith(VIDEO_MIME_PREFIX):
+        return True
+    lowered = (name or "").lower()
+    return any(lowered.endswith(ext) for ext in VIDEO_EXTENSIONS)
+
+
+def is_audio_file(name: str, mime_type: str | None = None) -> bool:
+    mime = (mime_type or "").lower()
+    if mime.startswith(AUDIO_MIME_PREFIX):
+        return True
+    lowered = (name or "").lower()
+    return any(lowered.endswith(ext) for ext in (".mp3", ".wav", ".m4a", ".aac", ".ogg", ".flac"))
 
 
 class DriveLibraryService:
@@ -155,13 +187,86 @@ class DriveLibraryService:
         if not folder_id:
             raise ValueError("Pasta do Drive invalida.")
         svc = self._service()
+        return self._index_folder_id(
+            svc,
+            folder_id,
+            niche=niche,
+            content_type=content_type,
+            video_format=video_format,
+            account_id=account_id,
+            recursive=recursive,
+        )
+
+    def index_matching_folders(
+        self,
+        query: str,
+        *,
+        niche: str | None = None,
+        content_type: str = "auto",
+        video_format: str | None = None,
+        account_id: int | None = None,
+        recursive: bool = True,
+    ) -> dict:
+        query = (query or "").strip()
+        if not query:
+            raise ValueError("Informe uma pasta do Drive ou um termo de busca.")
+        svc = self._service()
+        folder_ids = self._find_folders_by_name(svc, query)
+        if not folder_ids:
+            raise ValueError(f"Nenhuma pasta do Drive encontrada para: {query}")
+        total = {
+            "folder_id": ",".join(folder_ids),
+            "matched_folders": len(folder_ids),
+            "imported": 0,
+            "updated": 0,
+            "seen": 0,
+            "files_seen": 0,
+            "ignored_audio": 0,
+            "ignored_non_video": 0,
+        }
+        for folder_id in folder_ids:
+            result = self._index_folder_id(
+                svc,
+                folder_id,
+                niche=niche or query,
+                content_type=content_type,
+                video_format=video_format,
+                account_id=account_id,
+                recursive=recursive,
+            )
+            for key in ("imported", "updated", "seen", "files_seen", "ignored_audio", "ignored_non_video"):
+                total[key] += int(result.get(key) or 0)
+        return total
+
+    def _index_folder_id(
+        self,
+        svc,
+        folder_id: str,
+        *,
+        niche: str | None,
+        content_type: str,
+        video_format: str | None,
+        account_id: int | None,
+        recursive: bool,
+    ) -> dict:
         seen: set[str] = set()
         imported = 0
         updated = 0
+        files_seen = 0
+        ignored_audio = 0
+        ignored_non_video = 0
         for item, path in self._walk_folder(svc, folder_id, recursive=recursive):
-            if not (item.get("mimeType") or "").startswith(VIDEO_MIME_PREFIX):
+            files_seen += 1
+            item_name = item.get("name") or "video"
+            item_mime = item.get("mimeType")
+            if is_audio_file(item_name, item_mime):
+                ignored_audio += 1
+                continue
+            if not is_video_file(item_name, item_mime):
+                ignored_non_video += 1
                 continue
             seen.add(item["id"])
+            folder_parts = path[:-1] if path else []
             existing = self.db.execute(
                 select(ReadyVideo).where(ReadyVideo.drive_file_id == item["id"])
             ).scalars().first()
@@ -173,10 +278,10 @@ class DriveLibraryService:
                 self.db.add(row)
                 imported += 1
             row.drive_folder_id = folder_id
-            row.name = item.get("name") or "video"
-            row.mime_type = item.get("mimeType")
-            row.niche = niche or self._guess_niche(path)
-            row.folder_path = " / ".join(path)
+            row.name = item_name
+            row.mime_type = item_mime
+            row.niche = niche or self._guess_niche(folder_parts or path)
+            row.folder_path = " / ".join(folder_parts)
             row.content_type = content_type or "auto"
             row.video_format = video_format or guess_format(row.name, row.mime_type)
             row.account_id = account_id
@@ -186,11 +291,43 @@ class DriveLibraryService:
                 "webViewLink": item.get("webViewLink"),
                 "modifiedTime": item.get("modifiedTime"),
                 "drive_path": path,
+                "folder_parts": folder_parts,
             }
             if row.status == "missing":
                 row.status = "available"
         self.db.commit()
-        return {"folder_id": folder_id, "imported": imported, "updated": updated, "seen": len(seen)}
+        return {
+            "folder_id": folder_id,
+            "imported": imported,
+            "updated": updated,
+            "seen": len(seen),
+            "files_seen": files_seen,
+            "ignored_audio": ignored_audio,
+            "ignored_non_video": ignored_non_video,
+        }
+
+    def _find_folders_by_name(self, svc, query: str) -> list[str]:
+        escaped = query.replace("\\", "\\\\").replace("'", "\\'")
+        page_token = None
+        folders: list[str] = []
+        while True:
+            resp = svc.files().list(
+                q=(
+                    f"mimeType='{FOLDER_MIME}' and trashed=false and "
+                    f"name contains '{escaped}'"
+                ),
+                fields="nextPageToken, files(id,name,mimeType)",
+                orderBy="name_natural",
+                pageSize=100,
+                pageToken=page_token,
+                supportsAllDrives=True,
+                includeItemsFromAllDrives=True,
+            ).execute()
+            folders.extend(item["id"] for item in resp.get("files", []) if item.get("id"))
+            page_token = resp.get("nextPageToken")
+            if not page_token:
+                break
+        return folders
 
     def _walk_folder(self, svc, folder_id: str, *, recursive: bool, path: list[str] | None = None):
         path = path or []
@@ -198,7 +335,12 @@ class DriveLibraryService:
         while True:
             resp = svc.files().list(
                 q=f"'{folder_id}' in parents and trashed=false",
-                fields="nextPageToken, files(id,name,mimeType,size,modifiedTime,webViewLink)",
+                fields=(
+                    "nextPageToken, files("
+                    "id,name,mimeType,size,modifiedTime,webViewLink,"
+                    "shortcutDetails(targetId,targetMimeType)"
+                    ")"
+                ),
                 orderBy="folder,name_natural",
                 pageSize=1000,
                 pageToken=page_token,
@@ -207,7 +349,21 @@ class DriveLibraryService:
             ).execute()
             for item in resp.get("files", []):
                 item_path = [*path, item.get("name") or ""]
-                if item.get("mimeType") == FOLDER_MIME:
+                mime_type = item.get("mimeType")
+                shortcut = item.get("shortcutDetails") or {}
+                if mime_type == SHORTCUT_MIME and shortcut.get("targetId"):
+                    target_mime = shortcut.get("targetMimeType")
+                    if target_mime == FOLDER_MIME:
+                        if recursive:
+                            yield from self._walk_folder(svc, shortcut["targetId"], recursive=recursive, path=item_path)
+                    else:
+                        yield {
+                            **item,
+                            "id": shortcut["targetId"],
+                            "mimeType": target_mime or mime_type,
+                            "metadata_shortcut_id": item.get("id"),
+                        }, item_path
+                elif mime_type == FOLDER_MIME:
                     if recursive:
                         yield from self._walk_folder(svc, item["id"], recursive=recursive, path=item_path)
                 else:

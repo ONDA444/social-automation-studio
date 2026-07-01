@@ -197,7 +197,8 @@ export default function Schedule() {
     try {
       await api.patch(`/accounts/${sel}`, driveCfg)
       const r = await api.post(`/drive-library/accounts/${sel}/sync`)
-      alert(`Drive sincronizado: ${r.imported || 0} novo(s), ${r.updated || 0} atualizado(s).`)
+      const ignored = Number(r.ignored_audio || 0) + Number(r.ignored_non_video || 0)
+      alert(`Drive sincronizado: ${r.imported || 0} novo(s), ${r.updated || 0} atualizado(s), ${ignored} ignorado(s) que nao eram video.`)
       const fresh = await api.get('/accounts')
       setAccounts(fresh.accounts || [])
       await loadDrive()
@@ -474,14 +475,20 @@ export default function Schedule() {
                       </div>
                       {driveVideos.length > 0 && (
                         <ul className="mt-3 space-y-1 max-h-72 overflow-y-auto pr-1">
-                          {driveVideos.map((v, idx) => (
-                            <li key={v.id} className="grid grid-cols-[34px_minmax(0,1fr)_72px] items-center gap-2 rounded-md px-2 py-1 text-[11px]"
-                              style={{ background: v.status === 'available' ? 'var(--bg-elevated)' : 'transparent' }}>
-                              <span className="data text-text-muted">#{idx + 1}</span>
-                              <span className="truncate" title={`${v.folder_path || ''} / ${v.name}`}>{v.name}</span>
-                              <span className="text-text-muted shrink-0 text-right">{v.status}</span>
-                            </li>
-                          ))}
+                          {driveVideos.map((v, idx) => {
+                            const displayPath = v.folder_path ? `${v.folder_path} / ${v.name}` : v.name
+                            return (
+                              <li key={v.id} className="grid grid-cols-[34px_minmax(0,1fr)_72px] items-center gap-2 rounded-md px-2 py-1 text-[11px]"
+                                style={{ background: v.status === 'available' ? 'var(--bg-elevated)' : 'transparent' }}>
+                                <span className="data text-text-muted">#{idx + 1}</span>
+                                <span className="min-w-0" title={displayPath}>
+                                  <span className="block truncate">{v.name}</span>
+                                  {v.folder_path && <span className="block truncate text-[10px] text-text-muted">{v.folder_path}</span>}
+                                </span>
+                                <span className="text-text-muted shrink-0 text-right">{v.status}</span>
+                              </li>
+                            )
+                          })}
                         </ul>
                       )}
                       {(driveVideoStats.available || 0) > driveVideos.length && (

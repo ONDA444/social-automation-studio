@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from backend.database import get_db
 from backend.agents.account_profile import AccountProfileService
+from backend.agents.drive_library import extract_folder_id
 from backend.uploaders import instagram as ig
 from backend.uploaders import tiktok as tk
 from backend.uploaders import youtube as yt
@@ -84,12 +85,15 @@ def update_account(account_id: int, payload: AccountUpdate, db: Session = Depend
     acct = svc.get(account_id)
     if not acct:
         raise HTTPException(404, "conta não encontrada")
-    for k, v in payload.model_dump(exclude_none=True).items():
+    data = payload.model_dump(exclude_none=True)
+    for k, v in data.items():
         if k == "trends_per_cycle":
             v = max(1, min(2, int(v)))  # never let a channel flood: cap at 2/cycle
         if k == "video_source_mode":
             v = v if v in {"ai", "drive", "mixed"} else "ai"
         setattr(acct, k, v)
+    if "drive_folder_url" in data:
+        acct.drive_folder_id = extract_folder_id(acct.drive_folder_url)
     db.commit()
     db.refresh(acct)
     return acct.to_dict()

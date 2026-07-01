@@ -7,7 +7,7 @@ from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from backend.agents.drive_library import DriveLibraryService, extract_folder_id
+from backend.agents.drive_library import DriveLibraryService, extract_folder_id, extract_search_query
 from backend.config import settings
 from backend.database import get_db
 from backend.models import PlatformAccount, ReadyVideo
@@ -86,15 +86,25 @@ def sync_account_folder(account_id: int, db: Session = Depends(get_db)):
     acct = db.get(PlatformAccount, account_id)
     if not acct:
         raise HTTPException(404, "conta nao encontrada")
-    folder = acct.drive_folder_id or extract_folder_id(acct.drive_folder_url)
-    if not folder:
-        raise HTTPException(400, "Configure a pasta do Drive neste canal.")
+    folder = extract_folder_id(acct.drive_folder_url) or acct.drive_folder_id
+    search_query = extract_search_query(acct.drive_folder_url) or (acct.drive_niche or "").strip()
+    if not folder and not search_query:
+        raise HTTPException(400, "Configure uma pasta do Drive ou um nicho para buscar as pastas deste canal.")
     drive_status = DriveLibraryService(db).status()
     if not drive_status.get("has_credentials") and not drive_status.get("api_key_configured"):
         raise HTTPException(400, "Conecte o Google Drive antes de sincronizar a pasta.")
     try:
-        return DriveLibraryService(db).index_folder(
-            folder,
+        service = DriveLibraryService(db)
+        if folder:
+            return service.index_folder(
+                folder,
+                niche=acct.drive_niche or acct.niche,
+                content_type="auto",
+                account_id=acct.id,
+                recursive=bool(getattr(acct, "drive_recursive", True)),
+            )
+        return service.index_matching_folders(
+            search_query,
             niche=acct.drive_niche or acct.niche,
             content_type="auto",
             account_id=acct.id,

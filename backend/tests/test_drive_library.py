@@ -1,0 +1,111 @@
+from __future__ import annotations
+
+import unittest
+
+from backend.agents.drive_library import (
+    DriveLibraryService,
+    FOLDER_MIME,
+    SHORTCUT_MIME,
+    extract_search_query,
+    is_audio_file,
+    is_video_file,
+)
+
+
+class _FakeListRequest:
+    def __init__(self, files):
+        self._files = files
+
+    def execute(self):
+        return {"files": self._files}
+
+
+class _FakeFiles:
+    def __init__(self, tree):
+        self._tree = tree
+
+    def list(self, *, q, **_kwargs):
+        folder_id = q.split("'")[1]
+        return _FakeListRequest(self._tree.get(folder_id, []))
+
+
+class _FakeDrive:
+    def __init__(self, tree):
+        self._tree = tree
+
+    def files(self):
+        return _FakeFiles(self._tree)
+
+
+class DriveLibraryTests(unittest.TestCase):
+    def test_video_detection_accepts_generic_mime_with_video_extension(self) -> None:
+        self.assertTrue(is_video_file("Monetize - Religiosos (85).mp4", "application/octet-stream"))
+        self.assertTrue(is_video_file("clip.MKV", None))
+        self.assertFalse(is_video_file("audio.mp3", "application/octet-stream"))
+        self.assertTrue(is_audio_file("voice.M4A", None))
+
+    def test_extract_search_query_from_drive_search_url(self) -> None:
+        self.assertEqual(
+            extract_search_query("https://drive.google.com/drive/search?q=CORTES%20FAMILY%20GUY"),
+            "CORTES FAMILY GUY",
+        )
+        self.assertIsNone(extract_search_query("https://drive.google.com/drive/folders/abc123DEF456"))
+
+    def test_walk_folder_descends_nested_subfolders_in_order(self) -> None:
+        svc = _FakeDrive(
+            {
+                "root": [
+                    {"id": "folder-series", "name": "Cortes series", "mimeType": FOLDER_MIME},
+                    {"id": "root-video", "name": "01.mp4", "mimeType": "video/mp4"},
+                ],
+                "folder-series": [
+                    {"id": "folder-videos", "name": "Videos", "mimeType": FOLDER_MIME},
+                    {"id": "folder-audios", "name": "Audios", "mimeType": FOLDER_MIME},
+                ],
+                "folder-videos": [
+                    {"id": "nested-video", "name": "serie-final.mp4", "mimeType": "application/octet-stream"},
+                ],
+                "folder-audios": [
+                    {"id": "nested-audio", "name": "voz.mp3", "mimeType": "audio/mpeg"},
+                ],
+            }
+        )
+
+        rows = list(DriveLibraryService(db=None)._walk_folder(svc, "root", recursive=True))
+
+        self.assertEqual(
+            [(item["id"], path) for item, path in rows],
+            [
+                ("nested-video", ["Cortes series", "Videos", "serie-final.mp4"]),
+                ("nested-audio", ["Cortes series", "Audios", "voz.mp3"]),
+                ("root-video", ["01.mp4"]),
+            ],
+        )
+
+    def test_walk_folder_follows_drive_folder_shortcuts(self) -> None:
+        svc = _FakeDrive(
+            {
+                "root": [
+                    {
+                        "id": "shortcut-weekly",
+                        "name": "Atualizados Semanalmente",
+                        "mimeType": SHORTCUT_MIME,
+                        "shortcutDetails": {"targetId": "weekly-target", "targetMimeType": FOLDER_MIME},
+                    },
+                ],
+                "weekly-target": [
+                    {"id": "weekly-video", "name": "Family Guy semana 01.mp4", "mimeType": "application/octet-stream"},
+                ],
+            }
+        )
+
+        rows = list(DriveLibraryService(db=None)._walk_folder(svc, "root", recursive=True))
+
+        self.assertEqual(
+            [(item["id"], path) for item, path in rows],
+            [("weekly-video", ["Atualizados Semanalmente", "Family Guy semana 01.mp4"])],
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()
