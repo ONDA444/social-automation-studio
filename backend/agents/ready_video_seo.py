@@ -35,6 +35,7 @@ OPERATIONAL_WORDS = {
     "legendado", "legenda", "legendas", "subtitle", "subtitles",
     "monetize", "monetizacao", "monetização", "monetizar",
 }
+OPERATIONAL_WORDS.add("epic")
 VIRAL_SHORTS_LEARNINGS = {
     "source": "user_top_short_2026_07",
     "views": 5_950_751,
@@ -47,6 +48,11 @@ VIRAL_SHORTS_LEARNINGS = {
 VIRAL_TITLE_MARKERS = (
     "mas", "olha", "depois", "chocou", "final", "detalhe", "ninguém",
     "ninguem", "percebeu", "resolveu", "falhou", "mudou",
+)
+CONFLICT_WORDS = (
+    "perde", "perdeu", "falha", "falhou", "cai", "caiu", "erra", "errou",
+    "quebra", "quebrou", "foge", "fugiu", "surpreende", "surpreendeu",
+    "descobre", "descobriu", "tenta", "tentou",
 )
 
 
@@ -119,6 +125,7 @@ def build_drive_seo(context: dict, analysis: dict | None = None) -> dict:
 
     title = _title_from_analysis(topic, analysis, content_type, video_format)
     title = _apply_viral_shorts_title(title, topic, analysis, content_type, video_format)
+    title = title.rstrip(" .")
     if video_format == "short" and "#short" not in title.lower():
         title = f"{title} #Shorts"
     title = title[:100]
@@ -413,40 +420,58 @@ def _title_from_analysis(topic: str, analysis: dict, content_type: str, video_fo
 
 
 def _apply_viral_shorts_title(title: str, topic: str, analysis: dict, content_type: str, video_format: str) -> str:
-    """Shape Drive Shorts after the user's proven winner.
+    """Shape Drive Shorts without making them sound AI-written.
 
-    The winning pattern was not keyword stuffing: it was a compact curiosity
-    loop ("something failed" -> "but what happened next...") on an 18s video
-    with very high Shorts-feed retention. Keep strong model-provided titles, but
-    upgrade generic fallbacks so Drive videos do not publish with flat labels.
+    The user's winner had a clear human micro-story, but forcing that formula on
+    every Drive video made titles long and fake. Prefer specific, natural titles;
+    only repair titles that are too thin or obviously generic.
     """
     title = _strip_shorts(_clean_text(title))
+    title = re.sub(r"^(epic|new|novo|nova)\s+", "", title, flags=re.I).strip()
     if video_format != "short":
         return title
     low = title.lower()
-    if any(marker in low for marker in VIRAL_TITLE_MARKERS) and len(title) < 28:
-        return _shorten_title(f"{title} — olha o detalhe")
+    if _is_too_thin_title(title):
+        title = _repair_thin_title(title, topic, analysis)
+        low = title.lower()
     if (
         any(marker in low for marker in VIRAL_TITLE_MARKERS)
         and not _generic_viral_title(low)
-        and 28 <= len(title) <= 82
+        and 18 <= len(title) <= 72
     ):
         return _shorten_title(title)
 
     base = _compact_topic(topic)
-    if analysis.get("analysis_source") in {"vision_llm", "text_llm"} and len(_title_terms(title)) >= 4:
-        return _shorten_title(f"{title} — olha o detalhe")
+    if analysis.get("analysis_source") in {"vision_llm", "text_llm"} and len(_title_terms(title)) >= 3:
+        return _shorten_title(title)
 
     templates = {
-        "sports_highlights": f"{base} parecia normal — ate esse lance mudar tudo",
-        "motivational_speech": f"{base} parecia simples — mas essa frase vira a chave",
-        "reddit_story": f"{base} parecia comum — mas o final entregou tudo",
-        "true_crime_mystery": f"{base} parecia resolvido — mas faltava um detalhe",
-        "explainer_curiosity": f"{base} parecia simples — mas tem um detalhe escondido",
-        "reaction_commentary": f"{base} parecia so uma cena comum — mas olha o detalhe",
+        "sports_highlights": f"{base}: o lance decisivo",
+        "motivational_speech": f"{base}: a virada de chave",
+        "reddit_story": f"{base}: o relato completo",
+        "true_crime_mystery": f"{base}: o detalhe do caso",
+        "explainer_curiosity": f"{base}: o que aconteceu",
+        "reaction_commentary": f"{base}: o momento da cena",
     }
-    return _shorten_title(templates.get(content_type, f"{base} parecia comum — mas olha o final"))
+    return _shorten_title(templates.get(content_type, f"{base}: o momento principal"))
 
+
+def _is_too_thin_title(title: str) -> bool:
+    terms = _title_terms(title)
+    return len(terms) < 3 or len(_clean_text(title)) < 18
+
+
+def _repair_thin_title(title: str, topic: str, analysis: dict) -> str:
+    hook = _clean_text(analysis.get("hook") or "")
+    if hook and len(_title_terms(hook)) >= 3:
+        return hook
+    summary = _clean_text(analysis.get("summary") or "")
+    entity = _clean_terms(analysis.get("entities") or [])
+    base = _compact_topic(summary or topic or title)
+    title_terms = _title_terms(title)
+    if entity and title_terms and entity[0].lower() not in base.lower():
+        base = f"{entity[0]}: {base}"
+    return base
 
 def _clean_filename(name: str | None) -> str:
     value = re.sub(r"\.[A-Za-z0-9]{2,5}$", "", name or "")
@@ -529,7 +554,7 @@ def _viral_shorts_profile(title: str, topic: str, hook: str, summary: str, tags:
     short = video_format == "short"
     curiosity = any(marker in title.lower() for marker in VIRAL_TITLE_MARKERS)
     clean_hook = _clean_text(hook)
-    first_line = _strip_shorts(title) if _generic_viral_title(clean_hook.lower()) else (clean_hook or _strip_shorts(title))
+    first_line = _strip_shorts(title) if (_generic_viral_title(clean_hook.lower()) or _is_too_thin_title(clean_hook)) else clean_hook
     return {
         "source": VIRAL_SHORTS_LEARNINGS["source"],
         "target": "feed_dos_shorts" if short else "browse_suggested",
@@ -557,8 +582,7 @@ def _description(hook: str, summary: str, hashtags: list[str], viral_profile: di
     desc = (
         f"{first_line}\n\n"
         f"{summary}\n\n"
-        f"{(viral_profile or {}).get('comment_prompt') or 'Comenta qual detalhe voce percebeu primeiro.'} "
-        f"Se inscreve para mais cortes como esse.\n\n"
+        f"{(viral_profile or {}).get('comment_prompt') or 'Comenta qual detalhe voce percebeu primeiro.'}\n\n"
         f"{' '.join(hashtags[:3])}"
     )
     return _remove_internal_words(desc).strip()
@@ -606,8 +630,9 @@ def _notes(score: dict, analysis: dict) -> list[str]:
 def _has_viral_title_shape(title: str) -> bool:
     clean = _strip_shorts(title).lower()
     return (
-        24 <= len(clean) <= 82
-        and any(marker in clean for marker in VIRAL_TITLE_MARKERS)
+        18 <= len(clean) <= 72
+        and (any(marker in clean for marker in VIRAL_TITLE_MARKERS)
+             or any(word in clean for word in CONFLICT_WORDS))
         and not _generic_viral_title(clean)
     )
 
@@ -681,12 +706,20 @@ def _strip_shorts(text: str) -> str:
 
 def _shorten_title(title: str) -> str:
     title = re.sub(r"\s+", " ", title).strip()
-    return title if len(title) <= 78 else title[:75].rstrip(" ,:;") + "..."
+    if len(title) <= 72:
+        return title
+    cut = title[:69].rstrip(" ,:;")
+    cut = re.sub(r"\s+\S*$", "", cut).rstrip(" ,:;")
+    return cut or title[:69].rstrip(" ,:;")
 
 
 def _compact_topic(topic: str) -> str:
     topic = _remove_internal_words(_clean_text(topic))
-    return topic[:55].rstrip(" ,:;") or "Esse corte"
+    if len(topic) <= 55:
+        return topic.rstrip(" ,:;") or "Esse corte"
+    cut = topic[:55].rstrip(" ,:;")
+    cut = re.sub(r"\s+\S*$", "", cut).rstrip(" ,:;")
+    return cut or topic[:55].rstrip(" ,:;") or "Esse corte"
 
 
 def _title_terms(text: str) -> list[str]:

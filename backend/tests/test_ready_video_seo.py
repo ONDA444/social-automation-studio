@@ -49,7 +49,7 @@ class ReadyVideoSeoTests(unittest.TestCase):
         )
 
         yt = seo["youtube"]
-        self.assertEqual(yt["title"], "Essa cena do Woody nunca envelhece — olha o detalhe #Shorts")
+        self.assertEqual(yt["title"], "Essa cena do Woody nunca envelhece #Shorts")
         self.assertEqual(yt["tags"][0], "woody")
         self.assertEqual(seo["seo_score"]["verdict"], "drive_video_strong")
 
@@ -68,13 +68,14 @@ class ReadyVideoSeoTests(unittest.TestCase):
         yt = seo["youtube"]
         title = yt["title"]
         self.assertIn("#Shorts", title)
-        self.assertRegex(title.lower(), r"(mas|olha|final|detalhe|mudou)")
+        self.assertIn("momento da cena", title.lower())
+        self.assertNotIn("parecia", title.lower())
         self.assertNotIn("Monetize", title)
         self.assertNotIn("biblioteca", yt["description"].lower())
         self.assertNotIn("drive", yt["description"].lower())
         self.assertIn("viral_shorts_profile", seo["feed"])
         self.assertEqual(seo["feed"]["viral_shorts_profile"]["target"], "feed_dos_shorts")
-        self.assertGreaterEqual(seo["seo_score"]["breakdown"]["shorts_feed_packaging"], 10)
+        self.assertGreaterEqual(seo["seo_score"]["breakdown"]["shorts_feed_packaging"], 5)
         self.assertLessEqual(len(title), 100)
 
     def test_specific_analysis_title_gets_retention_cue_without_clickbait(self) -> None:
@@ -97,10 +98,54 @@ class ReadyVideoSeoTests(unittest.TestCase):
         )
 
         yt = seo["youtube"]
-        self.assertIn("olha o detalhe", yt["title"].lower())
+        self.assertEqual(yt["title"], "O autografo falhou na hora mais inesperada #Shorts")
         self.assertNotIn("voce nao vai acreditar", yt["title"].lower())
         self.assertEqual(yt["tags"][0], "artista")
         self.assertTrue(yt["description"].splitlines()[0].startswith("O autografo falhou"))
+
+    def test_cartoon_drive_titles_stay_natural_not_forced_viral(self) -> None:
+        sonic = build_drive_seo(
+            context={
+                "drive_name": "sonic.mp4",
+                "folder_path": "DESENHOS ANIMADOS / Sonic",
+                "niche": "Desenhos Animados",
+                "content_type": "reaction_commentary",
+                "video_format": "short",
+            },
+            analysis={
+                "analysis_source": "vision_llm",
+                "summary": "Sonic perde seus poderes no prisma do paradoxo em Sonic Prime.",
+                "topics": ["Sonic Prime", "perda do poder", "desenho animado"],
+                "entities": ["Sonic"],
+                "title_options": ["Sonic perde"],
+                "hook": "Sonic perde o poder no prisma do paradoxo em Sonic Prime.",
+            },
+        )
+        orion = build_drive_seo(
+            context={
+                "drive_name": "orion.mp4",
+                "folder_path": "DESENHOS ANIMADOS / Orion",
+                "niche": "Desenhos Animados",
+                "content_type": "reaction_commentary",
+                "video_format": "short",
+            },
+            analysis={
+                "analysis_source": "vision_llm",
+                "summary": "Orion perde seus poderes e descobre uma nova habilidade durante a cena.",
+                "topics": ["Orion", "nova habilidade", "desenho animado"],
+                "entities": ["Orion"],
+                "title_options": ["Epic Orion perde seu poder, mas descobre uma nova habilidade"],
+                "hook": "Quando um personagem perde seu poder, mas descobre uma nova habilidade.",
+            },
+        )
+
+        for seo in (sonic, orion):
+            title = seo["youtube"]["title"]
+            self.assertIn("#Shorts", title)
+            self.assertNotIn("parecia", title.lower())
+            self.assertNotIn("Epic", title)
+            self.assertNotIn("...", title)
+            self.assertLessEqual(len(title), 100)
 
     def test_legacy_scheduler_helper_no_longer_uses_internal_description(self) -> None:
         ready = SimpleNamespace(
