@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 import json
+import os
 
 from backend.config import settings
 
@@ -58,7 +59,19 @@ def exchange_code(code: str) -> dict:
 
     flow = Flow.from_client_config(_client_config(), scopes=SCOPES)
     flow.redirect_uri = settings.google_redirect_uri
-    flow.fetch_token(code=code)
+    # Google may return previously granted scopes when include_granted_scopes=true
+    # (for example Drive readonly from the ready-video library). Those extra scopes
+    # are not a failed grant; oauthlib is strict by default and raises a Warning,
+    # which became a 500 during reconnect. Relax only the token scope check.
+    previous_relax_scope = os.environ.get("OAUTHLIB_RELAX_TOKEN_SCOPE")
+    os.environ["OAUTHLIB_RELAX_TOKEN_SCOPE"] = "1"
+    try:
+        flow.fetch_token(code=code)
+    finally:
+        if previous_relax_scope is None:
+            os.environ.pop("OAUTHLIB_RELAX_TOKEN_SCOPE", None)
+        else:
+            os.environ["OAUTHLIB_RELAX_TOKEN_SCOPE"] = previous_relax_scope
     c = flow.credentials
     creds = {
         "token": c.token,
