@@ -46,6 +46,11 @@ class AccountProfileService:
         acct = self.get(account_id)
         if not acct:
             raise ValueError("account not found")
+        previous = decrypt_credentials(acct.credentials_encrypted)
+        if acct.platform == "youtube" and previous and not creds.get("refresh_token"):
+            for key in ("refresh_token", "token_uri", "client_id", "client_secret"):
+                if previous.get(key) and not creds.get(key):
+                    creds[key] = previous[key]
         acct.credentials_encrypted = encrypt_credentials(creds)
         # A successful (re)connect means the account is usable again. Reactivate
         # from any connection-blocking state — not just "auth_error". Otherwise a

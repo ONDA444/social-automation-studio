@@ -36,7 +36,7 @@ def _missing_libs() -> str | None:
 
 
 # ---------------------------------------------------------------- OAuth
-def build_auth_url(state: str = "") -> dict:
+def build_auth_url(state: str = "", force_consent: bool = True) -> dict:
     err = _missing_libs()
     if err:
         return {"ok": False, "error": err}
@@ -46,8 +46,14 @@ def build_auth_url(state: str = "") -> dict:
 
     flow = Flow.from_client_config(_client_config(), scopes=SCOPES)
     flow.redirect_uri = settings.google_redirect_uri
-    url, _ = flow.authorization_url(access_type="offline", include_granted_scopes="true",
-                                    prompt="consent", state=state)
+    params = {
+        "access_type": "offline",
+        "include_granted_scopes": "true",
+        "state": state,
+    }
+    if force_consent:
+        params["prompt"] = "consent"
+    url, _ = flow.authorization_url(**params)
     return {"ok": True, "auth_url": url}
 
 

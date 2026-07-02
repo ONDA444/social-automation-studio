@@ -268,9 +268,17 @@ def oauth_start(platform: str, account_id: int = Query(...), db: Session = Depen
     mod = PLATFORMS.get(platform)
     if not mod:
         raise HTTPException(400, "plataforma inválida")
-    if not AccountProfileService(db).get(account_id):
+    svc = AccountProfileService(db)
+    acct = svc.get(account_id)
+    if not acct:
         raise HTTPException(404, "conta não encontrada (crie a conta antes de conectar)")
-    result = mod.build_auth_url(state=str(account_id))
+    force_consent = True
+    if platform == "youtube":
+        force_consent = acct.status in {"auth_error", "disconnected"} or not svc.has_valid_credentials(acct)
+    try:
+        result = mod.build_auth_url(state=str(account_id), force_consent=force_consent)
+    except TypeError:
+        result = mod.build_auth_url(state=str(account_id))
     if not result.get("ok"):
         raise HTTPException(400, result.get("error", "OAuth indisponível"))
     return {"auth_url": result["auth_url"]}
