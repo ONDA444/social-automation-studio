@@ -1,5 +1,7 @@
 import { createContext, useContext, useEffect, useState, lazy, Suspense } from 'react'
 import { Routes, Route, Navigate } from 'react-router-dom'
+import Privacy from './pages/Privacy.jsx'
+import Terms from './pages/Terms.jsx'
 import Sidebar from './components/Sidebar.jsx'
 import TopBar from './components/TopBar.jsx'
 import ErrorBoundary from './components/ErrorBoundary.jsx'
@@ -46,6 +48,17 @@ export default function App() {
 
   return (
     <WsContext.Provider value={ws}>
+      <Routes>
+        <Route path="/privacy" element={<Privacy />} />
+        <Route path="/terms" element={<Terms />} />
+        <Route path="*" element={<AppLayout ws={ws} theme={theme} toggleTheme={toggleTheme} mobileNavOpen={mobileNavOpen} setMobileNavOpen={setMobileNavOpen} />} />
+      </Routes>
+    </WsContext.Provider>
+  )
+}
+
+function AppLayout({ ws, theme, toggleTheme, mobileNavOpen, setMobileNavOpen }) {
+  return (
       <div className="flex h-screen overflow-hidden">
         <Sidebar mobileOpen={mobileNavOpen} onClose={() => setMobileNavOpen(false)} />
         <div className="flex-1 flex flex-col min-w-0">
@@ -55,6 +68,7 @@ export default function App() {
             theme={theme}
             onToggleTheme={toggleTheme}
           />
+
           <main className="flex-1 overflow-y-auto p-4 sm:p-6">
             <ErrorBoundary>
             <Suspense fallback={<RouteFallback />}>
@@ -75,6 +89,5 @@ export default function App() {
           </main>
         </div>
       </div>
-    </WsContext.Provider>
   )
 }
