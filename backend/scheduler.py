@@ -45,6 +45,13 @@ def start_scheduler() -> None:
     sched.add_job(_job_consume_themes, "interval", minutes=2, id="consume_themes", replace_existing=True)
     sched.add_job(_job_publish_due, "interval", minutes=1, id="publish_due", replace_existing=True)
     sched.add_job(_job_retry_errored, "interval", minutes=20, id="retry_errored", replace_existing=True)
+    # Safety net for the in-process pipeline: a job stuck in PUBLISHING/PROCESSING
+    # (e.g. a hung network call mid-upload) would otherwise sit there FOREVER since
+    # _recover_orphan_jobs only runs once at boot — if the process never restarts,
+    # nothing ever re-checks it, and it permanently occupies a publish semaphore slot.
+    # This periodic sweep re-runs the SAME safe transition rules every 10 min.
+    sched.add_job(_job_recover_stuck_publishing, "interval", minutes=10,
+                  id="recover_stuck_publishing", replace_existing=True)
     # "Momento em alta": for opted-in channels, catch what's hot in the niche now and
     # enqueue 1–2 approval-gated videos. Every 3h (low/non-spammy); first run ~2min after boot.
     sched.add_job(_job_ride_trends, "interval", hours=3, id="ride_trends", replace_existing=True,
@@ -53,7 +60,7 @@ def start_scheduler() -> None:
     _scheduler = sched
     logger.info(
         "Scheduler started (trending, quota reset, heartbeat, analytics, "
-        "consume_themes, publish_due, retry_errored)."
+        "consume_themes, publish_due, retry_errored, recover_stuck_publishing)."
     )
 
 
@@ -183,6 +190,72 @@ def _job_retry_errored() -> None:
         logger.warning("retry_errored job failed: %s", exc)
     finally:
         db.close()
+
+
+# How long a job can sit in PUBLISHING/PROCESSING before we treat it as stuck.
+# Long enough that a normal upload/render tick would have finished; short enough
+# to unstick things quickly instead of starving the publish semaphore for hours.
+_STUCK_JOB_MINUTES = 15
+
+
+def _job_recover_stuck_publishing() -> None:
+    """
+    Runtime safety net (no restart required): the in-process pipeline has no
+    separate worker watching PUBLISHING/PROCESSING jobs — _recover_orphan_jobs
+    only runs once at boot. If the process itself doesn't die (e.g. a hung
+    network call inside upload_video that never raises/times out), a job can
+    sit in PUBLISHING forever, permanently occupying one of the (only 2)
+    publish semaphore slots and starving every future publish.
+
+    Every 10 min, find PUBLISHING/PROCESSING jobs whose updated_at is older
+    than _STUCK_JOB_MINUTES and apply the SAME safe transition rules as boot
+    recovery (backend.main._apply_orphan_transition) — never blindly
+    re-publish a job that may have already uploaded. Jobs that come out as
+    APPROVED (upload never started) are re-dispatched immediately.
+    """
+    from sqlalchemy import select
+
+    from backend.main import _apply_orphan_transition, _safe_boot
+    from backend.models import JobStatus, VideoJob
+    from backend.pipeline.dispatch import dispatch_publish
+
+    cutoff = datetime.utcnow() - timedelta(minutes=_STUCK_JOB_MINUTES)
+    db = SessionLocal()
+    try:
+        stuck = db.execute(
+            select(VideoJob).where(
+                VideoJob.status.in_([JobStatus.PUBLISHING, JobStatus.PROCESSING]),
+                VideoJob.updated_at < cutoff,
+            )
+        ).scalars().all()
+        if not stuck:
+            return
+        safe = _safe_boot()
+        to_publish = []
+        recovered = 0
+        for job in stuck:
+            was_publishing = job.status == JobStatus.PUBLISHING
+            _apply_orphan_transition(job, safe)
+            recovered += 1
+            if was_publishing and job.status == JobStatus.APPROVED:
+                to_publish.append(job.id)
+        db.commit()
+        logger.info(
+            "Varredura de jobs presos: %d job(s) travado(s) em PUBLISHING/PROCESSING "
+            "(> %dmin) ajustado(s); %d reenviado(s) para publicação.",
+            recovered, _STUCK_JOB_MINUTES, len(to_publish),
+        )
+    except Exception as exc:  # noqa: BLE001 — never let the scheduler die
+        db.rollback()
+        logger.warning("recover_stuck_publishing job failed: %s", exc)
+        return
+    finally:
+        db.close()
+    for job_id in to_publish:
+        try:
+            dispatch_publish(job_id)
+        except Exception as exc:  # noqa: BLE001 — isolate per job
+            logger.warning("recover_stuck_publishing: re-dispatch failed for job %s: %s", job_id, exc)
 
 
 def _job_trending() -> None:
@@ -670,6 +743,7 @@ def _job_consume_themes() -> None:
                     select(ScheduleConfig).where(ScheduleConfig.account_id == acct.id)
                 ).scalars().first()
                 if cfg is None:
+                    logger.debug("Conta %s sem ScheduleConfig — automacao desativada (sem agenda salva).", acct.id)
                     continue  # no schedule configured -> account opts out of automation
                 source_mode = getattr(acct, "video_source_mode", "ai")
 
@@ -682,6 +756,8 @@ def _job_consume_themes() -> None:
                     .order_by(ThemeQueue.position.asc(), ThemeQueue.created_at.asc())
                 ).scalars().all()
                 if not pending and source_mode != "drive":
+                    logger.debug("Conta %s (%s) sem temas na fila — nada a gerar neste ciclo.",
+                                 acct.id, source_mode)
                     continue
 
                 per_day = max(1, cfg.videos_per_day or 1)

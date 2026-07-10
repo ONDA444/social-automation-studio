@@ -133,17 +133,65 @@ def _safe_boot() -> bool:
     return os.getenv("SAFE_BOOT", "").strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _recover_orphan_jobs() -> None:
+def _apply_orphan_transition(job, safe: bool) -> None:
     """
-    In-process pipeline (no Redis): any job left in PUBLISHING/PROCESSING when
-    the server starts is an ORPHAN — its task died on the restart.
+    Shared state-transition rule for a job stuck in PROCESSING/PUBLISHING —
+    used both by boot-time orphan recovery (_recover_orphan_jobs) and the
+    runtime stuck-job sweep (scheduler._job_recover_stuck_publishing) so the
+    two paths can never subtly drift apart.
 
-    - PROCESSING interrupted -> ERROR (render half-done; use Retry).
+    - PROCESSING interrupted -> resume once (QUEUED) then ERROR (render half-done; use Retry).
     - PUBLISHING: decided by publish_status.youtube to AVOID DUPLICATE uploads:
         * already has ok+video_id   -> PUBLISHED (it's on the channel; never resend).
         * was mid-upload ("uploading") -> ERROR + "verifique o canal" (the video MAY
           already be up; do NOT auto-republish — that's how duplicates happened).
         * upload never started      -> APPROVED (safe to publish on the next tick).
+
+    Mutates `job` in place; caller is responsible for commit().
+    """
+    from backend.models import JobStatus
+
+    if job.status == JobStatus.PROCESSING:
+        # A render that was running when the process died is the PRIME
+        # SUSPECT for the death (an OOM render that blew the RAM ceiling).
+        # Auto-resuming it on EVERY boot is exactly what crash-looped the
+        # whole service. So: resume it AT MOST ONCE (covers a benign
+        # deploy/restart — "a deploy shouldn't cost the video"); if it
+        # comes back as an orphan again, park it for MANUAL Retry with a
+        # message the scheduler WON'T auto-resurrect (see _NO_AUTO_RETRY_
+        # MARKERS) — so a heavy/OOM render can never loop the container.
+        # SAFE_BOOT parks immediately (no resume at all).
+        if (not safe) and (job.retry_count or 0) < _ORPHAN_RESUME_MAX:
+            job.retry_count = (job.retry_count or 0) + 1
+            job.status = JobStatus.QUEUED
+            job.error_message = None
+            job.current_agent = None
+            job.progress = 0
+        else:
+            job.status = JobStatus.ERROR
+            job.error_message = _RENDER_INTERRUPTED_MSG
+    else:  # PUBLISHING orphan — never blindly republish (duplicate risk)
+        ps = job.publish_status if isinstance(job.publish_status, dict) else {}
+        yt = ps.get("youtube") or {}
+        if yt.get("ok") and yt.get("video_id"):
+            job.status = JobStatus.PUBLISHED  # already live — never resend
+        elif yt.get("status") == "uploading":
+            job.status = JobStatus.ERROR
+            job.error_message = (
+                "Publicação interrompida por reinício — o vídeo PODE já estar no "
+                "canal. Verifique o YouTube antes de usar Retry (evita duplicar)."
+            )
+        else:
+            job.status = JobStatus.APPROVED  # upload never started — safe
+
+
+def _recover_orphan_jobs() -> None:
+    """
+    In-process pipeline (no Redis): any job left in PUBLISHING/PROCESSING when
+    the server starts is an ORPHAN — its task died on the restart.
+
+    Delegates the actual state-transition decision to _apply_orphan_transition
+    (shared with the runtime stuck-job sweep in scheduler.py).
 
     Wrapped in try/except so a recovery failure never blocks boot.
     """
@@ -161,38 +209,7 @@ def _recover_orphan_jobs() -> None:
             safe = _safe_boot()
             recovered = 0
             for job in orphans:
-                if job.status == JobStatus.PROCESSING:
-                    # A render that was running when the process died is the PRIME
-                    # SUSPECT for the death (an OOM render that blew the RAM ceiling).
-                    # Auto-resuming it on EVERY boot is exactly what crash-looped the
-                    # whole service. So: resume it AT MOST ONCE (covers a benign
-                    # deploy/restart — "a deploy shouldn't cost the video"); if it
-                    # comes back as an orphan again, park it for MANUAL Retry with a
-                    # message the scheduler WON'T auto-resurrect (see _NO_AUTO_RETRY_
-                    # MARKERS) — so a heavy/OOM render can never loop the container.
-                    # SAFE_BOOT parks immediately (no resume at all).
-                    if (not safe) and (job.retry_count or 0) < _ORPHAN_RESUME_MAX:
-                        job.retry_count = (job.retry_count or 0) + 1
-                        job.status = JobStatus.QUEUED
-                        job.error_message = None
-                        job.current_agent = None
-                        job.progress = 0
-                    else:
-                        job.status = JobStatus.ERROR
-                        job.error_message = _RENDER_INTERRUPTED_MSG
-                else:  # PUBLISHING orphan — never blindly republish (duplicate risk)
-                    ps = job.publish_status if isinstance(job.publish_status, dict) else {}
-                    yt = ps.get("youtube") or {}
-                    if yt.get("ok") and yt.get("video_id"):
-                        job.status = JobStatus.PUBLISHED  # already live — never resend
-                    elif yt.get("status") == "uploading":
-                        job.status = JobStatus.ERROR
-                        job.error_message = (
-                            "Publicação interrompida por reinício — o vídeo PODE já estar no "
-                            "canal. Verifique o YouTube antes de usar Retry (evita duplicar)."
-                        )
-                    else:
-                        job.status = JobStatus.APPROVED  # upload never started — safe
+                _apply_orphan_transition(job, safe)
                 recovered += 1
             if recovered:
                 db.commit()

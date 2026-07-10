@@ -32,13 +32,29 @@ def _emit(job_id, **fields):
     publish_event({"type": "publish_update", "job_id": job_id, **fields})
 
 
+# Hard ceiling on a single upload attempt. googleapiclient/httplib2 has NO default
+# socket timeout, so a stalled TCP connect/read (dead peer, blackholed route — the
+# kind of network hiccup Railway sees) can block the worker thread FOREVER. Since
+# that thread runs under `_publish_sem` (dispatch.py, cap=2), two hung uploads
+# silently exhaust the entire publish pool and every future job queues forever
+# with no error. asyncio.wait_for can't cancel the underlying thread, but it DOES
+# free the semaphore/job immediately so the pipeline keeps moving.
+_UPLOAD_TIMEOUT_S = 1800
+
+
 async def _with_retry(fn, *args, label="upload", **kwargs) -> dict:
     import os
 
     fast = os.getenv("STUDIO_FAST_RETRY") == "1"
     last = {}
     for attempt in range(3):
-        result = await asyncio.to_thread(fn, *args, **kwargs)
+        try:
+            result = await asyncio.wait_for(
+                asyncio.to_thread(fn, *args, **kwargs), timeout=_UPLOAD_TIMEOUT_S
+            )
+        except asyncio.TimeoutError:
+            result = {"ok": False, "status": "error",
+                      "error": f"{label} timed out after {_UPLOAD_TIMEOUT_S}s"}
         if result.get("ok"):
             return result
         last = result

@@ -43,6 +43,7 @@ yt-dlp>=2024.5.27
 # --- Platform APIs ---
 google-api-python-client==2.131.0
 google-auth-oauthlib==1.2.0
+google-auth-httplib2==0.4.0
 pytrends==4.9.2
 
 # --- Config / crypto ---

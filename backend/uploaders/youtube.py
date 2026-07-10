@@ -119,9 +119,18 @@ def _credentials(creds: dict):
 
 
 def _service(creds: dict):
+    import google_auth_httplib2
+    import httplib2
     from googleapiclient.discovery import build
 
-    return build("youtube", "v3", credentials=_credentials(creds), cache_discovery=False)
+    # httplib2 has NO default socket timeout — a stalled TCP connect/read (dead
+    # peer, blackholed route) blocks forever otherwise. This was the root cause
+    # of jobs stuck in "publishing" indefinitely: the resumable-upload chunk loop
+    # in upload_video() below has no bound of its own, so a hung socket here
+    # propagated all the way up through asyncio.to_thread with no exception ever
+    # raised. 300s is generous for a single chunk/refresh round-trip.
+    http = google_auth_httplib2.AuthorizedHttp(_credentials(creds), http=httplib2.Http(timeout=300))
+    return build("youtube", "v3", http=http, cache_discovery=False)
 
 
 def _fetch_channel(creds: dict) -> dict:
