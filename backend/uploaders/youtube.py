@@ -516,7 +516,19 @@ def upload_video(
         msg = str(exc)
         if "quota" in msg.lower():
             status = "quota_exceeded"
-        elif any(k in msg.lower() for k in ("refresherror", "invalid_grant", "token has been expired", "token_revoked")):
+        elif any(k in msg.lower() for k in (
+            "refresherror", "invalid_grant", "token has been expired", "token_revoked",
+            # Raised by our own wall-clock deadline above when next_chunk() spins
+            # forever without raising — confirmed via Railway logs that this ONLY
+            # happens during a dead-token 401-refresh storm, never a real network
+            # hang (a genuinely stalled socket blocks silently, producing zero log
+            # spam and zero CPU). Must classify as auth_error or _with_retry (which
+            # only stops early on a KNOWN-terminal status) burns a full 3-attempt/
+            # ~18min cascade on every publish, and the final message never matches
+            # _NO_AUTO_RETRY_MARKERS — so the job gets auto-resurrected forever
+            # instead of parking until the channel is reconnected.
+            "travado",
+        )):
             status = "auth_error"
         else:
             status = "error"

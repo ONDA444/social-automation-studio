@@ -265,7 +265,16 @@ async def run_publish(job_id: int) -> dict:
             try:
                 job.publish_status = results or {}
                 job.status = JobStatus.ERROR
-                job.error_message = f"Falha na publicação: {exc}"[:500]
+                # A pre-upload step (e.g. _ensure_ready_video_local's Drive download)
+                # can raise our own wall-clock-deadline TimeoutError directly, bypassing
+                # self_publish_youtube's auth_error classification entirely. Recognize
+                # it here too so the message matches _NO_AUTO_RETRY_MARKERS (park until
+                # reconnect) instead of getting endlessly auto-resurrected with a
+                # cryptic message that never tells the user to reconnect the channel.
+                if "travado" in str(exc).lower():
+                    job.error_message = _AUTH_BLOCKED
+                else:
+                    job.error_message = f"Falha na publicação: {exc}"[:500]
                 db.commit()
                 _emit(job_id, status=JobStatus.ERROR.value, error=str(exc))
             except Exception:  # noqa: BLE001
