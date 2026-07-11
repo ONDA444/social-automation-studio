@@ -131,6 +131,16 @@ def dispatch_publish(job_id: int) -> str:
     return "in_process"
 
 
+def dispatch_analyze_upload(job_id: int) -> str:
+    """Analyze a manually-uploaded video (Agenda "Enviar video do PC") off the
+    HTTP request thread. Always in-process (no Celery task defined for this —
+    analysis is lightweight compared to a full render, and USE_CELERY is off
+    by default anyway); shares the render semaphore since ffprobe/frame
+    extraction is CPU-bound like a render, not network I/O like a publish."""
+    _run_inprocess(run="analyze_upload", job_id=job_id)
+    return "in_process"
+
+
 def _run_inprocess(run: str, job_id: int) -> None:
     loop = _ensure_worker()
     fut = asyncio.run_coroutine_threadsafe(_guarded(run, job_id), loop)
@@ -149,12 +159,18 @@ def _run_inprocess(run: str, job_id: int) -> None:
 async def _guarded(run: str, job_id: int) -> None:
     # Render and publish use SEPARATE semaphores: a slow/stuck upload holds only
     # the publish pool and never blocks the render slot (and vice-versa).
-    if run == "pipeline":
+    # analyze_upload shares the render semaphore (CPU-bound, like a render).
+    if run in ("pipeline", "analyze_upload"):
         assert _render_sem is not None
         async with _render_sem:
-            from backend.agents.orchestrator import run_pipeline
+            if run == "pipeline":
+                from backend.agents.orchestrator import run_pipeline
 
-            await run_pipeline(job_id)
+                await run_pipeline(job_id)
+            else:
+                from backend.agents.manual_upload import run_analyze_upload
+
+                await run_analyze_upload(job_id)
     else:
         assert _publish_sem is not None
         async with _publish_sem:

@@ -61,10 +61,13 @@ export const api = {
   put: (p, b, opts) => req('PUT', p, b, opts),
   del: (p, opts) => req('DELETE', p, undefined, opts),
 
-  // multipart upload (CSV import, voice recording)
-  async upload(path, file) {
+  // multipart upload (CSV import, voice recording, manual video upload)
+  async upload(path, file, fields) {
     const fd = new FormData()
     fd.append('file', file)
+    for (const [k, v] of Object.entries(fields || {})) {
+      if (v !== undefined && v !== null && v !== '') fd.append(k, v)
+    }
     const res = await fetch(`${BASE}${path}`, { method: 'POST', body: fd })
     if (!res.ok) {
       let msg

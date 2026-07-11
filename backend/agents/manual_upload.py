@@ -1,0 +1,136 @@
+"""Manual video upload — analyze a user-picked local file and package it for Approvals.
+
+Reuses ready_video_seo's analysis/SEO engine (it only reads name/folder_path/niche
+off a duck-typed "ready" object, never a real ReadyVideo row) so a video uploaded
+from the user's own PC gets the same title/description/tags treatment as a Drive
+ready-video, without touching Drive's rotation/inventory — this is a standalone,
+one-off job, not a member of that pool.
+"""
+from __future__ import annotations
+
+import asyncio
+import logging
+import os
+
+from backend.database import SessionLocal
+from backend.events import publish_event
+from backend.models import JobStatus, VideoJob
+
+logger = logging.getLogger("studio.manual_upload")
+
+# Same ceiling as the YouTube-upload/Drive-download timeouts fixed elsewhere this
+# session: a hung ffprobe/ffmpeg/Gemini call must free the render-semaphore slot
+# and surface as a normal job ERROR instead of wedging the pipeline forever.
+_ANALYZE_TIMEOUT_S = 1800
+
+
+class _UploadContext:
+    """Duck-typed stand-in for a ReadyVideo row — ready_video_seo only reads
+    these three attributes off the `ready` argument it's given."""
+
+    def __init__(self, name: str, folder_path: str | None, niche: str | None):
+        self.name = name
+        self.folder_path = folder_path
+        self.niche = niche
+
+
+def _emit(job_id, **fields) -> None:
+    publish_event({"type": "manual_upload_update", "job_id": job_id, **fields})
+
+
+async def run_analyze_upload(job_id: int) -> None:
+    db = SessionLocal()
+    try:
+        job = db.get(VideoJob, job_id)
+        if not job:
+            return
+        try:
+            await asyncio.wait_for(
+                asyncio.to_thread(_analyze_sync, db, job), timeout=_ANALYZE_TIMEOUT_S
+            )
+        except asyncio.TimeoutError:
+            job.status = JobStatus.ERROR
+            job.error_message = "Análise do vídeo demorou demais (timeout)."
+            db.commit()
+            _emit(job_id, status="error", error=job.error_message)
+    except Exception as exc:  # noqa: BLE001 — a job must never hang in PROCESSING
+        logger.exception("run_analyze_upload failed for job %s", job_id)
+        try:
+            job = db.get(VideoJob, job_id)
+            if job:
+                job.status = JobStatus.ERROR
+                job.error_message = f"Falha ao analisar vídeo: {exc}"[:500]
+                db.commit()
+                _emit(job_id, status="error", error=str(exc))
+        except Exception:  # noqa: BLE001
+            logger.exception("could not persist ERROR status for upload job %s", job_id)
+    finally:
+        db.close()
+
+
+def _analyze_sync(db, job: VideoJob) -> None:
+    """Runs on a worker thread (see run_analyze_upload) — ffprobe, frame
+    extraction, and the optional Gemini call are all blocking calls, each with
+    its own explicit timeout inside ready_video_seo."""
+    from backend.agents.ready_video_seo import build_ready_video_package
+    from backend.models import PlatformAccount
+
+    local_path = job.main_video_path
+    if not local_path or not os.path.exists(local_path):
+        job.status = JobStatus.ERROR
+        job.error_message = "Arquivo de vídeo não encontrado após o upload."
+        db.commit()
+        return
+
+    account = db.get(PlatformAccount, job.account_id) if job.account_id else None
+    ctx = dict(job.video_context or {})
+    hint = (ctx.get("hint") or "").strip()
+    ready = _UploadContext(
+        name=os.path.basename(local_path),
+        folder_path=None,
+        niche=getattr(account, "niche", None) if account else None,
+    )
+
+    analysis, seo = build_ready_video_package(
+        job_id=job.id,
+        local_path=local_path,
+        ready=ready,
+        account=account,
+        content_type=job.content_type or "film_recap_ai_images",
+        video_format=job.video_format or "long",
+        title_seed=hint or job.title,
+    )
+
+    # A file ffprobe genuinely can't read is a different failure than "AI
+    # analysis unavailable" — ready_video_seo's deterministic fallback would
+    # still package SOMETHING, which would be actively misleading for a file
+    # that isn't a readable video at all.
+    if analysis.get("status") != "ok":
+        job.status = JobStatus.ERROR
+        job.error_message = "Arquivo de vídeo inválido ou corrompido."
+        job.video_context = {**ctx, "content_analysis": analysis}
+        db.commit()
+        _emit(job.id, status="error", error=job.error_message)
+        return
+
+    job.seo_metadata = seo
+    yt_title = ((seo.get("youtube") or {}).get("title") or job.title or "").strip()
+    if yt_title:
+        job.title = yt_title[:300]
+        job.topic = yt_title
+
+    if analysis.get("aspect_ratio") == "9:16":
+        job.video_format = "short"
+        job.shorts_paths = [local_path]
+    elif analysis.get("aspect_ratio") == "16:9":
+        job.video_format = "long"
+
+    ctx["content_analysis"] = analysis
+    ctx["seo_source"] = analysis.get("analysis_source") or "fallback"
+    job.video_context = ctx
+    job.status = JobStatus.AWAITING_APPROVAL
+    job.approval_status = "pending"
+    job.qc_status = "skipped_manual_upload"
+    job.compliance_status = "needs_rights_review"
+    db.commit()
+    _emit(job.id, status="awaiting_approval")

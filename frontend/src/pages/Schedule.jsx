@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { api, API_BASE } from '../api'
 import CalendarView from '../components/CalendarView.jsx'
+import ManualUploadModal from '../components/ManualUploadModal.jsx'
 import { PageHeader } from '../components/ui.jsx'
 import { fmtDate, PLATFORM_META } from '../lib'
 
@@ -138,6 +139,8 @@ export default function Schedule() {
   const openOAuth = (acct) => {
     window.open(`${BASE_API}/auth/${acct.platform}/start?account_id=${acct.id}`, 'oauth', 'width=500,height=640')
   }
+
+  const [uploadOpen, setUploadOpen] = useState(false)
 
   const openDriveOAuth = async () => {
     const popup = window.open('', 'drive-oauth', 'width=520,height=680')
@@ -296,6 +299,15 @@ export default function Schedule() {
               })}
             </select>
           </div>
+
+          <button
+            type="button"
+            className="btn btn-ghost w-full text-xs"
+            disabled={!sel}
+            onClick={() => setUploadOpen(true)}
+          >
+            Enviar vídeo do PC
+          </button>
 
           {/* Status de conexão */}
           {sel && selAccount && (
@@ -723,6 +735,8 @@ export default function Schedule() {
           </div>
         )}
       </div>
+
+      <ManualUploadModal open={uploadOpen} onClose={() => setUploadOpen(false)} accountId={sel} />
     </div>
   )
 }

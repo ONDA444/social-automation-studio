@@ -167,6 +167,10 @@ class Settings(BaseSettings):
     default_tts_voice: str = "pt-BR-AntonioNeural"
     default_language: str = "pt-BR"
     log_level: str = "INFO"
+    # Cap on a manually-uploaded video (Agenda "Enviar video do PC"). Streamed to
+    # disk in chunks either way, but a hard cap keeps a mistaken huge upload from
+    # filling the container's ephemeral disk.
+    max_manual_upload_mb: int = 500
     # Monetization CTA injected at the TOP of every YouTube description (affiliate /
     # digital product / newsletter links + FTC disclosure). The only revenue that does
     # NOT require the channel to be in the YPP. Empty = disabled. Set MONETIZATION_CTA
