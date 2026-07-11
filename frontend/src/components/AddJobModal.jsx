@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { api } from '../api'
 
 // Fallback usado quando GET /content-types falhar ou ainda não existir.
@@ -52,7 +53,13 @@ export default function AddJobModal({ open, onClose, onCreated }) {
     } catch (e) { alert(e.message) } finally { setBusy(false) }
   }
 
-  return (
+  // Portal to document.body: a page wrapper's `.fade-in` animation leaves a
+  // residual `transform` after finishing (animation-fill-mode: both), which
+  // breaks `fixed inset-0` positioning for any modal nested inside it (the
+  // ancestor's transform creates a new containing block, pinning `fixed` to
+  // that box instead of the viewport). See ManualUploadModal.jsx for the
+  // full writeup of this bug.
+  return createPortal(
     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm grid place-items-center z-50 p-3 sm:p-4 fade-in overflow-y-auto" onClick={onClose}>
       <div className="card p-4 sm:p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto shadow-[0_20px_60px_rgba(0,0,0,0.5)] animate-[fadeIn_.2s_ease-out] origin-center" onClick={(e) => e.stopPropagation()}>
         <h3 className="heading text-lg font-semibold mb-4">Novo vídeo</h3>
@@ -108,6 +115,7 @@ export default function AddJobModal({ open, onClose, onCreated }) {
           <button className="btn-primary w-full sm:w-auto" disabled={busy} onClick={submit}>{busy ? 'Criando...' : (themes.length > 1 ? `Criar ${themes.length} vídeos` : 'Criar e gerar')}</button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   )
 }

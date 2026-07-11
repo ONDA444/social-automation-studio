@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { createPortal } from 'react-dom'
 import { api } from '../api'
 
 // "Enviar video do PC": upload a local file, analyze it with the same engine
@@ -36,7 +37,15 @@ export default function ManualUploadModal({ open, onClose, accountId }) {
     }
   }
 
-  return (
+  // Rendered via portal straight onto document.body: `fixed` positioning only
+  // fills the viewport when NO ancestor has a `transform` (creates a new
+  // containing block otherwise). The page wrapper's `.fade-in` animation
+  // leaves a residual `transform: matrix(...)` after finishing
+  // (animation-fill-mode: both), which silently broke `fixed inset-0` for any
+  // modal nested inside it — the backdrop rendered pinned to the SCROLLABLE
+  // CONTENT AREA's box instead of the viewport, pushing the dialog itself off
+  // screen. A portal escapes that ancestor entirely.
+  return createPortal(
     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm grid place-items-center z-50 p-3 sm:p-4 fade-in overflow-y-auto" onClick={close}>
       <div className="card p-4 sm:p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto shadow-[0_20px_60px_rgba(0,0,0,0.5)] animate-[fadeIn_.2s_ease-out] origin-center" onClick={(e) => e.stopPropagation()}>
         <h3 className="heading text-lg font-semibold mb-1">Enviar vídeo do PC</h3>
@@ -96,6 +105,7 @@ export default function ManualUploadModal({ open, onClose, accountId }) {
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   )
 }

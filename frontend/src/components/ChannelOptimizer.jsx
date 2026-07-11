@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { api } from '../api'
 
 const ACTION_META = {
@@ -71,7 +72,11 @@ export default function ChannelOptimizer({ account, onClose, onApplied }) {
   const willApply = fields.some((f) => f.action === 'auto') ||
     fields.some((f) => f.action === 'confirm' && confirmed[f.key])
 
-  return (
+  // Portal to document.body — see ManualUploadModal.jsx for why: a page
+  // wrapper's `.fade-in` animation leaves a residual `transform` after
+  // finishing (animation-fill-mode: both), breaking `fixed inset-0` for any
+  // modal nested inside it.
+  return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
       style={{ background: 'rgba(0,0,0,0.65)', backdropFilter: 'blur(3px)' }} onClick={onClose}>
       <div className="card w-full max-w-2xl max-h-[88vh] overflow-y-auto p-0 fade-in"
@@ -207,6 +212,7 @@ export default function ChannelOptimizer({ account, onClose, onApplied }) {
           )}
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   )
 }

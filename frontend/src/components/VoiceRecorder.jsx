@@ -1,4 +1,5 @@
 import { useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { api } from '../api'
 
 export default function VoiceRecorder({ account, onClose, onCloned }) {
@@ -83,7 +84,11 @@ export default function VoiceRecorder({ account, onClose, onCloned }) {
     ? `${(bytes / 1024).toFixed(0)} KB`
     : `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 
-  return (
+  // Portal to document.body — see ManualUploadModal.jsx for why: a page
+  // wrapper's `.fade-in` animation leaves a residual `transform` after
+  // finishing (animation-fill-mode: both), breaking `fixed inset-0` for any
+  // modal nested inside it.
+  return createPortal(
     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm grid place-items-center z-50 p-3 sm:p-4 fade-in overflow-y-auto" onClick={onClose}>
       <div className="card p-4 sm:p-6 w-full max-w-md max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
         <h3 className="heading text-lg font-semibold mb-1">🎙️ Voz do canal</h3>
@@ -169,6 +174,7 @@ export default function VoiceRecorder({ account, onClose, onCloned }) {
 
         <button className="btn-ghost w-full text-xs mt-2" onClick={onClose}>Fechar</button>
       </div>
-    </div>
+    </div>,
+    document.body
   )
 }
