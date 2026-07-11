@@ -662,19 +662,22 @@ def _try_create_ready_video_job(db, acct, scheduled_naive: datetime, theme=None)
             if k not in {"title_options"} and not (k == "warnings" and not v)
         }
         ready.metadata_json = meta
-        if settings.auto_publish:
-            job.approval_status = "approved"
-            if job.scheduled_at is None:
-                job.scheduled_at = datetime.utcnow()
-            if (settings.publish_mode or "schedule").lower() == "schedule":
-                job.status = JobStatus.PUBLISHING
-            else:
-                job.status = JobStatus.APPROVED
+        # Drive ready-videos never need human approval — it's the user's own
+        # pre-made file, nothing here is AI-generated. This is unconditional
+        # (not gated on settings.auto_publish, which only governs the AI/manual
+        # flows) so a Drive job never sits waiting in AWAITING_APPROVAL.
+        job.approval_status = "approved"
+        if job.scheduled_at is None:
+            job.scheduled_at = datetime.utcnow()
+        if (settings.publish_mode or "schedule").lower() == "schedule":
+            job.status = JobStatus.PUBLISHING
+        else:
+            job.status = JobStatus.APPROVED
         if theme is not None:
             theme.status = "consumed"
             theme.consumed_job_id = job.id
         db.commit()
-        if settings.auto_publish and (settings.publish_mode or "schedule").lower() == "schedule":
+        if (settings.publish_mode or "schedule").lower() == "schedule":
             from backend.pipeline.dispatch import dispatch_publish
 
             dispatch_publish(job.id)
