@@ -14,14 +14,18 @@ from backend.models import JobStatus, PlatformAccount, VideoJob
 
 
 def _make_session():
+    """Returns (session, sessionmaker) sharing one in-memory engine, so a test
+    can patch SessionLocal to the same sessionmaker _analyze_sync uses
+    internally (it opens its own session by job_id, not the caller's)."""
     engine = create_engine("sqlite:///:memory:", future=True)
     Base.metadata.create_all(bind=engine)
-    return sessionmaker(bind=engine, future=True)()
+    Session = sessionmaker(bind=engine, future=True)
+    return Session(), Session
 
 
 class ManualUploadAnalysisTests(unittest.TestCase):
     def test_valid_video_lands_in_awaiting_approval_with_real_seo(self) -> None:
-        db = _make_session()
+        db, Session = _make_session()
         with tempfile.TemporaryDirectory() as tmp:
             local_path = Path(tmp) / "meu_video.mp4"
             local_path.write_bytes(b"not a real video, just needs to exist")
@@ -59,11 +63,13 @@ class ManualUploadAnalysisTests(unittest.TestCase):
                     "category_id": "22",
                 },
             }
-            with patch(
+            job_id = job.id
+            with patch("backend.agents.manual_upload.SessionLocal", Session), patch(
                 "backend.agents.ready_video_seo.build_ready_video_package",
                 return_value=(fake_analysis, fake_seo),
             ):
-                _analyze_sync(db, job)
+                _analyze_sync(job_id)
+            db.refresh(job)
 
             self.assertEqual(job.status, JobStatus.AWAITING_APPROVAL)
             self.assertEqual(job.approval_status, "pending")
@@ -74,7 +80,7 @@ class ManualUploadAnalysisTests(unittest.TestCase):
             self.assertEqual(job.video_context["seo_source"], "vision_llm")
 
     def test_corrupt_file_lands_in_error_not_generic_fallback(self) -> None:
-        db = _make_session()
+        db, Session = _make_session()
         with tempfile.TemporaryDirectory() as tmp:
             local_path = Path(tmp) / "corrompido.mp4"
             local_path.write_bytes(b"garbage")
@@ -97,18 +103,20 @@ class ManualUploadAnalysisTests(unittest.TestCase):
             db.commit()
 
             fake_analysis = {"status": "fallback", "analysis_source": "probe_fallback", "warnings": ["ffprobe unavailable or unreadable video"]}
-            with patch(
+            job_id = job.id
+            with patch("backend.agents.manual_upload.SessionLocal", Session), patch(
                 "backend.agents.ready_video_seo.build_ready_video_package",
                 return_value=(fake_analysis, {}),
             ):
-                _analyze_sync(db, job)
+                _analyze_sync(job_id)
+            db.refresh(job)
 
             self.assertEqual(job.status, JobStatus.ERROR)
             self.assertEqual(job.error_message, "Arquivo de vídeo inválido ou corrompido.")
             self.assertIsNone(job.seo_metadata)
 
     def test_missing_file_on_disk_is_an_error_not_a_hang(self) -> None:
-        db = _make_session()
+        db, Session = _make_session()
         account = PlatformAccount(platform="youtube", display_name="Canal Teste")
         db.add(account)
         db.flush()
@@ -123,8 +131,11 @@ class ManualUploadAnalysisTests(unittest.TestCase):
         )
         db.add(job)
         db.commit()
+        job_id = job.id
 
-        _analyze_sync(db, job)
+        with patch("backend.agents.manual_upload.SessionLocal", Session):
+            _analyze_sync(job_id)
+        db.refresh(job)
 
         self.assertEqual(job.status, JobStatus.ERROR)
         self.assertEqual(job.error_message, "Arquivo de vídeo não encontrado após o upload.")

@@ -48,9 +48,16 @@ async def run_analyze_upload(job_id: int) -> None:
         if not job:
             return
         try:
+            # _analyze_sync opens its OWN session (job_id only, not this
+            # coroutine's `db`/`job`) — SQLAlchemy Sessions are not thread-safe,
+            # and sharing one across the event-loop thread and this off-thread
+            # worker is undefined behavior that can silently deadlock the
+            # underlying DBAPI connection with ZERO cpu usage, indistinguishable
+            # from a hung network call.
             await asyncio.wait_for(
-                asyncio.to_thread(_analyze_sync, db, job), timeout=_ANALYZE_TIMEOUT_S
+                asyncio.to_thread(_analyze_sync, job_id), timeout=_ANALYZE_TIMEOUT_S
             )
+            db.refresh(job)
         except asyncio.TimeoutError:
             job.status = JobStatus.ERROR
             job.error_message = "Análise do vídeo demorou demais (timeout)."
@@ -71,69 +78,77 @@ async def run_analyze_upload(job_id: int) -> None:
         db.close()
 
 
-def _analyze_sync(db, job: VideoJob) -> None:
-    """Runs on a worker thread (see run_analyze_upload) — ffprobe, frame
-    extraction, and the optional Gemini call are all blocking calls, each with
-    its own explicit timeout inside ready_video_seo."""
+def _analyze_sync(job_id: int) -> None:
+    """Runs on a worker thread (see run_analyze_upload) — opens its own DB
+    session (see that function's comment for why). ffprobe, frame extraction,
+    and the optional Gemini call are all blocking calls, each with its own
+    explicit timeout inside ready_video_seo."""
     from backend.agents.ready_video_seo import build_ready_video_package
     from backend.models import PlatformAccount
 
-    local_path = job.main_video_path
-    if not local_path or not os.path.exists(local_path):
-        job.status = JobStatus.ERROR
-        job.error_message = "Arquivo de vídeo não encontrado após o upload."
+    db = SessionLocal()
+    try:
+        job = db.get(VideoJob, job_id)
+        if not job:
+            return
+        local_path = job.main_video_path
+        if not local_path or not os.path.exists(local_path):
+            job.status = JobStatus.ERROR
+            job.error_message = "Arquivo de vídeo não encontrado após o upload."
+            db.commit()
+            return
+
+        account = db.get(PlatformAccount, job.account_id) if job.account_id else None
+        ctx = dict(job.video_context or {})
+        hint = (ctx.get("hint") or "").strip()
+        ready = _UploadContext(
+            name=os.path.basename(local_path),
+            folder_path=None,
+            niche=getattr(account, "niche", None) if account else None,
+        )
+
+        analysis, seo = build_ready_video_package(
+            job_id=job.id,
+            local_path=local_path,
+            ready=ready,
+            account=account,
+            content_type=job.content_type or "film_recap_ai_images",
+            video_format=job.video_format or "long",
+            title_seed=hint or job.title,
+        )
+
+        # A file ffprobe genuinely can't read is a different failure than "AI
+        # analysis unavailable" — ready_video_seo's deterministic fallback would
+        # still package SOMETHING, which would be actively misleading for a file
+        # that isn't a readable video at all.
+        if analysis.get("status") != "ok":
+            job.status = JobStatus.ERROR
+            job.error_message = "Arquivo de vídeo inválido ou corrompido."
+            job.video_context = {**ctx, "content_analysis": analysis}
+            db.commit()
+            _emit(job.id, status="error", error=job.error_message)
+            return
+
+        job.seo_metadata = seo
+        yt_title = ((seo.get("youtube") or {}).get("title") or job.title or "").strip()
+        if yt_title:
+            job.title = yt_title[:300]
+            job.topic = yt_title
+
+        if analysis.get("aspect_ratio") == "9:16":
+            job.video_format = "short"
+            job.shorts_paths = [local_path]
+        elif analysis.get("aspect_ratio") == "16:9":
+            job.video_format = "long"
+
+        ctx["content_analysis"] = analysis
+        ctx["seo_source"] = analysis.get("analysis_source") or "fallback"
+        job.video_context = ctx
+        job.status = JobStatus.AWAITING_APPROVAL
+        job.approval_status = "pending"
+        job.qc_status = "skipped_manual_upload"
+        job.compliance_status = "needs_rights_review"
         db.commit()
-        return
-
-    account = db.get(PlatformAccount, job.account_id) if job.account_id else None
-    ctx = dict(job.video_context or {})
-    hint = (ctx.get("hint") or "").strip()
-    ready = _UploadContext(
-        name=os.path.basename(local_path),
-        folder_path=None,
-        niche=getattr(account, "niche", None) if account else None,
-    )
-
-    analysis, seo = build_ready_video_package(
-        job_id=job.id,
-        local_path=local_path,
-        ready=ready,
-        account=account,
-        content_type=job.content_type or "film_recap_ai_images",
-        video_format=job.video_format or "long",
-        title_seed=hint or job.title,
-    )
-
-    # A file ffprobe genuinely can't read is a different failure than "AI
-    # analysis unavailable" — ready_video_seo's deterministic fallback would
-    # still package SOMETHING, which would be actively misleading for a file
-    # that isn't a readable video at all.
-    if analysis.get("status") != "ok":
-        job.status = JobStatus.ERROR
-        job.error_message = "Arquivo de vídeo inválido ou corrompido."
-        job.video_context = {**ctx, "content_analysis": analysis}
-        db.commit()
-        _emit(job.id, status="error", error=job.error_message)
-        return
-
-    job.seo_metadata = seo
-    yt_title = ((seo.get("youtube") or {}).get("title") or job.title or "").strip()
-    if yt_title:
-        job.title = yt_title[:300]
-        job.topic = yt_title
-
-    if analysis.get("aspect_ratio") == "9:16":
-        job.video_format = "short"
-        job.shorts_paths = [local_path]
-    elif analysis.get("aspect_ratio") == "16:9":
-        job.video_format = "long"
-
-    ctx["content_analysis"] = analysis
-    ctx["seo_source"] = analysis.get("analysis_source") or "fallback"
-    job.video_context = ctx
-    job.status = JobStatus.AWAITING_APPROVAL
-    job.approval_status = "pending"
-    job.qc_status = "skipped_manual_upload"
-    job.compliance_status = "needs_rights_review"
-    db.commit()
-    _emit(job.id, status="awaiting_approval")
+        _emit(job.id, status="awaiting_approval")
+    finally:
+        db.close()

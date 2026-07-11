@@ -126,9 +126,13 @@ async def run_publish(job_id: int) -> dict:
         # FREEZES THE ENTIRE EVENT LOOP, since nothing yields control back until
         # this call returns. to_thread moves it off-loop; wait_for bounds it so
         # a genuinely stalled download can't wedge the pipeline forever.
+        # Uses its OWN DB session (job_id only, not this coroutine's `db`/`job`)
+        # -- see _ensure_ready_video_local's docstring for why sharing one
+        # across threads is unsafe. Refresh afterwards to pick up its commit.
         await asyncio.wait_for(
-            asyncio.to_thread(_ensure_ready_video_local, db, job), timeout=_UPLOAD_TIMEOUT_S
+            asyncio.to_thread(_ensure_ready_video_local, job_id), timeout=_UPLOAD_TIMEOUT_S
         )
+        db.refresh(job)
         shorts = job.shorts_paths or []
         # YouTube's publishAt must be in the FUTURE. In the slot-gated/auto-publish
         # model the slot has already arrived (scheduled_at <= now), so a past value
@@ -428,23 +432,37 @@ def _ready_video_id(job) -> int | None:
         return None
 
 
-def _ensure_ready_video_local(db, job) -> None:
-    ready_id = _ready_video_id(job)
-    if not ready_id:
-        return
-    if job.main_video_path and os.path.exists(job.main_video_path):
-        return
+def _ensure_ready_video_local(job_id: int) -> None:
+    """Runs off-thread (see run_publish) — opens its OWN DB session instead of
+    sharing the caller's. SQLAlchemy Sessions are not thread-safe: reusing one
+    across the event-loop thread and this worker thread is undefined behavior
+    and can silently deadlock the underlying DBAPI connection with ZERO cpu
+    usage — indistinguishable from a hung network call, and the reason this
+    session spent hours chasing what looked like a dead socket. A dedicated
+    session per thread removes that hazard entirely."""
     from backend.agents.drive_library import DriveLibraryService
     from backend.models import ReadyVideo
 
-    ready = db.get(ReadyVideo, ready_id)
-    if not ready:
-        return
-    path = DriveLibraryService(db).download_for_job(ready, job.id)
-    job.main_video_path = path
-    if (job.video_format or "long") == "short":
-        job.shorts_paths = [path]
-    db.commit()
+    db = SessionLocal()
+    try:
+        job = db.get(VideoJob, job_id)
+        if not job:
+            return
+        ready_id = _ready_video_id(job)
+        if not ready_id:
+            return
+        if job.main_video_path and os.path.exists(job.main_video_path):
+            return
+        ready = db.get(ReadyVideo, ready_id)
+        if not ready:
+            return
+        path = DriveLibraryService(db).download_for_job(ready, job.id)
+        job.main_video_path = path
+        if (job.video_format or "long") == "short":
+            job.shorts_paths = [path]
+        db.commit()
+    finally:
+        db.close()
 
 
 def _finish_ready_video_if_published(db, job, results: dict) -> None:
