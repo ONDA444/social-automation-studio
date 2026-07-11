@@ -12,9 +12,13 @@ builder = "nixpacks"
 # tasks to Redis that NO process ever consumed, so every publish/render hung
 # forever until the 15-minute stuck-job sweep reset it and looped again.
 startCommand = "if [ \"$RAILWAY_SERVICE_NAME\" = \"worker\" ]; then celery -A backend.pipeline.celery_app worker --loglevel=info --concurrency=2; elif [ \"$RAILWAY_SERVICE_NAME\" = \"beat\" ]; then celery -A backend.pipeline.celery_app beat --loglevel=info; else uvicorn backend.main:app --host 0.0.0.0 --port $PORT; fi"
-healthcheckPath = "/health"
-healthcheckTimeout = 30
 restartPolicyType = "on_failure"
+
+# No healthcheckPath here on purpose: this config applies to worker/beat too,
+# and neither serves HTTP (a Celery worker/beat process has no /health to hit),
+# so a blanket healthcheckPath here fails their deploy every time and Railway
+# rolls back to the last passing (uvicorn) build. web's healthcheck is set
+# per-service in the Railway dashboard/API instead.
 
 # Requires the Redis + PostgreSQL plugins attached (they inject REDIS_URL /
 # DATABASE_URL) and USE_CELERY=true set on all 3 services.
