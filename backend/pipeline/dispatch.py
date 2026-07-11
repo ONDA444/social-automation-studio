@@ -156,6 +156,17 @@ def dispatch_job(job_id: int) -> str:
 
 
 def dispatch_publish(job_id: int) -> str:
+    # A manual PC upload's file only ever exists on the local disk of whichever
+    # container received the original HTTP upload (backend/routers/schedule.py
+    # saves it under settings.temp_dir, never to shared/durable storage). Every
+    # caller of dispatch_publish() for this job (approve endpoint, republish
+    # endpoint, _job_publish_due) is itself an HTTP/scheduler tick running
+    # in-process on THAT SAME container — so publish must also run in-process
+    # here, not hop to the separate Celery worker container, which never
+    # received that file and would report it as "lost" even with zero restarts.
+    if _is_manual_upload(job_id):
+        _run_inprocess(run="publish", job_id=job_id)
+        return "in_process"
     if settings.use_celery and _redis_ok():
         try:
             from backend.pipeline.video_pipeline import publish_job
