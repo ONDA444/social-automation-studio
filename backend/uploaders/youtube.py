@@ -128,8 +128,18 @@ def _service(creds: dict):
     # of jobs stuck in "publishing" indefinitely: the resumable-upload chunk loop
     # in upload_video() below has no bound of its own, so a hung socket here
     # propagated all the way up through asyncio.to_thread with no exception ever
-    # raised. 300s is generous for a single chunk/refresh round-trip.
-    http = google_auth_httplib2.AuthorizedHttp(_credentials(creds), http=httplib2.Http(timeout=300))
+    # raised.
+    #
+    # 30s, not 300s: confirmed via Railway logs that with a 300s per-call socket
+    # timeout, a SINGLE next_chunk() call can itself stall for minutes (observed
+    # multi-minute silent gaps between "Refreshing credentials" bursts) — since
+    # upload_video()'s 240s wall-clock deadline only checks BETWEEN next_chunk()
+    # calls, one slow call can blow straight through that budget and race past
+    # the outer 300s asyncio.wait_for in publisher.py too, landing back on the
+    # exact 18-21min dead-token cascade the deadline was meant to prevent. 30s
+    # is still generous for a real chunk/refresh round-trip and guarantees the
+    # 240s loop deadline gets checked often enough to actually hold.
+    http = google_auth_httplib2.AuthorizedHttp(_credentials(creds), http=httplib2.Http(timeout=30))
     return build("youtube", "v3", http=http, cache_discovery=False)
 
 

@@ -180,10 +180,15 @@ class DriveLibraryService:
             # peer, blackholed route) blocks forever otherwise, which is exactly what
             # froze the shared render/publish worker loop (download_for_job runs
             # synchronously on that loop, not in a thread — see publisher.py).
-            http = google_auth_httplib2.AuthorizedHttp(creds, http=httplib2.Http(timeout=300))
+            #
+            # 30s, not 300s: a single next_chunk() call can otherwise stall for
+            # minutes on its own, blowing past download_for_job's 240s wall-clock
+            # loop deadline before that deadline ever gets checked again (see the
+            # matching fix + full reasoning in uploaders/youtube.py's _service()).
+            http = google_auth_httplib2.AuthorizedHttp(creds, http=httplib2.Http(timeout=30))
             return build("drive", "v3", http=http, cache_discovery=False)
         if settings.google_drive_api_key:
-            http = httplib2.Http(timeout=300)
+            http = httplib2.Http(timeout=30)
             return build("drive", "v3", developerKey=settings.google_drive_api_key, http=http, cache_discovery=False)
         raise RuntimeError("Drive nao conectado. Conecte em /drive-library/auth/start ou configure GOOGLE_DRIVE_API_KEY.")
 
