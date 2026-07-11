@@ -503,10 +503,23 @@ def upload_video(
         # normal auth_error path (msg matching below) take over.
         import time as _time
 
+        # TEMP DIAGNOSTIC (see commit message): deadline shortened to 25s and
+        # loop instrumented with CANARY_UPLOAD_LOOP log lines to prove, from
+        # Railway logs alone, whether this exact code path is what's actually
+        # running and whether the deadline check is really being reached —
+        # prior 240s deadline never visibly fired in production despite two
+        # rounds of fixes, so stop guessing and get direct proof.
+        logger.warning("CANARY_UPLOAD_LOOP start job video_path=%s", video_path)
         response = None
-        deadline = _time.monotonic() + 240
+        deadline = _time.monotonic() + 25
+        _iter = 0
         while response is None:
+            _iter += 1
+            if _iter % 20 == 0:
+                logger.warning("CANARY_UPLOAD_LOOP iter=%s elapsed=%.1fs",
+                               _iter, 25 - (deadline - _time.monotonic()))
             if _time.monotonic() > deadline:
+                logger.warning("CANARY_UPLOAD_LOOP deadline hit at iter=%s", _iter)
                 raise TimeoutError(
                     "Upload travado (sem progresso) — provável token OAuth inválido "
                     "ou falha de rede persistente."
