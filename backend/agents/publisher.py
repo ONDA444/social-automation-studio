@@ -39,7 +39,17 @@ def _emit(job_id, **fields):
 # silently exhaust the entire publish pool and every future job queues forever
 # with no error. asyncio.wait_for can't cancel the underlying thread, but it DOES
 # free the semaphore/job immediately so the pipeline keeps moving.
-_UPLOAD_TIMEOUT_S = 1800
+#
+# Deliberately short (was 1800s/30min): a DEAD connection (DNS resolution
+# hanging, a blackholed route) produces ZERO cpu/network activity for the
+# ENTIRE wait — confirmed via Railway metrics showing a flat 0.0 vCPU during
+# a stuck job. A wait this long just delays the inevitable failure/retry by
+# half an hour per attempt while a job silently occupies a publish slot,
+# masking the problem instead of surfacing it. 300s matches the httplib2
+# socket timeout in uploaders/youtube.py -- generous for a real (if slow)
+# upload of the short clips this pipeline actually handles, tight enough
+# that a genuinely dead attempt fails fast and frees the slot for retry.
+_UPLOAD_TIMEOUT_S = 300
 
 
 async def _with_retry(fn, *args, label="upload", **kwargs) -> dict:

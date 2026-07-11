@@ -11,6 +11,7 @@ import importlib
 import logging
 import os
 import shutil
+import socket
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -20,6 +21,15 @@ from fastapi.staticfiles import StaticFiles
 from backend import events
 from backend.config import settings
 from backend.database import engine
+
+# Process-wide safety net: any blocking socket call anywhere (including a
+# stalled TCP connect/read on a library that forgot to set its own timeout)
+# gets bounded to 60s instead of hanging forever. This does NOT cover DNS
+# resolution (socket.getaddrinfo ignores this setting) -- that gap is closed
+# by the outer asyncio.wait_for around every off-thread network call in
+# publisher.py / manual_upload.py, kept short specifically because a default
+# socket timeout alone can't reach it.
+socket.setdefaulttimeout(60)
 
 logging.basicConfig(
     level=settings.log_level,

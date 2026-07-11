@@ -18,10 +18,13 @@ from backend.models import JobStatus, VideoJob
 
 logger = logging.getLogger("studio.manual_upload")
 
-# Same ceiling as the YouTube-upload/Drive-download timeouts fixed elsewhere this
-# session: a hung ffprobe/ffmpeg/Gemini call must free the render-semaphore slot
-# and surface as a normal job ERROR instead of wedging the pipeline forever.
-_ANALYZE_TIMEOUT_S = 1800
+# Same ceiling as the YouTube-upload/Drive-download timeouts in publisher.py: a
+# hung ffprobe/ffmpeg/Gemini call must free the render-semaphore slot and
+# surface as a normal job ERROR instead of wedging the pipeline forever. Kept
+# short (see publisher.py's _UPLOAD_TIMEOUT_S comment) -- a dead network call
+# shows zero forward progress for its entire duration, so waiting longer only
+# delays the failure/retry without ever helping it succeed.
+_ANALYZE_TIMEOUT_S = 300
 
 
 class _UploadContext:
