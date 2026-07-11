@@ -106,6 +106,20 @@ def _redis_ok() -> bool:
     return ok
 
 
+def _is_manual_upload(job_id: int) -> bool:
+    """True if this job was created from Agenda's "Enviar vídeo do PC" — its
+    main_video_path is the user's own file and must never be regenerated."""
+    from backend.database import SessionLocal
+    from backend.models import VideoJob
+
+    db = SessionLocal()
+    try:
+        job = db.get(VideoJob, job_id)
+        return bool(job and job.mode == "from_manual_upload")
+    finally:
+        db.close()
+
+
 def dispatch_job(job_id: int) -> str:
     """Enqueue production of a job. Returns the transport used.
 
@@ -122,6 +136,13 @@ def dispatch_job(job_id: int) -> str:
     if os.getenv("SAFE_BOOT", "").strip().lower() in {"1", "true", "yes", "on"}:
         logger.warning("SAFE_BOOT ativo — render do job %s adiado (continua QUEUED).", job_id)
         return "deferred"
+    # A manual PC upload must NEVER go through the full AI generation pipeline —
+    # the user's original file is sacred, only SEO/metadata may be touched. Every
+    # re-dispatch path (retry button, boot recovery, the stuck-job/error sweep)
+    # calls this same dispatch_job(), so guarding here catches all of them at
+    # once instead of patching each call site. Redirect to the one safe path.
+    if _is_manual_upload(job_id):
+        return dispatch_analyze_upload(job_id)
     if settings.use_celery and _redis_ok():
         try:
             from backend.pipeline.video_pipeline import process_job
