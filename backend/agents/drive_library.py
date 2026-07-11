@@ -632,10 +632,26 @@ class DriveLibraryService:
             self.db.commit()
             return str(dest)
         request = self._service().files().get_media(fileId=ready.drive_file_id, supportsAllDrives=True)
+        # Hard wall-clock deadline: a dead/revoked OAuth refresh_token makes
+        # google-auth-httplib2 log endless "Refreshing credentials due to a 401
+        # response" retries and hand next_chunk() back (status, False) WITHOUT
+        # ever raising — this loop then spins forever, burning real CPU/network,
+        # and no outer asyncio.wait_for can help because the underlying OS thread
+        # never yields (see the matching fix in uploaders/youtube.py upload_video
+        # for the full story). Bound it explicitly so a dead token surfaces as a
+        # normal exception instead of hanging the publish pipeline indefinitely.
+        import time as _time
+
         with dest.open("wb") as fh:
             downloader = MediaIoBaseDownload(fh, request, chunksize=1024 * 1024 * 8)
             done = False
+            deadline = _time.monotonic() + 240
             while not done:
+                if _time.monotonic() > deadline:
+                    raise TimeoutError(
+                        "Download do Drive travado (sem progresso) — provável token "
+                        "OAuth inválido ou falha de rede persistente."
+                    )
                 _, done = downloader.next_chunk()
         ready.local_path = str(dest)
         self.db.commit()

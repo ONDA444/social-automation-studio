@@ -478,12 +478,29 @@ def upload_video(
 
         # num_retries lets googleapiclient retry transient (5xx / connection-reset)
         # failures with exponential backoff instead of bubbling a one-off blip up as
-        # a hard publish failure. NOTE (follow-up, needs review/test): a true TCP
-        # stall can still hang next_chunk — set an httplib2 socket timeout on the
-        # transport in _service() to bound it. Not done here to avoid aborting slow
-        # large-video uploads on an unverifiable change to the publish path.
+        # a hard publish failure.
+        #
+        # Hard wall-clock deadline on the loop itself: confirmed via Railway logs
+        # that a dead/revoked OAuth refresh_token makes google-auth-httplib2 log
+        # "Refreshing credentials due to a 401 response" and hand next_chunk() a
+        # (status, None) pair WITHOUT ever raising — so this loop spun forever,
+        # continuously re-hitting Google's token endpoint, burning real CPU/network
+        # the whole time. That's why the outer asyncio.wait_for(300s) in
+        # publisher.py never helped: it can cancel the *awaiting coroutine*, but a
+        # real OS thread stuck in a tight synchronous loop keeps running regardless
+        # (Python threads can't be force-cancelled), so the job never reached a
+        # terminal state. Raising here lets the thread actually finish and the
+        # normal auth_error path (msg matching below) take over.
+        import time as _time
+
         response = None
+        deadline = _time.monotonic() + 240
         while response is None:
+            if _time.monotonic() > deadline:
+                raise TimeoutError(
+                    "Upload travado (sem progresso) — provável token OAuth inválido "
+                    "ou falha de rede persistente."
+                )
             _, response = request.next_chunk(num_retries=3)
         video_id = response["id"]
 
