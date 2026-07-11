@@ -388,7 +388,16 @@ async def health():
     elif any(c["status"] == "yellow" for c in checks.values()):
         overall = "yellow"
 
-    return {"status": overall, "checks": checks}
+    # Railway auto-injects these on every deploy — surfacing them here lets us
+    # confirm from the OUTSIDE (curl) whether a given fix actually shipped,
+    # instead of guessing from job behavior after a push.
+    deploy = {
+        "commit": os.getenv("RAILWAY_GIT_COMMIT_SHA", "")[:12] or None,
+        "branch": os.getenv("RAILWAY_GIT_BRANCH") or None,
+        "deployed_at": os.getenv("RAILWAY_DEPLOYMENT_CREATED_AT") or None,
+    }
+
+    return {"status": overall, "checks": checks, "deploy": deploy}
 
 
 @app.websocket("/ws")
