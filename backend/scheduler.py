@@ -212,12 +212,21 @@ def _job_recover_stuck_publishing() -> None:
     recovery (backend.main._apply_orphan_transition) — never blindly
     re-publish a job that may have already uploaded. Jobs that come out as
     APPROVED (upload never started) are re-dispatched immediately.
+
+    Skips any job dispatch.is_inflight() still reports as running: a job that
+    is merely SLOW (not dead — e.g. a real upload still grinding through a
+    large file on a slow connection) must never be "recovered" and
+    re-dispatched while its original task is still alive. Doing so used to
+    spawn a second concurrent attempt for the same job, and with only 2
+    publish slots, two such phantom duplicates alone exhausted the entire
+    pool — the sweep meant to unstick the pipeline was creating a slower,
+    self-renewing version of the exact deadlock it was built to fix.
     """
     from sqlalchemy import select
 
     from backend.main import _apply_orphan_transition, _safe_boot
     from backend.models import JobStatus, VideoJob
-    from backend.pipeline.dispatch import dispatch_publish
+    from backend.pipeline.dispatch import dispatch_publish, is_inflight
 
     cutoff = datetime.utcnow() - timedelta(minutes=_STUCK_JOB_MINUTES)
     db = SessionLocal()
@@ -228,6 +237,7 @@ def _job_recover_stuck_publishing() -> None:
                 VideoJob.updated_at < cutoff,
             )
         ).scalars().all()
+        stuck = [job for job in stuck if not is_inflight(job.id)]
         if not stuck:
             return
         safe = _safe_boot()
@@ -242,7 +252,7 @@ def _job_recover_stuck_publishing() -> None:
         db.commit()
         logger.info(
             "Varredura de jobs presos: %d job(s) travado(s) em PUBLISHING/PROCESSING "
-            "(> %dmin) ajustado(s); %d reenviado(s) para publicação.",
+            "(> %dmin, sem tarefa viva) ajustado(s); %d reenviado(s) para publicação.",
             recovered, _STUCK_JOB_MINUTES, len(to_publish),
         )
     except Exception as exc:  # noqa: BLE001 — never let the scheduler die

@@ -37,6 +37,22 @@ _render_sem: asyncio.Semaphore | None = None
 _publish_sem: asyncio.Semaphore | None = None
 _pending: set = set()
 
+# Job ids with a live in-process task RIGHT NOW (added when dispatched, removed
+# when the task finishes). The runtime stuck-job sweep (scheduler.py) MUST
+# check this before treating a job as orphaned: without it, a job that is
+# merely SLOW (not dead) gets "recovered" and re-dispatched while its original
+# task is still running, creating a second concurrent attempt for the same
+# job. With only 2 publish slots, two such phantom duplicates alone exhaust
+# the entire pool, permanently starving every other job — exactly the
+# creeping deadlock this set exists to prevent.
+_inflight: set[int] = set()
+_inflight_lock = threading.Lock()
+
+
+def is_inflight(job_id: int) -> bool:
+    with _inflight_lock:
+        return job_id in _inflight
+
 # Cache the Redis probe briefly: each probe costs ~0.4s when Redis is down, and
 # a batch can dispatch hundreds of jobs back-to-back.
 _redis_cache: dict = {"ok": None, "at": 0.0}
@@ -143,11 +159,15 @@ def dispatch_analyze_upload(job_id: int) -> str:
 
 def _run_inprocess(run: str, job_id: int) -> None:
     loop = _ensure_worker()
+    with _inflight_lock:
+        _inflight.add(job_id)
     fut = asyncio.run_coroutine_threadsafe(_guarded(run, job_id), loop)
     _pending.add(fut)
 
     def _done(f) -> None:
         _pending.discard(f)
+        with _inflight_lock:
+            _inflight.discard(job_id)
         try:
             f.result()
         except Exception:  # noqa: BLE001
