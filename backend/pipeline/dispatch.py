@@ -193,10 +193,20 @@ async def _guarded(run: str, job_id: int) -> None:
                 await run_analyze_upload(job_id)
     else:
         assert _publish_sem is not None
+        # TEMP DIAGNOSTIC: jobs stay in "publishing" with ZERO logs from
+        # anywhere inside run_publish (not even our own CANARY_UPLOAD_LOOP
+        # markers) even long after dispatch. Log semaphore-wait and entry so
+        # the next log pull shows whether the task is stuck waiting for a
+        # publish slot (semaphore exhausted) vs. stuck somewhere inside
+        # run_publish before ever reaching the upload call.
+        logger.warning("CANARY_GUARDED waiting for publish slot job=%s value=%s",
+                        job_id, _publish_sem._value)
         async with _publish_sem:
+            logger.warning("CANARY_GUARDED acquired publish slot job=%s", job_id)
             from backend.agents.publisher import run_publish
 
             await run_publish(job_id)
+            logger.warning("CANARY_GUARDED run_publish returned job=%s", job_id)
 
 
 def resume_account_blocked_jobs(account_id: int) -> list[int]:

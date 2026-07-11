@@ -81,11 +81,14 @@ async def _with_retry(fn, *args, label="upload", **kwargs) -> dict:
 
 
 async def run_publish(job_id: int) -> dict:
+    logger.warning("CANARY_RUN_PUBLISH enter job=%s", job_id)
     db = SessionLocal()
+    logger.warning("CANARY_RUN_PUBLISH got db session job=%s", job_id)
     job = None
     results: dict = {}
     try:
         job = db.get(VideoJob, job_id)
+        logger.warning("CANARY_RUN_PUBLISH loaded job=%s status=%s", job_id, getattr(job, "status", None))
         if not job:
             return {"error": "job not found"}
         if job.status not in (JobStatus.APPROVED, JobStatus.PUBLISHING):
