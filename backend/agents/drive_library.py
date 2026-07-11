@@ -160,6 +160,8 @@ class DriveLibraryService:
 
     def _service(self):
         try:
+            import google_auth_httplib2
+            import httplib2
             from google.auth.transport.requests import Request
             from google.oauth2.credentials import Credentials
             from googleapiclient.discovery import build
@@ -174,9 +176,15 @@ class DriveLibraryService:
                 conn.credentials_encrypted = encrypt_credentials(self._credentials_to_dict(creds))
                 conn.status = "connected"
                 self.db.commit()
-            return build("drive", "v3", credentials=creds, cache_discovery=False)
+            # httplib2 has NO default socket timeout — a stalled connect/read (dead
+            # peer, blackholed route) blocks forever otherwise, which is exactly what
+            # froze the shared render/publish worker loop (download_for_job runs
+            # synchronously on that loop, not in a thread — see publisher.py).
+            http = google_auth_httplib2.AuthorizedHttp(creds, http=httplib2.Http(timeout=300))
+            return build("drive", "v3", http=http, cache_discovery=False)
         if settings.google_drive_api_key:
-            return build("drive", "v3", developerKey=settings.google_drive_api_key, cache_discovery=False)
+            http = httplib2.Http(timeout=300)
+            return build("drive", "v3", developerKey=settings.google_drive_api_key, http=http, cache_discovery=False)
         raise RuntimeError("Drive nao conectado. Conecte em /drive-library/auth/start ou configure GOOGLE_DRIVE_API_KEY.")
 
     # ---- indexing -------------------------------------------------------

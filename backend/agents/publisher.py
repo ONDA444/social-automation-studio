@@ -109,7 +109,16 @@ async def run_publish(job_id: int) -> dict:
         db.commit()
         _emit(job_id, status="publishing")
 
-        _ensure_ready_video_local(db, job)
+        # Runs a synchronous Google Drive download (googleapiclient/httplib2, no
+        # default socket timeout) DIRECTLY on the shared render/publish worker
+        # loop (dispatch.py) if called bare. A stalled connection there doesn't
+        # just occupy one semaphore slot like a hung YouTube upload does — it
+        # FREEZES THE ENTIRE EVENT LOOP, since nothing yields control back until
+        # this call returns. to_thread moves it off-loop; wait_for bounds it so
+        # a genuinely stalled download can't wedge the pipeline forever.
+        await asyncio.wait_for(
+            asyncio.to_thread(_ensure_ready_video_local, db, job), timeout=_UPLOAD_TIMEOUT_S
+        )
         shorts = job.shorts_paths or []
         # YouTube's publishAt must be in the FUTURE. In the slot-gated/auto-publish
         # model the slot has already arrived (scheduled_at <= now), so a past value
