@@ -629,7 +629,7 @@ def _try_create_ready_video_job(db, acct, scheduled_naive: datetime, theme=None)
         job.main_video_path = local_path
         if video_format == "short":
             job.shorts_paths = [local_path]
-        analysis, seo = build_ready_video_package(
+        analysis, seo, thumbnail_path = build_ready_video_package(
             job_id=job.id,
             local_path=local_path,
             ready=ready,
@@ -639,6 +639,8 @@ def _try_create_ready_video_job(db, acct, scheduled_naive: datetime, theme=None)
             title_seed=title,
         )
         job.seo_metadata = seo
+        if thumbnail_path:
+            job.thumbnail_path = thumbnail_path
         yt_title = ((seo.get("youtube") or {}).get("title") or title).strip()
         if yt_title:
             job.title = yt_title[:300]

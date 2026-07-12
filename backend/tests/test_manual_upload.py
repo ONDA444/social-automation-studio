@@ -66,7 +66,7 @@ class ManualUploadAnalysisTests(unittest.TestCase):
             job_id = job.id
             with patch("backend.agents.manual_upload.SessionLocal", Session), patch(
                 "backend.agents.ready_video_seo.build_ready_video_package",
-                return_value=(fake_analysis, fake_seo),
+                return_value=(fake_analysis, fake_seo, None),
             ):
                 _analyze_sync(job_id)
             db.refresh(job)
@@ -106,7 +106,7 @@ class ManualUploadAnalysisTests(unittest.TestCase):
             job_id = job.id
             with patch("backend.agents.manual_upload.SessionLocal", Session), patch(
                 "backend.agents.ready_video_seo.build_ready_video_package",
-                return_value=(fake_analysis, {}),
+                return_value=(fake_analysis, {}, None),
             ):
                 _analyze_sync(job_id)
             db.refresh(job)

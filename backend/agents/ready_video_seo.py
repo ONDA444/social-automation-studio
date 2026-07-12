@@ -65,12 +65,15 @@ def build_ready_video_package(
     content_type: str,
     video_format: str,
     title_seed: str | None = None,
-) -> tuple[dict, dict]:
-    """Return `(analysis, seo)` for a downloaded ready video.
+) -> tuple[dict, dict, str | None]:
+    """Return `(analysis, seo, thumbnail_path)` for a downloaded ready video.
 
     The function never raises for analysis/AI failures. A corrupt or missing file
     is reported in `analysis.warnings`, then the deterministic SEO path still
-    produces metadata from filename/folder/channel context.
+    produces metadata from filename/folder/channel context. `thumbnail_path` is
+    None whenever generation fails or only produced the deterministic local
+    placeholder — publishing must never be blocked or forced onto a bad cover;
+    the caller just leaves YouTube's own auto-picked frame in that case.
     """
     context = _context_dict(ready, account, content_type, video_format, title_seed)
     analysis = analyze_ready_video(job_id=job_id, local_path=local_path, context=context)
@@ -80,7 +83,41 @@ def build_ready_video_package(
         context["video_format"] = "long"
     seo = build_drive_seo(context=context, analysis=analysis)
     apply_runtime_youtube_enrichment_sync(seo)
-    return analysis, seo
+    thumbnail_path = _generate_thumbnail(job_id, context, analysis)
+    return analysis, seo, thumbnail_path
+
+
+def _generate_thumbnail(job_id: int, context: dict, analysis: dict) -> str | None:
+    """Best-effort AI-generated cover image, reusing the same multi-provider
+    engine (Pollinations/FLUX -> HF FLUX -> Pexels/Pixabay photo -> local
+    placeholder) the full AI-generation pipeline already uses for its own
+    thumbnails (backend/agents/visuals.py). Never raises; returns None on any
+    failure OR when every provider failed down to the local placeholder, since
+    a generic placeholder image looks worse than YouTube's own auto-picked
+    frame from the actual video."""
+    import asyncio
+
+    from backend.agents.visuals import VisualsAgent
+
+    title = (context.get("title_seed") or analysis.get("summary") or context.get("drive_name") or "").strip()
+    if not title:
+        return None
+    hook = (analysis.get("hook") or "").strip()
+    topics = ", ".join((analysis.get("topics") or [])[:4])
+    prompt = f"{title}. {hook}. Temas: {topics}".strip(". ") or title
+    prompt = f"{prompt}, capa de video do YouTube, chamativa, alto contraste"
+
+    dst = Path(settings.abs_path(settings.temp_dir)) / "thumbnails" / f"job_{job_id}.jpg"
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        agent = VisualsAgent(job_id=job_id, emit=False)
+        provider = asyncio.run(agent._generate_image(prompt, dst, 1280, 720))
+    except Exception as exc:  # noqa: BLE001
+        logger.info("Thumbnail generation failed for job %s: %s", job_id, exc)
+        return None
+    if provider == "placeholder":
+        return None
+    return str(dst)
 
 
 def analyze_ready_video(job_id: int, local_path: str, context: dict) -> dict:

@@ -152,7 +152,7 @@ def _analyze_sync(job_id: int) -> None:
             niche=getattr(account, "niche", None) if account else None,
         )
 
-        analysis, seo = build_ready_video_package(
+        analysis, seo, thumbnail_path = build_ready_video_package(
             job_id=job.id,
             local_path=local_path,
             ready=ready,
@@ -189,6 +189,8 @@ def _analyze_sync(job_id: int) -> None:
             return
 
         job.seo_metadata = seo
+        if thumbnail_path:
+            job.thumbnail_path = thumbnail_path
         yt_title = ((seo.get("youtube") or {}).get("title") or job.title or "").strip()
         if yt_title:
             job.title = yt_title[:300]
