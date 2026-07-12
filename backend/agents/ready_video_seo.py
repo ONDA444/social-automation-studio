@@ -24,7 +24,7 @@ from backend.config import settings
 
 logger = logging.getLogger("studio.ready_video_seo")
 
-GEMINI_VISION_MODEL = "gemini-2.5-flash-lite"
+GEMINI_VISION_MODEL = "gemini-2.5-flash"
 GEMINI_VISION_URL = (
     "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 )
@@ -248,7 +248,16 @@ def _extract_frames(path: str, job_id: int, duration: float) -> list[str]:
         return []
     base = Path(settings.abs_path(settings.temp_dir)) / "ready_video_frames" / f"job_{job_id}"
     base.mkdir(parents=True, exist_ok=True)
-    points = [min(max(duration * p, 0.4), max(duration - 0.2, 0.4)) for p in (0.15, 0.5, 0.85)]
+    # 6 points instead of 3, and higher res/quality: 3 sparse, tiny (360px,
+    # heavily compressed) frames landed too often on a loading screen, static
+    # HUD, or otherwise uninformative moment for content whose interesting
+    # parts are brief (e.g. gameplay) — the vision model then fabricated a
+    # plausible-sounding but unrelated story instead of admitting uncertainty.
+    # More/better samples raise the odds at least one frame is legible.
+    points = [
+        min(max(duration * p, 0.4), max(duration - 0.2, 0.4))
+        for p in (0.08, 0.22, 0.38, 0.55, 0.7, 0.88)
+    ]
     frames: list[str] = []
     for idx, ts in enumerate(points, start=1):
         dst = base / f"frame_{idx}.jpg"
@@ -256,7 +265,7 @@ def _extract_frames(path: str, job_id: int, duration: float) -> list[str]:
             proc = subprocess.run(
                 [
                     "ffmpeg", "-y", "-ss", f"{ts:.2f}", "-i", str(path),
-                    "-frames:v", "1", "-vf", "scale=360:-2", "-q:v", "7",
+                    "-frames:v", "1", "-vf", "scale=640:-2", "-q:v", "3",
                     str(dst),
                 ],
                 capture_output=True, text=True, encoding="utf-8", errors="replace",
@@ -274,7 +283,7 @@ def _describe_with_gemini(frames: list[str], context: dict, analysis: dict) -> d
         return None
     prompt = _analysis_prompt(context, analysis)
     parts: list[dict] = [{"text": prompt}]
-    for frame in frames[:3]:
+    for frame in frames[:6]:
         try:
             data = base64.b64encode(Path(frame).read_bytes()).decode("ascii")
             parts.append({"inline_data": {"mime_type": "image/jpeg", "data": data}})
@@ -286,12 +295,17 @@ def _describe_with_gemini(frames: list[str], context: dict, analysis: dict) -> d
         "contents": [{"parts": parts}],
         "generationConfig": {
             "maxOutputTokens": 900,
-            "temperature": 0.35,
+            # Lower than before (was 0.35) — this call must describe what's
+            # actually visible, not creatively improvise; less randomness means
+            # a genuinely ambiguous video is more likely to get a cautious,
+            # honest read (or trip the hallucination guard consistently)
+            # instead of a different fabricated story on every retry.
+            "temperature": 0.15,
             "responseMimeType": "application/json",
         },
     }
     try:
-        with httpx.Client(timeout=45) as client:
+        with httpx.Client(timeout=60) as client:
             response = client.post(
                 GEMINI_VISION_URL.format(model=GEMINI_VISION_MODEL),
                 params={"key": settings.gemini_api_key},
