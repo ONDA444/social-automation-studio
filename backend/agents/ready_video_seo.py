@@ -87,6 +87,45 @@ def build_ready_video_package(
     return analysis, seo, thumbnail_path
 
 
+async def _craft_image_prompt(context: dict, analysis: dict) -> str | None:
+    """Text-to-image models can't render abstract marketing/business language
+    ("otimização de FPS", "ativação de licença") — they need a concrete VISUAL
+    scene. Ask the LLM to translate the content analysis into one, instead of
+    just concatenating the title/hook (which produced a generic, unrelated
+    "adventurer in water" stock-photo-style image for a software-UI video)."""
+    if not llm.available():
+        return None
+    title = context.get("title_seed") or analysis.get("summary") or context.get("drive_name") or ""
+    summary = analysis.get("summary") or ""
+    topics = ", ".join((analysis.get("topics") or [])[:5])
+    niche = context.get("niche") or ""
+    prompt = f"""
+Escreva um prompt de imagem em ingles para um gerador texto-para-imagem (FLUX),
+representando visualmente este video como capa de YouTube. Descreva uma CENA
+CONCRETA (objetos, ambiente, cores, iluminacao, composicao) — NUNCA linguagem
+de marketing ou conceitos abstratos (nao diga "optimization", "activation",
+"promotional"). Se o video for sobre software/tela de computador, descreva a
+TELA/interface visivel, nao uma metafora. Maximo 35 palavras, termine com
+"youtube thumbnail, high contrast, dramatic lighting".
+
+Titulo: {title}
+Resumo: {summary}
+Temas: {topics}
+Nicho: {niche}
+""".strip()
+    try:
+        text = await llm.complete(
+            prompt,
+            system="Voce e um diretor de arte especialista em prompts para geracao de imagem.",
+            max_tokens=150,
+            fast=True,
+        )
+        return text.strip().strip('"') or None
+    except Exception as exc:  # noqa: BLE001
+        logger.info("Image-prompt crafting failed: %s", exc)
+        return None
+
+
 def _generate_thumbnail(job_id: int, context: dict, analysis: dict) -> str | None:
     """Best-effort AI-generated cover image, reusing the same multi-provider
     engine (Pollinations/FLUX -> HF FLUX -> Pexels/Pixabay photo -> local
@@ -104,14 +143,19 @@ def _generate_thumbnail(job_id: int, context: dict, analysis: dict) -> str | Non
         return None
     hook = (analysis.get("hook") or "").strip()
     topics = ", ".join((analysis.get("topics") or [])[:4])
-    prompt = f"{title}. {hook}. Temas: {topics}".strip(". ") or title
-    prompt = f"{prompt}, capa de video do YouTube, chamativa, alto contraste"
+    fallback_prompt = f"{title}. {hook}. Temas: {topics}".strip(". ") or title
+    fallback_prompt = f"{fallback_prompt}, capa de video do YouTube, chamativa, alto contraste"
 
     dst = Path(settings.abs_path(settings.temp_dir)) / "thumbnails" / f"job_{job_id}.jpg"
     dst.parent.mkdir(parents=True, exist_ok=True)
     try:
         agent = VisualsAgent(job_id=job_id, emit=False)
-        provider = asyncio.run(agent._generate_image(prompt, dst, 1280, 720))
+
+        async def _run() -> str:
+            crafted = await _craft_image_prompt(context, analysis)
+            return await agent._generate_image(crafted or fallback_prompt, dst, 1280, 720)
+
+        provider = asyncio.run(_run())
     except Exception as exc:  # noqa: BLE001
         logger.info("Thumbnail generation failed for job %s: %s", job_id, exc)
         return None
