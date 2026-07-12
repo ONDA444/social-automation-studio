@@ -12,11 +12,56 @@ import asyncio
 import logging
 import os
 
+import re
+
+from backend.agents.ready_video_seo import OPERATIONAL_WORDS
 from backend.database import SessionLocal
 from backend.events import publish_event
 from backend.models import JobStatus, VideoJob
 
 logger = logging.getLogger("studio.manual_upload")
+
+_TOKEN_RE = re.compile(r"[a-zA-Z0-9À-ÿ]+")
+# Generic words a user's own filename commonly contains that carry no real
+# content signal (unlike a specific brand/game/topic word) — excluded so a
+# plain name like "meu_video_novo.mp4" doesn't produce a false "known" token.
+_GENERIC_FILENAME_WORDS = {
+    "meu", "minha", "meus", "minhas", "novo", "nova", "novos", "novas",
+    "arquivo", "projeto", "teste", "clipe", "gravacao", "gravação",
+}
+
+
+def _meaningful_tokens(text: str | None) -> set[str]:
+    if not text:
+        return set()
+    return {
+        t for t in (m.lower() for m in _TOKEN_RE.findall(text))
+        if len(t) >= 3 and not t.isdigit()
+        and t not in OPERATIONAL_WORDS and t not in _GENERIC_FILENAME_WORDS
+    }
+
+
+def _looks_hallucinated(analysis: dict, filename: str) -> bool:
+    """A vision-LLM analysis with zero overlap against the file's own name is a
+    strong sign the model fabricated a plausible-sounding but unrelated story
+    instead of describing the real frames — this happened with a gameplay
+    video (filename "ONDA_HUB_COMPLETO...") described as a sitcom about
+    fictional characters. Deliberately filename-only, not niche: a niche is a
+    broad category ("comedia") that legitimately won't appear verbatim in a
+    specific video's description, so using it here would false-positive on
+    perfectly good analyses. Only fires when the filename actually HAS a
+    specific-looking token to check against, to avoid flagging generic names."""
+    known = _meaningful_tokens(os.path.splitext(filename)[0])
+    if not known:
+        return False
+    described = " ".join([
+        analysis.get("summary") or "",
+        " ".join(analysis.get("entities") or []),
+        " ".join(analysis.get("topics") or []),
+        " ".join(analysis.get("keywords") or []),
+    ])
+    described_tokens = _meaningful_tokens(described)
+    return known.isdisjoint(described_tokens)
 
 # Same ceiling as the YouTube-upload/Drive-download timeouts in publisher.py: a
 # hung ffprobe/ffmpeg/Gemini call must free the render-semaphore slot and
@@ -125,6 +170,20 @@ def _analyze_sync(job_id: int) -> None:
             job.status = JobStatus.ERROR
             job.error_message = "Arquivo de vídeo inválido ou corrompido."
             job.video_context = {**ctx, "content_analysis": analysis}
+            db.commit()
+            _emit(job.id, status="error", error=job.error_message)
+            return
+
+        if analysis.get("analysis_source") == "vision_llm" and _looks_hallucinated(
+            analysis, os.path.basename(local_path)
+        ):
+            job.status = JobStatus.ERROR
+            job.error_message = (
+                "A IA não conseguiu identificar com segurança o conteúdo do vídeo "
+                "(a descrição gerada não bate com nada conhecido sobre o arquivo). "
+                "Revise manualmente antes de tentar de novo."
+            )
+            job.video_context = {**ctx, "content_analysis": analysis, "seo_source": "vision_llm_rejected"}
             db.commit()
             _emit(job.id, status="error", error=job.error_message)
             return

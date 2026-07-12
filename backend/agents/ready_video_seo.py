@@ -335,6 +335,13 @@ def _analysis_prompt(context: dict, analysis: dict, text_only: bool = False) -> 
     return f"""
 Voce vai empacotar um video pronto para publicar. {frame_note}
 Nao diga que e automacao, Drive, biblioteca, arquivo ou video pronto.
+NUNCA invente nomes de personagens, dialogos ou uma historia ficticia que voce
+nao consegue confirmar nos frames. O campo "tipo" abaixo e so um rotulo de
+fluxo interno, NAO uma garantia de genero — o video pode ser gameplay,
+tutorial, screen recording ou qualquer outra coisa mesmo que o rotulo diga
+"recap". Se os frames nao deixarem claro do que se trata, descreva apenas o
+que e literalmente visivel (ex.: "tela de jogo com HUD", "captura de tela com
+texto sobreposto") em vez de fabricar um enredo com personagens.
 
 Contexto:
 - arquivo: {context.get('drive_name')}
@@ -342,7 +349,7 @@ Contexto:
 - nicho: {context.get('niche')}
 - canal: {context.get('display_name')}
 - publico: {context.get('target_audience') or 'N/A'}
-- tipo: {context.get('content_type')}
+- tipo (rotulo de fluxo, nao confie cegamente): {context.get('content_type')}
 - formato: {context.get('video_format')}
 - probe: {json.dumps(analysis, ensure_ascii=False)[:900]}
 
