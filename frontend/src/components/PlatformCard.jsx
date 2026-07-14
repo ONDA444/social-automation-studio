@@ -173,9 +173,11 @@ export default function PlatformCard({ account, onChange, onChanged, onDone }) {
               ? <button className="btn-ghost btn-sm" style={{ color: 'var(--error)' }} onClick={disconnect}>Desconectar</button>
               : <button className="btn-primary btn-sm" onClick={connect}>Conectar {m.label}</button>
             }
-            <button className="btn-ghost btn-sm" disabled={toggling} onClick={toggle}>
-              {toggling ? 'Aguarde...' : (account.status === 'active' ? 'Pausar' : 'Retomar')}
-            </button>
+            {(connected || account.status === 'active') && (
+              <button className="btn-ghost btn-sm" disabled={toggling} onClick={toggle}>
+                {toggling ? 'Aguarde...' : (account.status === 'active' ? 'Pausar' : 'Retomar')}
+              </button>
+            )}
             <button className="btn-ghost btn-sm" onClick={() => setExpanded((v) => !v)}>
               {expanded ? 'Fechar ajustes' : 'Ajustes'}
             </button>

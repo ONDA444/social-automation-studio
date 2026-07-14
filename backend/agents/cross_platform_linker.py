@@ -11,6 +11,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timedelta
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from backend.models import JobStatus, PlatformAccount, VideoJob
@@ -34,10 +35,25 @@ def mirror_after_publish(db: Session, source_job: VideoJob) -> list[int]:
 
     created: list[int] = []
     delay = timedelta(minutes=DEFAULT_DELAY_MIN)
+    # Mirrors already created for this source job, keyed by target platform, so a
+    # retry of a partially-failed source job doesn't create duplicate mirrors for
+    # platforms that were already mirrored.
+    existing_mirror_platforms = {
+        p
+        for (mirror_targets,) in db.execute(
+            select(VideoJob.target_platforms).where(
+                VideoJob.mirror_source_id == source_job.id,
+                VideoJob.is_mirror.is_(True),
+            )
+        ).all()
+        for p in (mirror_targets or [])
+    }
     for platform, linked_id in (acct.linked_accounts or {}).items():
         if platform in (source_job.target_platforms or []):
             # source job already publishes directly to this platform; skip the
             # mirror to avoid double-publishing to the same linked account.
+            continue
+        if platform in existing_mirror_platforms:
             continue
         target = db.get(PlatformAccount, linked_id) if linked_id else None
         if not target or target.status != "active":

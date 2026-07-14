@@ -159,7 +159,17 @@ def pause_account(account_id: int, db: Session = Depends(get_db)):
 
 @router.post("/accounts/{account_id}/resume")
 def resume_account(account_id: int, db: Session = Depends(get_db)):
-    AccountProfileService(db).pause(account_id, "active")
+    svc = AccountProfileService(db)
+    acct = svc.get(account_id)
+    if not acct:
+        raise HTTPException(404, "conta não encontrada")
+    if not acct.credentials_encrypted:
+        raise HTTPException(
+            400,
+            "Conta sem credenciais — reconecte antes de reativar (evita publicações "
+            "que falhariam silenciosamente).",
+        )
+    svc.pause(account_id, "active")
     return {"ok": True}
 
 

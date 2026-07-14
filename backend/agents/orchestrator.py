@@ -316,20 +316,26 @@ async def run_pipeline(job_id: int) -> dict:
                 # This early-dispatch trick ONLY works for YouTube: TikTok and
                 # Instagram have no publish_at/schedule support in run_publish, so
                 # dispatching now would make them go live immediately regardless of
-                # scheduled_at. When other platforms are targeted, skip the early
-                # dispatch and let _job_publish_due publish everything together once
-                # the slot actually arrives — keeping multi-platform launches in sync.
-                only_youtube = list(dict.fromkeys(job.target_platforms or ["youtube"])) == ["youtube"]
-                if only_youtube and (settings.publish_mode or "schedule").lower() == "schedule":
+                # scheduled_at. So only YouTube gets dispatched early (as a platform
+                # SUBSET, via dispatch_publish(platforms=...)) — TikTok/Instagram are
+                # left untouched for _job_publish_due to publish once the slot
+                # actually arrives. run_publish (backend/agents/publisher.py) keeps
+                # the job APPROVED after a successful partial (YouTube-only) run, so
+                # the scheduler can still pick it up for the remaining platforms.
+                target_platforms = list(dict.fromkeys(job.target_platforms or ["youtube"]))
+                youtube_now = [p for p in target_platforms if p == "youtube"]
+                if youtube_now and (settings.publish_mode or "schedule").lower() == "schedule":
                     try:
                         from backend.pipeline.dispatch import dispatch_publish
                         # Claim the job (PUBLISHING) BEFORE dispatching so _job_publish_due
                         # cannot also grab this still-APPROVED job and publish it a 2nd
                         # time. The publisher accepts PUBLISHING; orphan recovery handles
-                        # it safely on restart.
+                        # it safely on restart. If other platforms remain untouched,
+                        # run_publish puts the job back to APPROVED once the YouTube
+                        # upload finishes, so the scheduler can still reach them later.
                         job.status = JobStatus.PUBLISHING
                         db.commit()
-                        dispatch_publish(job_id)
+                        dispatch_publish(job_id, platforms=youtube_now)
                     except Exception as exc:  # noqa: BLE001
                         logger.warning("auto dispatch_publish (schedule) falhou: %s", exc)
                 return {"status": "approved_auto", "qc": qc, "compliance": comp}

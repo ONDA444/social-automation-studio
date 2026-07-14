@@ -50,10 +50,14 @@ def videos(account_id: int | None = None, limit: int = 200, db: Session = Depend
     platforms it was posted to. Videos with no metrics yet are still listed
     (zeros) so the user sees every video as soon as it publishes.
     """
-    q = select(VideoJob).order_by(VideoJob.created_at.desc()).limit(limit)
+    q = (
+        select(VideoJob)
+        .options(selectinload(VideoJob.analytics))
+        .order_by(VideoJob.created_at.desc())
+        .limit(limit)
+    )
     if account_id:
-        q = select(VideoJob).where(VideoJob.account_id == account_id).order_by(
-            VideoJob.created_at.desc()).limit(limit)
+        q = q.where(VideoJob.account_id == account_id)
     out: list[dict] = []
     for job in db.execute(q).scalars().all():
         ps = job.publish_status or {}
@@ -72,6 +76,15 @@ def videos(account_id: int | None = None, limit: int = 200, db: Session = Depend
                 latest[r.platform] = r
         vals = latest.values()
         last_at = max((r.collected_at for r in vals if r.collected_at), default=None)
+        # Prefer the timestamp actually recorded at publish time (published_at, or
+        # started_at while an upload is in flight) over job.updated_at, which also
+        # moves on retries/status changes/analytics collection and would otherwise
+        # skew "best time to publish" analysis.
+        published_at = None
+        for p in ps.values():
+            if isinstance(p, dict) and (p.get("published_at") or p.get("started_at")):
+                published_at = p.get("published_at") or p.get("started_at")
+                break
         out.append({
             "job_id": job.id,
             "title": job.title,
@@ -85,7 +98,7 @@ def videos(account_id: int | None = None, limit: int = 200, db: Session = Depend
             "comments": sum(int(getattr(r, "comments", 0) or 0) for r in vals),
             "snapshots": len(job.analytics or []),
             "last_collected": last_at.isoformat() if last_at else None,
-            "published_at": job.updated_at.isoformat() if job.updated_at else None,
+            "published_at": published_at or (job.updated_at.isoformat() if job.updated_at else None),
         })
     out.sort(key=lambda v: v["views"], reverse=True)
     return {"videos": out, "count": len(out)}

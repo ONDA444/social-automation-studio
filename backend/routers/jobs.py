@@ -319,15 +319,24 @@ def approve_job(job_id: int, db: Session = Depends(get_db)):
     db.commit()
 
     dispatched = None
+    dispatch_error = None
     try:
         import importlib.util
 
         if importlib.util.find_spec("backend.agents.publisher"):
             dispatched = dispatch_publish(job.id)
-    except Exception:
+    except Exception as exc:  # noqa: BLE001
         dispatched = None
-    return {"job": job.to_dict(), "publish_dispatch": dispatched,
-            "note": None if dispatched else "Publisher ainda não configurado — vídeo aprovado e salvo localmente."}
+        dispatch_error = str(exc)
+    if dispatched:
+        note = None
+    elif dispatch_error:
+        note = dispatch_error
+        job.error_message = dispatch_error
+        db.commit()
+    else:
+        note = "Publisher ainda não configurado — vídeo aprovado e salvo localmente."
+    return {"job": job.to_dict(), "publish_dispatch": dispatched, "note": note}
 
 
 @router.post("/{job_id}/reject")

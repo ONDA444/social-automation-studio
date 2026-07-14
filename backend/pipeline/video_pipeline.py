@@ -15,8 +15,8 @@ def process_job(self, job_id: int) -> dict:
 
 
 @app.task(name="pipeline.publish_job")
-def publish_job(job_id: int) -> dict:
-    """Publish an approved job to its target platforms."""
+def publish_job(job_id: int, platforms: list | None = None) -> dict:
+    """Publish an approved job to its target platforms (or a subset, if given)."""
     from backend.agents.publisher import run_publish
 
-    return asyncio.run(run_publish(job_id))
+    return asyncio.run(run_publish(job_id, platforms=platforms))

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import JSON, DateTime, ForeignKey, Integer, String
+from sqlalchemy import JSON, DateTime, ForeignKey, Integer, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from backend.database import Base
@@ -11,6 +11,12 @@ from backend.database import Base
 
 class ScheduleConfig(Base):
     __tablename__ = "schedule_configs"
+    __table_args__ = (
+        # One config per account: without this, two concurrent PUT
+        # /schedule/config/{account_id} requests can both see "no existing row"
+        # and each insert their own, leaving a duplicate.
+        UniqueConstraint("account_id", name="uq_schedule_configs_account_id"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     account_id: Mapped[int] = mapped_column(

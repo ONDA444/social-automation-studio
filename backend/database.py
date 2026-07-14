@@ -82,6 +82,7 @@ def ensure_columns() -> None:
         ("video_analytics", "avg_view_seconds", "FLOAT DEFAULT 0"),
         ("video_analytics", "avg_view_pct", "FLOAT DEFAULT 0"),
         ("video_analytics", "subscribers_gained", "INTEGER DEFAULT 0"),
+        ("video_jobs", "orphan_resume_count", "INTEGER DEFAULT 0"),
         ("platform_accounts", "channel_optimization",
          "JSON DEFAULT '{}'" if not settings.sqlalchemy_url.startswith("sqlite") else "TEXT DEFAULT '{}'"),
     ]
@@ -106,14 +107,21 @@ def ensure_indexes() -> None:
     adds indexes to a pre-existing table, so as video_jobs grows these become full
     scans. CREATE INDEX IF NOT EXISTS is a no-op once present (Postgres + SQLite)."""
     indexes = [
-        ("ix_jobs_status_sched", "video_jobs", "status, scheduled_at"),
-        ("ix_jobs_account_created", "video_jobs", "account_id, created_at"),
+        ("ix_jobs_status_sched", "video_jobs", "status, scheduled_at", False),
+        ("ix_jobs_account_created", "video_jobs", "account_id, created_at", False),
+        ("ix_theme_queue_account_status", "theme_queue", "account_id, status", False),
+        # Best-effort: if a pre-existing DB already has duplicate ScheduleConfig
+        # rows for one account, this will fail and is safely ignored below — new
+        # rows are still protected by the ORM-level check-then-insert fallback
+        # in routers/schedule.upsert_config.
+        ("uq_schedule_configs_account_id", "schedule_configs", "account_id", True),
     ]
     try:
         with engine.begin() as conn:
-            for name, table, cols in indexes:
+            for name, table, cols, unique in indexes:
                 try:
-                    conn.execute(text(f"CREATE INDEX IF NOT EXISTS {name} ON {table} ({cols})"))
+                    kind = "UNIQUE INDEX" if unique else "INDEX"
+                    conn.execute(text(f"CREATE {kind} IF NOT EXISTS {name} ON {table} ({cols})"))
                 except Exception as exc:  # noqa: BLE001  (e.g. table not created yet)
                     logger.debug("ensure_indexes skip %s: %s", name, exc)
     except Exception as exc:  # noqa: BLE001

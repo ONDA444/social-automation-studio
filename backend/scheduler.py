@@ -8,11 +8,37 @@ Celery beat can own these instead).
   - analytics collection: every 15 min (2h/24h/7d snapshots)
   - consume themes: every 2 min (generate videos ahead of their slot)
   - publish due: every 1 min (publish human-APPROVED videos when their slot arrives)
+
+OWNERSHIP / MULTI-REPLICA WARNING
+----------------------------------
+This scheduler runs IN-PROCESS (APScheduler BackgroundScheduler), not as a
+separate singleton service. If the API is ever deployed with more than one
+replica/worker (e.g. `gunicorn -w N`, multiple Railway/K8s instances, or
+horizontal autoscaling), EVERY replica that calls start_scheduler() will run
+its OWN copy of every job below against the SAME database. That means
+duplicate trending videos, duplicate quota resets, duplicate publishes, etc.
+Several of the jobs above defend against this with atomic claim/rowcount
+tricks (see _create_theme_job, _job_publish_due) precisely because this
+single-owner assumption cannot be guaranteed at the code level.
+
+The single source of truth for "should THIS process run the scheduler" is
+the SCHEDULER_LEADER environment variable, read once below:
+  - unset / "1" / "true"  -> this process starts the scheduler (default;
+    matches historical behavior for single-replica/local-dev deployments).
+  - "0" / "false"         -> this process is NOT the leader and must skip
+    starting the scheduler entirely.
+
+For a multi-replica production deployment, set SCHEDULER_LEADER=1 on exactly
+ONE replica and SCHEDULER_LEADER=0 on all others. The long-term fix, already
+flagged above, is to migrate these jobs to a real singleton (e.g. Celery beat
+running as its own single-instance service, or a DB/Redis leader-election
+lock) instead of relying on operators wiring env vars correctly per replica.
 """
 from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from datetime import datetime, timedelta, timezone
 
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -24,9 +50,25 @@ logger = logging.getLogger("studio.scheduler")
 _scheduler: BackgroundScheduler | None = None
 
 
+def _is_scheduler_leader() -> bool:
+    """True unless SCHEDULER_LEADER is explicitly set to a falsy value.
+
+    See the module docstring: in a multi-replica deployment only ONE process
+    should have SCHEDULER_LEADER=1 (or unset); every other replica must set
+    SCHEDULER_LEADER=0 so it never starts a duplicate in-process scheduler.
+    """
+    return os.getenv("SCHEDULER_LEADER", "1").strip().lower() not in ("0", "false", "no")
+
+
 def start_scheduler() -> None:
     global _scheduler
     if _scheduler:
+        return
+    if not _is_scheduler_leader():
+        logger.info(
+            "Scheduler not started: SCHEDULER_LEADER=0 on this replica "
+            "(only the designated leader replica runs periodic jobs)."
+        )
         return
     sched = BackgroundScheduler(timezone="America/Sao_Paulo")
     sched.add_job(_job_trending, "cron", hour="6,14", id="trending", replace_existing=True)
@@ -82,7 +124,7 @@ def _job_heartbeat() -> None:
 
 
 def _job_quota_reset() -> None:
-    from sqlalchemy import select
+    from sqlalchemy import select, update
 
     from backend.agents.account_profile import AccountProfileService
     from backend.models import JobStatus, VideoJob
@@ -91,16 +133,23 @@ def _job_quota_reset() -> None:
     db = SessionLocal()
     try:
         n = AccountProfileService(db).reset_daily_quota()
-        held = db.execute(
-            select(VideoJob).where(VideoJob.status == JobStatus.AWAITING_QUOTA)
+        held_ids = db.execute(
+            select(VideoJob.id).where(VideoJob.status == JobStatus.AWAITING_QUOTA)
         ).scalars().all()
         resumed = []
-        for job in held:
-            job.status = JobStatus.APPROVED
-            job.error_message = None
-            job.approval_status = "approved"
-            resumed.append(job.id)
-        db.commit()
+        for job_id in held_ids:
+            # ATOMIC claim: flip AWAITING_QUOTA -> APPROVED only if STILL
+            # AWAITING_QUOTA. If another process (a second scheduler replica,
+            # or a previous tick) already claimed it, rowcount==0 and we skip
+            # — so the same job can never be dispatched twice.
+            claimed = db.execute(
+                update(VideoJob)
+                .where(VideoJob.id == job_id, VideoJob.status == JobStatus.AWAITING_QUOTA)
+                .values(status=JobStatus.APPROVED, error_message=None, approval_status="approved")
+            ).rowcount
+            db.commit()
+            if claimed:
+                resumed.append(job_id)
         for job_id in resumed:
             dispatch_publish(job_id)
         logger.info("Daily quota reset for %s accounts.", n)
@@ -135,7 +184,7 @@ def _job_retry_errored() -> None:
     through next time. Capped by retry_count (settings.llm_retry_max) so a genuinely
     broken job doesn't loop, and bounded to the last 24h so we never wake old ghosts.
     """
-    from sqlalchemy import select
+    from sqlalchemy import select, update
 
     from backend.config import settings
     from backend.models import JobStatus, VideoJob
@@ -173,12 +222,32 @@ def _job_retry_errored() -> None:
             min_gap_min = min(30 * (2 ** (job.retry_count or 0)), 360)
             if job.updated_at and (now - job.updated_at) < timedelta(minutes=min_gap_min):
                 continue  # not yet time to retry this one
-            job.retry_count = (job.retry_count or 0) + 1
-            job.status = JobStatus.QUEUED
-            job.error_message = None
-            job.current_agent = None
-            job.progress = 0
+            new_retry_count = (job.retry_count or 0) + 1
+            # ATOMIC claim: flip ERROR -> QUEUED only if STILL ERROR. If another
+            # process (a second scheduler replica, or a previous tick) already
+            # claimed/retried it, rowcount==0 and we skip — so the same job can
+            # never be dispatched twice.
+            claimed = db.execute(
+                update(VideoJob)
+                .where(VideoJob.id == job.id, VideoJob.status == JobStatus.ERROR)
+                .values(
+                    retry_count=new_retry_count,
+                    status=JobStatus.QUEUED,
+                    error_message=None,
+                    current_agent=None,
+                    progress=0,
+                )
+                # synchronize_session=False: force a single real UPDATE...WHERE
+                # statement. The default "evaluate"/"fetch" sync strategies can
+                # resolve matching rows via a separate SELECT and then update by
+                # primary key alone, silently dropping the status=ERROR guard and
+                # letting two racing replicas both "claim" the same job.
+                .execution_options(synchronize_session=False)
+            ).rowcount
             db.commit()
+            if not claimed:
+                continue  # someone else owns this retry — do not double-dispatch
+            job.retry_count = new_retry_count
             logger.info("Retry LLM-falho: job %s (tentativa %s/%s).", job.id, job.retry_count, cap)
             publish_event({
                 "type": "job_update", "job_id": job.id, "status": "retry",
@@ -217,14 +286,28 @@ def _job_recover_stuck_publishing() -> None:
     forever since nothing but the one-time boot redispatch
     (backend.main._redispatch_queued_jobs) ever picks up QUEUED jobs.
 
-    Skips any job dispatch.is_inflight() still reports as running: a job that
-    is merely SLOW (not dead — e.g. a real upload still grinding through a
-    large file on a slow connection) must never be "recovered" and
+    A job that is merely SLOW (not dead — e.g. a real upload still grinding
+    through a large file on a slow connection) must never be "recovered" and
     re-dispatched while its original task is still alive. Doing so used to
     spawn a second concurrent attempt for the same job, and with only 2
     publish slots, two such phantom duplicates alone exhausted the entire
     pool — the sweep meant to unstick the pipeline was creating a slower,
     self-renewing version of the exact deadlock it was built to fix.
+
+    Two layers guard against that:
+      1. dispatch.is_inflight() — an in-memory (or, with USE_CELERY, a
+         Celery-broker) check. Correct within a single process/worker, but
+         BLIND to any other replica: in a multi-replica deployment without
+         Celery, a sibling web replica's sweep would see nothing "inflight"
+         here even while this replica is genuinely mid-upload.
+      2. The `updated_at < cutoff` filter itself, which is what actually makes
+         this safe across replicas: agents/publisher.py runs a background
+         heartbeat (_start_publish_heartbeat) that commits a fresh updated_at
+         to the DB every ~60s for the entire duration of an in-flight upload,
+         independent of which process/replica is doing the work. Because that
+         signal is persisted (not in-memory), ANY replica's sweep reads the
+         same up-to-date "still alive" state — a job is only ever considered
+         stuck once its heartbeat has genuinely stopped.
     """
     from sqlalchemy import select
 

@@ -39,12 +39,26 @@ class AnalyticsAgent:
             metrics = self._fetch(platform, res["video_id"], creds, with_analytics=True)
             if metrics is None:
                 continue
-            row = VideoAnalytics(
-                job_id=job_id, platform=platform, platform_video_id=res["video_id"],
-                snapshot_type=snapshot_type, **metrics,
-                thumbnail_variant="A",  # main upload uses variant A
-            )
-            self.db.add(row)
+            # Upsert on (job_id, platform, snapshot_type) so repeated calls (e.g. the
+            # manual "collect now" button in routers/analytics.py) don't create
+            # duplicate rows for the same fixed snapshot.
+            row = self.db.execute(
+                select(VideoAnalytics).where(
+                    VideoAnalytics.job_id == job_id,
+                    VideoAnalytics.platform == platform,
+                    VideoAnalytics.snapshot_type == snapshot_type,
+                )
+            ).scalars().first()
+            if row is None:
+                row = VideoAnalytics(
+                    job_id=job_id, platform=platform, platform_video_id=res["video_id"],
+                    snapshot_type=snapshot_type,
+                    thumbnail_variant=self._thumbnail_variant(job.thumbnail_path),
+                )
+                self.db.add(row)
+            for k, v in metrics.items():
+                setattr(row, k, v)
+            row.platform_video_id = res["video_id"]
             out.append({"platform": platform, **metrics})
         self.db.commit()
         return out
@@ -82,7 +96,8 @@ class AnalyticsAgent:
             if row is None:
                 row = VideoAnalytics(
                     job_id=job_id, platform=platform, platform_video_id=res["video_id"],
-                    snapshot_type="live", thumbnail_variant="A",
+                    snapshot_type="live",
+                    thumbnail_variant=self._thumbnail_variant(job.thumbnail_path),
                 )
                 self.db.add(row)
             for k, v in metrics.items():
@@ -92,6 +107,16 @@ class AnalyticsAgent:
             out.append({"platform": platform, **metrics})
         self.db.commit()
         return out
+
+    @staticmethod
+    def _thumbnail_variant(thumbnail_path: str | None) -> str:
+        """Which A/B thumbnail variant was actually published, read back from the
+        filename VisualsAgent uses (thumb_A.png / thumb_B.png -- see visuals.py).
+        Defaults to "A" when unknown so old jobs without a stored path still get a
+        value."""
+        if thumbnail_path and "thumb_B" in thumbnail_path:
+            return "B"
+        return "A"
 
     def _fetch(self, platform: str, video_id: str, creds: dict,
                with_analytics: bool = False) -> dict | None:
@@ -156,7 +181,7 @@ class AnalyticsAgent:
             cols = [h.get("name") for h in resp.get("columnHeaders", [])]
             vals = dict(zip(cols, rows[0]))
             pct = float(vals.get("averageViewPercentage", 0) or 0)
-            return {
+            out = {
                 "watch_minutes": int(vals.get("estimatedMinutesWatched", 0) or 0),
                 "avg_view_seconds": float(vals.get("averageViewDuration", 0) or 0),
                 "avg_view_pct": pct,
@@ -164,6 +189,22 @@ class AnalyticsAgent:
                 "retention_avg": pct / 100.0,
                 "completion_rate": pct / 100.0,
             }
+            try:
+                ctr_resp = ya.reports().query(
+                    ids="channel==MINE",
+                    startDate=start.isoformat(), endDate=end.isoformat(),
+                    metrics="impressions,impressionsClickThroughRate",
+                    filters=f"video=={video_id}",
+                ).execute()
+                ctr_rows = ctr_resp.get("rows") or []
+                if ctr_rows:
+                    ctr_cols = [h.get("name") for h in ctr_resp.get("columnHeaders", [])]
+                    ctr_vals = dict(zip(ctr_cols, ctr_rows[0]))
+                    out["impressions"] = int(ctr_vals.get("impressions", 0) or 0)
+                    out["ctr"] = float(ctr_vals.get("impressionsClickThroughRate", 0) or 0)
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("YT CTR fetch failed: %s", exc)
+            return out
         except Exception as exc:  # noqa: BLE001
             logger.debug("YT watch-time failed: %s", exc)
             return None

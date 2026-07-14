@@ -107,7 +107,7 @@ class TrendingMomentAgent(BaseAgent):
         results = await asyncio.gather(
             asyncio.to_thread(self._google_news, niche, language, region),
             asyncio.to_thread(self._reddit, niche),
-            asyncio.to_thread(self._pytrends, niche, region),
+            asyncio.to_thread(self._pytrends, niche, language, region),
             return_exceptions=True,
         )
         out: list[dict] = []
@@ -182,12 +182,12 @@ class TrendingMomentAgent(BaseAgent):
             return []
 
     @staticmethod
-    def _pytrends(niche: str, region: str) -> list[dict]:
+    def _pytrends(niche: str, language: str, region: str) -> list[dict]:
         """Opportunistic: Google Trends rising queries. Flaky from datacenter IPs."""
         try:
             from pytrends.request import TrendReq
 
-            py = TrendReq(hl="pt-BR", tz=180)
+            py = TrendReq(hl=language or "pt-BR", tz=180)
             py.build_payload([niche], geo=region, timeframe="now 1-d")
             rising = py.related_queries().get(niche, {}).get("rising")
             if rising is not None and not rising.empty:

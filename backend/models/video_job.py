@@ -52,6 +52,11 @@ class VideoJob(Base):
     current_agent: Mapped[str | None] = mapped_column(String(60), default=None)
     progress: Mapped[int] = mapped_column(Integer, default=0)  # 0..100
     retry_count: Mapped[int] = mapped_column(Integer, default=0)
+    # Separate budget from retry_count: retry_count also gets bumped by unrelated
+    # LLM-failure retries (scheduler._job_resurrect_llm_failures), so sharing one
+    # counter could exhaust the one-time orphan-resume allowance before the job
+    # ever actually died mid-render. See backend.main._apply_orphan_transition.
+    orphan_resume_count: Mapped[int] = mapped_column(Integer, default=0)
     error_message: Mapped[str | None] = mapped_column(Text, default=None)
 
     # --- Shared context + per-agent artifacts (JSON blobs) ---

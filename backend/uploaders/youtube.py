@@ -483,7 +483,12 @@ def upload_video(
         if default_audio_language:
             snippet["defaultAudioLanguage"] = default_audio_language
         body = {"snippet": snippet, "status": status}
-        media = MediaFileUpload(video_path, chunksize=-1, resumable=True)
+        # chunksize=-1 uploads in one single shot with no next_chunk() calls in
+        # between, so the wall-clock deadline check inside the upload loop below
+        # never actually runs until the whole file (potentially huge) finishes or
+        # hangs. A finite chunk size makes next_chunk() return periodically so a
+        # dead/revoked token can be caught before it spins forever.
+        media = MediaFileUpload(video_path, chunksize=8 * 1024 * 1024, resumable=True)
         request = yt.videos().insert(part="snippet,status", body=body, media_body=media)
 
         # num_retries lets googleapiclient retry transient (5xx / connection-reset)

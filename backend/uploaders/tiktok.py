@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 
 import httpx
 
@@ -84,6 +85,49 @@ def exchange_code(code: str) -> dict:
         return {"ok": False, "error": str(exc), "status": "error"}
 
 
+# TikTok's publish_status enum values (per Content Posting API docs) mapped to
+# the studio's internal job status.
+_TERMINAL_STATUS = {
+    "PUBLISH_COMPLETE": "published",
+    "PUBLISH_FAILED": "error",
+    "FAILED": "error",
+}
+_IN_PROGRESS_STATUS = {"PROCESSING_UPLOAD", "PROCESSING_DOWNLOAD", "PROCESSING"}
+
+
+def _poll_publish_status(publish_id: str, headers: dict, max_wait: float = 120.0) -> dict:
+    """Poll STATUS_URL until TikTok reports a terminal publish_status, or give up
+    after ~max_wait seconds. Returns {'status': <internal status>, 'fail_reason': str|None}.
+
+    Never assume 'published' just because the upload PUT succeeded — TikTok still
+    has to download/process the file server-side and can fail at that stage."""
+    delay = 2.0
+    waited = 0.0
+    last_raw = "unknown"
+    while waited <= max_wait:
+        try:
+            r = httpx.post(STATUS_URL, json={"publish_id": publish_id}, headers=headers, timeout=30)
+            r.raise_for_status()
+            data = r.json().get("data", {})
+            raw_status = data.get("status", "")
+            last_raw = raw_status or last_raw
+            if raw_status in _TERMINAL_STATUS:
+                return {"status": _TERMINAL_STATUS[raw_status],
+                        "fail_reason": data.get("fail_reason") if raw_status != "PUBLISH_COMPLETE" else None}
+            if raw_status and raw_status not in _IN_PROGRESS_STATUS:
+                # Unrecognized terminal-looking status: don't loop forever on it.
+                return {"status": "processing", "fail_reason": None}
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Falha ao consultar status de publicação TikTok (publish_id=%s): %s",
+                            publish_id, exc)
+        time.sleep(delay)
+        waited += delay
+        delay = min(delay * 1.5, 15.0)
+    logger.warning("TikTok não confirmou publish_status a tempo (publish_id=%s, último status=%s)",
+                    publish_id, last_raw)
+    return {"status": "processing", "fail_reason": None}
+
+
 def upload_video(video_path: str, caption: str, credentials: dict, privacy: str = "private") -> dict:
     if not configured():
         return {"ok": False, "platform": "tiktok", "status": "tiktok_pending_approval",
@@ -127,8 +171,16 @@ def upload_video(video_path: str, caption: str, credentials: dict, privacy: str 
             )
             put.raise_for_status()
 
+        poll = _poll_publish_status(publish_id, headers)
+        status = poll["status"]
+        if status == "error":
+            return {"ok": False, "platform": "tiktok", "video_id": publish_id,
+                    "status": "error",
+                    "error": f"TikTok falhou ao processar o vídeo: {poll.get('fail_reason') or 'motivo desconhecido'}"}
+        note = ("Publicado com sucesso." if status == "published"
+                else "Upload concluído; TikTok ainda está processando o vídeo.")
         return {"ok": True, "platform": "tiktok", "video_id": publish_id,
-                "status": "published", "note": "Processamento final no app TikTok."}
+                "status": status, "note": note}
     except httpx.HTTPStatusError as exc:
         # Surface TikTok's REAL reason (it lives in the JSON body, not the generic
         # httpx message) so failures are diagnosable instead of a mystery "error".

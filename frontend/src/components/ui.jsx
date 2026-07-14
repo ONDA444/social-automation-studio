@@ -81,7 +81,7 @@ export function StatTile({ label, value, format, accent = 'var(--text-primary)',
 export function StatusBadge({ status, className = '' }) {
   const s = statusMeta(status)
   return (
-    <span className={`badge shrink-0 ${className}`} style={{ background: s.color + '18', color: s.color, borderColor: s.color + '30' }}>
+    <span className={`badge shrink-0 ${className}`} style={{ background: `color-mix(in srgb, ${s.color} 18%, transparent)`, color: s.color, borderColor: `color-mix(in srgb, ${s.color} 30%, transparent)` }}>
       {s.label}
     </span>
   )

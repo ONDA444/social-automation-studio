@@ -116,7 +116,9 @@ class QualityControlAgent(BaseAgent):
         # Shorts vertical resolution.
         for s in shorts or []:
             sm = self._probe(s.get("path"))
-            if sm and not (sm["width"] == 1080 and sm["height"] == 1920):
+            if sm is None:
+                warnings.append(f"short {s.get('num')} ausente ou corrompido")
+            elif not (sm["width"] == 1080 and sm["height"] == 1920):
                 warnings.append(f"short {s.get('num')} não é 1080x1920")
 
         status = "qc_warning" if warnings else "qc_passed"

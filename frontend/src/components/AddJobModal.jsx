@@ -12,7 +12,7 @@ const FALLBACK_CONTENT_TYPES = [
 const PLATFORMS = ['youtube', 'tiktok', 'instagram']
 
 export default function AddJobModal({ open, onClose, onCreated }) {
-  const [form, setForm] = useState({ title: '', topic: '', content_type: 'auto', format: 'long', target_platforms: ['youtube'], account_id: '' })
+  const [form, setForm] = useState({ title: '', content_type: 'auto', format: 'long', target_platforms: ['youtube'], account_id: '' })
   const [accounts, setAccounts] = useState([])
   const [contentTypes, setContentTypes] = useState(FALLBACK_CONTENT_TYPES)
   const [busy, setBusy] = useState(false)
@@ -43,13 +43,13 @@ export default function AddJobModal({ open, onClose, onCreated }) {
     try {
       const account_id = form.account_id ? Number(form.account_id) : null
       if (themes.length === 1) {
-        await api.post('/jobs', { title: themes[0], topic: form.topic, content_type: form.content_type, format: form.format, target_platforms: form.target_platforms, account_id })
+        await api.post('/jobs', { title: themes[0], content_type: form.content_type, format: form.format, target_platforms: form.target_platforms, account_id })
       } else {
         await api.post('/jobs/batch', { themes, content_type: form.content_type, format: form.format, target_platforms: form.target_platforms, account_id })
       }
       onCreated?.()
       onClose()
-      setForm({ title: '', topic: '', content_type: 'auto', format: 'long', target_platforms: ['youtube'], account_id: '' })
+      setForm({ title: '', content_type: 'auto', format: 'long', target_platforms: ['youtube'], account_id: '' })
     } catch (e) { alert(e.message) } finally { setBusy(false) }
   }
 

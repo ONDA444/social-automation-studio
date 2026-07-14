@@ -179,7 +179,12 @@ def dispatch_job(job_id: int) -> str:
     return "in_process"
 
 
-def dispatch_publish(job_id: int) -> str:
+def dispatch_publish(job_id: int, platforms: list | None = None) -> str:
+    # `platforms`, if given, restricts this dispatch to a SUBSET of the job's
+    # target_platforms — used by the orchestrator's schedule-mode early
+    # dispatch to push only YouTube ahead of time (the only uploader with a
+    # native publishAt), leaving TikTok/Instagram for the next
+    # _job_publish_due tick at the actual scheduled_at.
     # A manual PC upload's file only ever exists on the local disk of whichever
     # container received the original HTTP upload (backend/routers/schedule.py
     # saves it under settings.temp_dir, never to shared/durable storage). Every
@@ -189,17 +194,17 @@ def dispatch_publish(job_id: int) -> str:
     # here, not hop to the separate Celery worker container, which never
     # received that file and would report it as "lost" even with zero restarts.
     if _is_manual_upload(job_id):
-        _run_inprocess(run="publish", job_id=job_id)
+        _run_inprocess(run="publish", job_id=job_id, platforms=platforms)
         return "in_process"
     if settings.use_celery and _redis_ok():
         try:
             from backend.pipeline.video_pipeline import publish_job
 
-            publish_job.delay(job_id)
+            publish_job.delay(job_id, platforms=platforms)
             return "celery"
         except Exception as exc:  # noqa: BLE001
             logger.warning("Celery publish enqueue failed (%s); running in-process.", exc)
-    _run_inprocess(run="publish", job_id=job_id)
+    _run_inprocess(run="publish", job_id=job_id, platforms=platforms)
     return "in_process"
 
 
@@ -213,11 +218,11 @@ def dispatch_analyze_upload(job_id: int) -> str:
     return "in_process"
 
 
-def _run_inprocess(run: str, job_id: int) -> None:
+def _run_inprocess(run: str, job_id: int, platforms: list | None = None) -> None:
     loop = _ensure_worker()
     with _inflight_lock:
         _inflight.add(job_id)
-    fut = asyncio.run_coroutine_threadsafe(_guarded(run, job_id), loop)
+    fut = asyncio.run_coroutine_threadsafe(_guarded(run, job_id, platforms=platforms), loop)
     _pending.add(fut)
 
     def _done(f) -> None:
@@ -232,7 +237,7 @@ def _run_inprocess(run: str, job_id: int) -> None:
     fut.add_done_callback(_done)
 
 
-async def _guarded(run: str, job_id: int) -> None:
+async def _guarded(run: str, job_id: int, platforms: list | None = None) -> None:
     # Render and publish use SEPARATE semaphores: a slow/stuck upload holds only
     # the publish pool and never blocks the render slot (and vice-versa).
     # analyze_upload shares the render semaphore (CPU-bound, like a render).
@@ -261,7 +266,7 @@ async def _guarded(run: str, job_id: int) -> None:
             logger.warning("CANARY_GUARDED acquired publish slot job=%s", job_id)
             from backend.agents.publisher import run_publish
 
-            await run_publish(job_id)
+            await run_publish(job_id, platforms=platforms)
             logger.warning("CANARY_GUARDED run_publish returned job=%s", job_id)
 
 

@@ -32,8 +32,14 @@ class ReadyVideo(Base):
 
     status: Mapped[str] = mapped_column(String(20), index=True, default="available")
     # available | reserved | used | rejected | missing | error
-    reserved_job_id: Mapped[int | None] = mapped_column(Integer, default=None)
-    used_job_id: Mapped[int | None] = mapped_column(Integer, default=None)
+    # Real FKs (ondelete=SET NULL) so deleting a VideoJob can't leave a
+    # ReadyVideo permanently stuck referencing a non-existent job.
+    reserved_job_id: Mapped[int | None] = mapped_column(
+        ForeignKey("video_jobs.id", ondelete="SET NULL"), default=None
+    )
+    used_job_id: Mapped[int | None] = mapped_column(
+        ForeignKey("video_jobs.id", ondelete="SET NULL"), default=None
+    )
     reserved_at: Mapped[datetime | None] = mapped_column(DateTime, default=None)
     used_at: Mapped[datetime | None] = mapped_column(DateTime, default=None)
 

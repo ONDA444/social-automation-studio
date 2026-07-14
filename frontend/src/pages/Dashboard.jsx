@@ -15,7 +15,7 @@ export default function Dashboard() {
   const { count, connected } = useWs()
   const nav = useNavigate()
 
-  const load = () => api.get('/dashboard').then(setData).catch(() => setData({ error: true }))
+  const load = () => api.get('/dashboard').then(setData).catch(() => setData((prev) => (prev && !prev.error ? prev : { error: true })))
   useEffect(() => {
     load()
     api.get('/dashboard/trending?niche=entretenimento')

@@ -22,6 +22,45 @@ from backend.config import settings
 
 logger = logging.getLogger("studio.instagram")
 
+
+def _friendly_api_error(exc: Exception, action: str = "publicar no Instagram") -> tuple[str, str]:
+    """Translate a raw Graph API error into (status, message).
+
+    status is one of the codes the publisher already treats as terminal
+    ("auth_error", "quota_exceeded") or "error" for transient/unknown failures
+    that are safe to retry.
+    """
+    code = None
+    subcode = None
+    error_type = ""
+    message = str(exc)
+    response = getattr(exc, "response", None)
+    if response is not None:
+        try:
+            payload = response.json()
+            err = payload.get("error") or {}
+            code = err.get("code")
+            subcode = err.get("error_subcode")
+            error_type = (err.get("type") or "").lower()
+            message = err.get("message") or message
+        except Exception:  # noqa: BLE001
+            pass
+    lowered = f"{message} {error_type}".lower()
+
+    # Expired/invalid token (code 190) or OAuth-type errors.
+    if code == 190 or "oauthexception" in error_type or "expired" in lowered or "invalid oauth" in lowered:
+        return "auth_error", "Login do Instagram/Meta expirou. Reconecte esta conta e tente novamente."
+    # Permission denied (missing scope, page/IG link revoked, etc).
+    if code in (10, 200, 299) or "permission" in lowered or "does not have permission" in lowered:
+        return "auth_error", ("O Instagram recusou esta acao por falta de permissao. Verifique se a conta "
+                               "ainda esta vinculada a Pagina/IG Business e reconecte se necessario.")
+    # App/user rate limiting (codes 4, 17, 32) and the 25-posts/24h content publish limit (subcode 2207042).
+    if code in (4, 17, 32) or subcode == 2207042 or "rate limit" in lowered or "too many" in lowered:
+        return "quota_exceeded", ("Limite de publicacoes do Instagram atingido (rate limit / 25 posts em 24h). "
+                                   "Aguarde o reset da janela de 24h antes de tentar novamente.")
+    return "error", f"Falha ao {action}: {message[:300]}"
+
+
 GRAPH = "https://graph.facebook.com/v19.0"
 OAUTH_DIALOG = "https://www.facebook.com/v19.0/dialog/oauth"
 SCOPES = "instagram_basic,instagram_content_publish,pages_show_list,business_management"
@@ -123,7 +162,11 @@ def upload_reel(video_path: str, caption: str, credentials: dict, public_url: st
     if not configured():
         return {"ok": False, "platform": "instagram", "status": "not_configured",
                 "error": "Meta/Instagram não configurado."}
-    token = credentials.get("access_token")
+    # Graph API calls for an IG Business account must use the Page token, not the
+    # user token — the user token lacks instagram_content_publish once the app
+    # switches to page-scoped permissions, so falling back to access_token here
+    # would silently fail for users who never had a page token stored.
+    token = credentials.get("page_token") or credentials.get("access_token")
     ig_user = credentials.get("ig_user_id")
     if not token or not ig_user:
         return {"ok": False, "platform": "instagram", "status": "auth_error",
@@ -162,4 +205,5 @@ def upload_reel(video_path: str, caption: str, credentials: dict, public_url: st
         media_id = pub.json()["id"]
         return {"ok": True, "platform": "instagram", "video_id": media_id, "status": "published"}
     except Exception as exc:  # noqa: BLE001
-        return {"ok": False, "platform": "instagram", "status": "error", "error": str(exc)}
+        status, error_msg = _friendly_api_error(exc, "publicar o Reel")
+        return {"ok": False, "platform": "instagram", "status": status, "error": error_msg}

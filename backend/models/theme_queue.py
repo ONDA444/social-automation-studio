@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import JSON, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import JSON, DateTime, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.database import Base
@@ -11,6 +11,13 @@ from backend.database import Base
 
 class ThemeQueue(Base):
     __tablename__ = "theme_queue"
+    __table_args__ = (
+        # The scheduler and routers/themes.py both filter by
+        # account_id == X AND status == 'pending' every cycle; without this the
+        # plain single-column `status` index degrades to a scan of every
+        # pending row across all accounts as the table grows.
+        Index("ix_theme_queue_account_status", "account_id", "status"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
 

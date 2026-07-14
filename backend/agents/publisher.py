@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import threading
 from datetime import datetime
 
 from backend.config import settings
@@ -26,6 +27,58 @@ from backend.uploaders import instagram as ig
 
 logger = logging.getLogger("studio.publisher")
 RETRY_BACKOFFS = [60, 300, 900]  # 1min / 5min / 15min
+
+# How often the publish heartbeat below touches video_jobs.updated_at while an
+# upload is in flight. Must be comfortably shorter than
+# scheduler._STUCK_JOB_MINUTES (15 min) so a genuinely running upload never
+# goes stale enough to be mistaken for a dead one.
+_HEARTBEAT_INTERVAL_S = 60.0
+
+
+def _start_publish_heartbeat(job_id: int) -> threading.Event:
+    """Durable, cross-process liveness signal for a job in PUBLISHING.
+
+    scheduler._job_recover_stuck_publishing treats any PUBLISHING/PROCESSING
+    job whose updated_at is stale as dead and re-dispatches it. Before this,
+    updated_at only moved at the start of each per-platform upload (the
+    job.commit() calls below), so a single upload attempt that legitimately
+    runs longer than the stuck-job threshold (slow connection, retries with
+    minutes-long backoffs) looked identical, from the DB, to an actually dead
+    job — the ONLY thing preventing a duplicate re-publish was
+    dispatch.is_inflight(), an in-memory set that is blind to any OTHER
+    process/replica (see its docstring in pipeline/dispatch.py). In a
+    multi-replica deployment without Celery, a sibling replica's sweep would
+    see none of that state and could re-dispatch a duplicate upload.
+
+    This background thread commits a fresh updated_at via its OWN DB session
+    every _HEARTBEAT_INTERVAL_S while the upload runs, so the persisted
+    updated_at column itself becomes an accurate, replica-agnostic "still
+    alive" signal — no in-memory state required. Call `.set()` on the
+    returned Event to stop it once publishing finishes (success or failure).
+    """
+    stop = threading.Event()
+
+    def _tick() -> None:
+        from sqlalchemy import update
+
+        while not stop.wait(_HEARTBEAT_INTERVAL_S):
+            hb_db = SessionLocal()
+            try:
+                hb_db.execute(
+                    update(VideoJob)
+                    .where(VideoJob.id == job_id, VideoJob.status == JobStatus.PUBLISHING)
+                    .values(updated_at=datetime.utcnow())
+                )
+                hb_db.commit()
+            except Exception:  # noqa: BLE001 — heartbeat must never crash the upload
+                hb_db.rollback()
+            finally:
+                hb_db.close()
+
+    threading.Thread(
+        target=_tick, daemon=True, name=f"studio-publish-heartbeat-{job_id}"
+    ).start()
+    return stop
 
 
 def _emit(job_id, **fields):
@@ -80,12 +133,22 @@ async def _with_retry(fn, *args, label="upload", **kwargs) -> dict:
     return last
 
 
-async def run_publish(job_id: int) -> dict:
+async def run_publish(job_id: int, platforms: list | None = None) -> dict:
+    """Publish an APPROVED/PUBLISHING job.
+
+    `platforms`, if given, restricts this call to a SUBSET of the job's
+    target_platforms (used by the orchestrator's schedule-mode early dispatch,
+    which only pushes YouTube ahead of time since it's the only uploader that
+    supports a native publishAt). When a subset is used and it succeeds, the
+    job is kept APPROVED (not PUBLISHED) so the scheduler's _job_publish_due
+    picks it up again at scheduled_at to publish the remaining platforms.
+    """
     logger.warning("CANARY_RUN_PUBLISH enter job=%s", job_id)
     db = SessionLocal()
     logger.warning("CANARY_RUN_PUBLISH got db session job=%s", job_id)
     job = None
     results: dict = {}
+    heartbeat: threading.Event | None = None
     try:
         job = db.get(VideoJob, job_id)
         logger.warning("CANARY_RUN_PUBLISH loaded job=%s status=%s", job_id, getattr(job, "status", None))
@@ -100,13 +163,16 @@ async def run_publish(job_id: int) -> dict:
         # uploaded video (publish_status.youtube.ok + video_id) must NOT be
         # re-sent — that is exactly what produced the duplicate videos on the
         # channel. Mark it PUBLISHED and bail.
-        platforms = ["youtube"] if job.target_platforms is None else job.target_platforms
+        all_platforms = ["youtube"] if job.target_platforms is None else job.target_platforms
+        # `platforms` (when passed) narrows this call to a subset; None means
+        # "attempt everything the job targets", the pre-existing behaviour.
+        run_platforms = list(platforms) if platforms is not None else all_platforms
         prior = job.publish_status or {}
         if isinstance(prior, dict):
             results = dict(prior)
             yt_prior = prior.get("youtube") or {}
             if yt_prior.get("ok") and yt_prior.get("video_id") and all(
-                (prior.get(platform) or {}).get("ok") for platform in platforms
+                (prior.get(platform) or {}).get("ok") for platform in all_platforms
             ):
                 if job.status != JobStatus.PUBLISHED:
                     job.status = JobStatus.PUBLISHED
@@ -121,6 +187,7 @@ async def run_publish(job_id: int) -> dict:
         job.status = JobStatus.PUBLISHING
         db.commit()
         _emit(job_id, status="publishing")
+        heartbeat = _start_publish_heartbeat(job_id)
 
         # Runs a synchronous Google Drive download (googleapiclient/httplib2, no
         # default socket timeout) DIRECTLY on the shared render/publish worker
@@ -160,7 +227,7 @@ async def run_publish(job_id: int) -> dict:
         # one — critical when the user has 2+ YouTube channels connected.
         pinned = svc.get(job.account_id) if job.account_id else None
 
-        for platform in platforms:
+        for platform in run_platforms:
             if isinstance(results.get(platform), dict) and results[platform].get("ok"):
                 _emit(job_id, platform=platform, status=results[platform].get("status", "already_published"))
                 continue
@@ -236,8 +303,26 @@ async def run_publish(job_id: int) -> dict:
                 results[platform] = {"ok": False, "status": "error", "error": str(exc)[:300]}
                 _emit(job_id, platform=platform, status="error")
 
+        # Stamp the actual publish moment on each successful platform result so
+        # analytics can report an accurate published_at instead of job.updated_at
+        # (which also moves on retries/status changes/analytics collection).
+        _published_now = datetime.utcnow().isoformat() + "Z"
+        for _r in results.values():
+            if isinstance(_r, dict) and _r.get("ok") and not _r.get("published_at"):
+                _r["published_at"] = _published_now
         job.publish_status = results
-        job.status = _overall_status(results)
+        # A partial run (run_platforms is a strict subset of all_platforms — the
+        # schedule-mode early YouTube dispatch) must NOT flip the job to a
+        # terminal status if that subset succeeded: the remaining platforms
+        # (TikTok/Instagram) haven't been attempted yet and still need
+        # _job_publish_due to pick them up once scheduled_at arrives. Only
+        # compute the terminal status once every target platform has a result.
+        attempted_all = all(p in results for p in all_platforms)
+        batch_ok = all((results.get(p) or {}).get("ok") for p in run_platforms)
+        if attempted_all or not batch_ok:
+            job.status = _overall_status(results)
+        else:
+            job.status = JobStatus.APPROVED
         _finish_ready_video_if_published(db, job, results)
         # Surface a human, actionable reason on the job row instead of a cryptic
         # "[Errno 2] No such file..." so the user knows to REGENERATE, not retry.
@@ -300,6 +385,8 @@ async def run_publish(job_id: int) -> dict:
                 logger.exception("could not persist ERROR status for job %s", job_id)
         return {"status": JobStatus.ERROR.value, "error": str(exc), "results": results}
     finally:
+        if heartbeat is not None:
+            heartbeat.set()
         db.close()
 
 

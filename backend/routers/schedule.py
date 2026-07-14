@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from backend.agents.content_calendar import ContentCalendarAgent
@@ -76,12 +77,28 @@ def upsert_config(account_id: int, payload: ScheduleConfigIn, db: Session = Depe
     cfg = db.execute(
         select(ScheduleConfig).where(ScheduleConfig.account_id == account_id)
     ).scalars().first()
-    if not cfg:
+    is_new = cfg is None
+    if is_new:
         cfg = ScheduleConfig(account_id=account_id)
         db.add(cfg)
     for k, v in payload.model_dump().items():
         setattr(cfg, k, v)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        # Two concurrent upserts both saw "no existing row" and both tried to
+        # insert — the unique constraint on account_id caught the loser here.
+        # Roll back our failed insert and fall back to updating the row the
+        # winner just created.
+        db.rollback()
+        if not is_new:
+            raise
+        cfg = db.execute(
+            select(ScheduleConfig).where(ScheduleConfig.account_id == account_id)
+        ).scalars().first()
+        for k, v in payload.model_dump().items():
+            setattr(cfg, k, v)
+        db.commit()
     db.refresh(cfg)
     return cfg.to_dict()
 

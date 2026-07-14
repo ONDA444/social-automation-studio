@@ -171,8 +171,8 @@ def _apply_orphan_transition(job, safe: bool) -> None:
         # message the scheduler WON'T auto-resurrect (see _NO_AUTO_RETRY_
         # MARKERS) — so a heavy/OOM render can never loop the container.
         # SAFE_BOOT parks immediately (no resume at all).
-        if (not safe) and (job.retry_count or 0) < _ORPHAN_RESUME_MAX:
-            job.retry_count = (job.retry_count or 0) + 1
+        if (not safe) and (job.orphan_resume_count or 0) < _ORPHAN_RESUME_MAX:
+            job.orphan_resume_count = (job.orphan_resume_count or 0) + 1
             job.status = JobStatus.QUEUED
             job.error_message = None
             job.current_agent = None

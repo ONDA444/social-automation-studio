@@ -31,14 +31,18 @@ _DEFAULTS = {
 
 _CACHE: dict[str, str] = {}
 _CACHE_AT: float = 0.0
+_CACHE_LOADED = False  # tracks whether _CACHE holds a real (possibly empty) load
 _CACHE_TTL = 15.0  # seconds — fresh enough; a video render takes minutes anyway
 
 
 def _load_raw() -> dict[str, str]:
     """All stored rows as {key: value}. Cached briefly. Never raises."""
-    global _CACHE, _CACHE_AT
+    global _CACHE, _CACHE_AT, _CACHE_LOADED
     now = time.monotonic()
-    if _CACHE and (now - _CACHE_AT) < _CACHE_TTL:
+    # Must not gate on `_CACHE` truthiness alone — an empty app_settings table
+    # (no rows saved yet) yields {} which is falsy, so that would bypass the
+    # cache and hit the DB on every single call regardless of TTL.
+    if _CACHE_LOADED and (now - _CACHE_AT) < _CACHE_TTL:
         return _CACHE
     rows: dict[str, str] = {}
     try:
@@ -52,12 +56,14 @@ def _load_raw() -> dict[str, str]:
         logger.debug("runtime_settings load failed (using env defaults): %s", exc)
     _CACHE = rows
     _CACHE_AT = now
+    _CACHE_LOADED = True
     return rows
 
 
 def _invalidate() -> None:
-    global _CACHE_AT
+    global _CACHE_AT, _CACHE_LOADED
     _CACHE_AT = 0.0
+    _CACHE_LOADED = False
 
 
 def get(key: str) -> str:
