@@ -815,13 +815,32 @@ def _shorten_title(title: str) -> str:
     return cut or title[:69].rstrip(" ,:;")
 
 
+# Trailing connectors that read as a dangling, unfinished sentence when a
+# template later appends ": <hook>" right after them (e.g. truncating "...as
+# funcionalidades do software" at 55 chars can leave "...funcionalidades do",
+# which then becomes the broken "...funcionalidades do: espera o final").
+_DANGLING_TRAILERS = {
+    "de", "do", "da", "dos", "das", "em", "no", "na", "nos", "nas",
+    "com", "para", "por", "que", "e", "ou", "a", "o", "as", "os",
+    "um", "uma", "uns", "umas", "seu", "sua", "usando", "atraves",
+    "através", "sobre", "ate", "até",
+}
+
+
 def _compact_topic(topic: str) -> str:
     topic = _remove_internal_words(_clean_text(topic))
     if len(topic) <= 55:
-        return topic.rstrip(" ,:;") or "Esse corte"
-    cut = topic[:55].rstrip(" ,:;")
-    cut = re.sub(r"\s+\S*$", "", cut).rstrip(" ,:;")
-    return cut or topic[:55].rstrip(" ,:;") or "Esse corte"
+        cut = topic
+    else:
+        cut = topic[:55]
+        cut = re.sub(r"\s+\S*$", "", cut)
+    cut = cut.rstrip(" ,:;")
+    while True:
+        words = cut.split(" ")
+        if len(words) <= 1 or words[-1].lower() not in _DANGLING_TRAILERS:
+            break
+        cut = " ".join(words[:-1]).rstrip(" ,:;")
+    return cut or "Esse corte"
 
 
 def _title_terms(text: str) -> list[str]:
