@@ -283,7 +283,7 @@ class NarratorAgent(BaseAgent):
                   "gênero/voz configurada NÃO preservada", progress=45)
         self._tts_provider = "gtts"
         self._voice_fallback_used = True
-        return await self._synthesize_gtts(text, voice, audio_path)
+        return await self._synthesize_gtts(text, voice, audio_path, rate)
 
     async def _edge_stream(self, text: str, voice: str, rate: str, audio_path: Path):
         # edge-tts >=7 defaults to SentenceBoundary; we need word-level for captions.
@@ -312,16 +312,25 @@ class NarratorAgent(BaseAgent):
             raise RuntimeError("edge-tts: duração inválida (áudio sem conteúdo)")
         return words, round(total, 3)
 
-    async def _synthesize_gtts(self, text: str, voice: str, audio_path: Path):
+    async def _synthesize_gtts(self, text: str, voice: str, audio_path: Path, rate: str = "+0%"):
         """Free, keyless fallback (Google Translate TTS). Runs in a worker thread —
-        gTTS is synchronous — and estimates word timings proportionally."""
+        gTTS is synchronous — and estimates word timings proportionally.
+
+        gTTS has no percentage-based rate control (unlike edge-tts/LMNT), only a
+        binary slow=True/False. RATE_BY_CONTENT's pacing intent would otherwise be
+        silently dropped whenever the pipeline degrades to this last-resort fallback.
+        We can't reproduce +15%/+8% (gTTS has no "faster" mode), but a strongly
+        negative rate (e.g. quote_viral's -10%) is mapped to slow=True so the
+        channel doesn't lose its "slow/deliberate" pacing entirely.
+        """
         from gtts import gTTS
 
         lang = self._gtts_lang(voice)
         tld = "com.br" if lang == "pt" else "com"
+        slow = self._rate_to_speed(rate) <= 0.9
 
         def _write() -> None:
-            gTTS(text=text, lang=lang, tld=tld, slow=False).save(str(audio_path))
+            gTTS(text=text, lang=lang, tld=tld, slow=slow).save(str(audio_path))
 
         await asyncio.to_thread(_write)
         if not audio_path.exists() or audio_path.stat().st_size < 1024:
@@ -343,12 +352,17 @@ class NarratorAgent(BaseAgent):
     @staticmethod
     def _derive_markers(script: dict, words: list[dict]) -> list[dict]:
         """Tag the approximate start time of each highlight scene."""
+        from backend.agents.scriptwriter import clean_markers
+
         markers: list[dict] = []
         scenes = script.get("scenes", [])
-        # Build a flat word list with scene boundaries.
+        # Build a flat word list with scene boundaries. `words` is timestamped from
+        # the SPOKEN audio, which is synthesized from the marker-free text (tts_text) —
+        # so word counts here must be taken from the cleaned narration too, or the
+        # cursor drifts past every [RE-HOOK]/[PAUSA]/[ENFASE]/[LOOP-*] token.
         cursor = 0
         for sc in scenes:
-            n = len((sc.get("narration") or "").split())
+            n = len(clean_markers(sc.get("narration") or "").split())
             if n == 0:
                 continue
             if cursor < len(words):

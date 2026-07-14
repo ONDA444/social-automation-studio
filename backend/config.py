@@ -71,6 +71,7 @@ class Settings(BaseSettings):
     # clip matches a scene, the agent falls back to an AI image (Ken Burns).
     broll_enabled: bool = True
     broll_max_width: int = 1920          # cap download resolution (avoid huge 4k files)
+    visuals_concurrency: int = 4         # max scenes fetched/generated in parallel
 
     # ---- Premium TTS (LMNT voice clone) ----
     # Your own/licensed LMNT voice, used through LMNT's official API. Set BOTH

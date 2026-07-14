@@ -362,7 +362,7 @@ class DriveLibraryService:
             row.content_type = content_type or "auto"
             row.video_format = video_format or guess_format(row.name, row.mime_type)
             row.account_id = account_id
-            row.size_bytes = int(item["size"]) if item.get("size", "").isdigit() else None
+            row.size_bytes = int(item["size"]) if (item.get("size") or "").isdigit() else None
             row.metadata_json = {
                 **(row.metadata_json or {}),
                 "webViewLink": item.get("webViewLink"),

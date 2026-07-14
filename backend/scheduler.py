@@ -211,7 +211,11 @@ def _job_recover_stuck_publishing() -> None:
     than _STUCK_JOB_MINUTES and apply the SAME safe transition rules as boot
     recovery (backend.main._apply_orphan_transition) — never blindly
     re-publish a job that may have already uploaded. Jobs that come out as
-    APPROVED (upload never started) are re-dispatched immediately.
+    APPROVED (upload never started) are re-dispatched immediately for
+    publish; jobs that come out as QUEUED (interrupted render, resumed once)
+    are re-dispatched immediately for render — otherwise they'd sit QUEUED
+    forever since nothing but the one-time boot redispatch
+    (backend.main._redispatch_queued_jobs) ever picks up QUEUED jobs.
 
     Skips any job dispatch.is_inflight() still reports as running: a job that
     is merely SLOW (not dead — e.g. a real upload still grinding through a
@@ -226,7 +230,7 @@ def _job_recover_stuck_publishing() -> None:
 
     from backend.main import _apply_orphan_transition, _safe_boot
     from backend.models import JobStatus, VideoJob
-    from backend.pipeline.dispatch import dispatch_publish, is_inflight
+    from backend.pipeline.dispatch import dispatch_job, dispatch_publish, is_inflight
 
     cutoff = datetime.utcnow() - timedelta(minutes=_STUCK_JOB_MINUTES)
     db = SessionLocal()
@@ -242,6 +246,7 @@ def _job_recover_stuck_publishing() -> None:
             return
         safe = _safe_boot()
         to_publish = []
+        to_requeue = []
         recovered = 0
         for job in stuck:
             was_publishing = job.status == JobStatus.PUBLISHING
@@ -249,11 +254,14 @@ def _job_recover_stuck_publishing() -> None:
             recovered += 1
             if was_publishing and job.status == JobStatus.APPROVED:
                 to_publish.append(job.id)
+            elif (not was_publishing) and job.status == JobStatus.QUEUED:
+                to_requeue.append(job.id)
         db.commit()
         logger.info(
             "Varredura de jobs presos: %d job(s) travado(s) em PUBLISHING/PROCESSING "
-            "(> %dmin, sem tarefa viva) ajustado(s); %d reenviado(s) para publicação.",
-            recovered, _STUCK_JOB_MINUTES, len(to_publish),
+            "(> %dmin, sem tarefa viva) ajustado(s); %d reenviado(s) para publicação, "
+            "%d reenviado(s) para render.",
+            recovered, _STUCK_JOB_MINUTES, len(to_publish), len(to_requeue),
         )
     except Exception as exc:  # noqa: BLE001 — never let the scheduler die
         db.rollback()
@@ -266,6 +274,11 @@ def _job_recover_stuck_publishing() -> None:
             dispatch_publish(job_id)
         except Exception as exc:  # noqa: BLE001 — isolate per job
             logger.warning("recover_stuck_publishing: re-dispatch failed for job %s: %s", job_id, exc)
+    for job_id in to_requeue:
+        try:
+            dispatch_job(job_id)
+        except Exception as exc:  # noqa: BLE001 — isolate per job
+            logger.warning("recover_stuck_publishing: re-dispatch (render) failed for job %s: %s", job_id, exc)
 
 
 def _job_trending() -> None:
@@ -543,8 +556,23 @@ def _slots_due_today(hhmm_times: list[str], per_day: int, tz_name: str | None, n
 
 def _create_theme_job(db, account_id: int, theme, scheduled_naive: datetime) -> int:
     """Create a QUEUED VideoJob from a theme, mark the theme consumed, dispatch it."""
-    from backend.models import JobStatus, PlatformAccount, VideoJob
+    from sqlalchemy import update as _update
+
+    from backend.models import JobStatus, PlatformAccount, ThemeQueue, VideoJob
     from backend.pipeline.dispatch import dispatch_job
+
+    # ATOMIC claim: flip pending -> consumed only if STILL pending. If another
+    # process (e.g. a second scheduler replica) already claimed this theme,
+    # rowcount==0 and we bail out — preventing two VideoJobs for one theme.
+    claimed = db.execute(
+        _update(ThemeQueue)
+        .where(ThemeQueue.id == theme.id, ThemeQueue.status == "pending")
+        .values(status="consumed")
+    ).rowcount
+    db.commit()
+    if not claimed:
+        return 0
+    theme.status = "consumed"
 
     acct = db.get(PlatformAccount, account_id)
     source_mode = getattr(acct, "video_source_mode", "ai") if acct else "ai"
@@ -554,6 +582,10 @@ def _create_theme_job(db, account_id: int, theme, scheduled_naive: datetime) -> 
             return ready_job_id
         if source_mode == "drive":
             logger.info("Drive sem video compativel para conta %s; tema %s permanece pendente.", account_id, theme.id)
+            # No ready video available — release the claim so the theme stays
+            # pending (matches the log message) instead of being stuck "consumed".
+            theme.status = "pending"
+            db.commit()
             return 0
 
     job = VideoJob(
@@ -568,7 +600,6 @@ def _create_theme_job(db, account_id: int, theme, scheduled_naive: datetime) -> 
     )
     db.add(job)
     db.flush()
-    theme.status = "consumed"
     theme.consumed_job_id = job.id
     db.commit()
     dispatch_job(job.id)
@@ -657,6 +688,8 @@ def _try_create_ready_video_job(db, acct, scheduled_naive: datetime, theme=None)
             job.shorts_paths = [local_path]
         elif analysis.get("aspect_ratio") == "16:9" and video_format != "short":
             ready.video_format = "long"
+            job.video_format = "long"
+            job.shorts_paths = None
         meta = dict(ready.metadata_json or {})
         meta["analysis"] = {
             k: v

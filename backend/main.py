@@ -183,13 +183,21 @@ def _apply_orphan_transition(job, safe: bool) -> None:
     else:  # PUBLISHING orphan — never blindly republish (duplicate risk)
         ps = job.publish_status if isinstance(job.publish_status, dict) else {}
         yt = ps.get("youtube") or {}
+        # TikTok/Instagram now get the same durable "uploading" marker as YouTube
+        # (see publisher.run_publish) — check them too so an interrupted upload on
+        # either platform also parks the job instead of risking a duplicate resend.
+        uploading_platform = next(
+            (p for p in ("youtube", "tiktok", "instagram")
+             if (ps.get(p) or {}).get("status") == "uploading"),
+            None,
+        )
         if yt.get("ok") and yt.get("video_id"):
             job.status = JobStatus.PUBLISHED  # already live — never resend
-        elif yt.get("status") == "uploading":
+        elif uploading_platform:
             job.status = JobStatus.ERROR
             job.error_message = (
-                "Publicação interrompida por reinício — o vídeo PODE já estar no "
-                "canal. Verifique o YouTube antes de usar Retry (evita duplicar)."
+                f"Publicação interrompida por reinício — o vídeo PODE já estar em "
+                f"{uploading_platform}. Verifique antes de usar Retry (evita duplicar)."
             )
         else:
             job.status = JobStatus.APPROVED  # upload never started — safe

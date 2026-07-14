@@ -8,14 +8,14 @@ import AddJobModal from '../components/AddJobModal.jsx'
 import { PageHeader, EmptyState, StatusBadge } from '../components/ui.jsx'
 import { PLATFORM_META, fmtDate } from '../lib'
 
-const CHANNEL_EDITABLE = new Set(['queued', 'awaiting_approval', 'approved', 'error'])
+const CHANNEL_EDITABLE = new Set(['queued', 'awaiting_approval', 'approved', 'error', 'tiktok_pending_approval'])
 
 function Row({ job, accounts, selected, onToggleSelect, onChannelChange, onRetry, onRepublish, onDelete }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: job.id })
   const [showPlayer, setShowPlayer] = useState(false)
   const [showFullError, setShowFullError] = useState(false)
   const canEditChannel = CHANNEL_EDITABLE.has(job.status)
-  const canRepublish   = job.status === 'approved' || job.status === 'error'
+  const canRepublish   = job.status === 'approved' || job.status === 'error' || job.status === 'tiktok_pending_approval'
 
   const errMsg = job.error_message || ''
   const errShort = errMsg.length > 90 ? errMsg.slice(0, 90) + '…' : errMsg
@@ -72,7 +72,7 @@ function Row({ job, accounts, selected, onToggleSelect, onChannelChange, onRetry
           {canRepublish && (
             <button className="btn-ghost btn-sm" onClick={() => onRepublish(job.id)} title="Republicar">⤴</button>
           )}
-          {job.status === 'error' && (
+          {(job.status === 'error' || job.status === 'tiktok_pending_approval') && (
             <button className="btn-ghost btn-sm" onClick={() => onRetry(job.id)} title="Tentar novamente">↻</button>
           )}
           <button className="btn-ghost btn-sm" onClick={() => onDelete(job.id)} title="Excluir">🗑</button>

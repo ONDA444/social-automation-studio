@@ -35,6 +35,8 @@ export default function PlatformCard({ account, onChange, onChanged, onDone }) {
   const [savingMusic, setSavingMusic] = useState(false)
   const [ride, setRide] = useState(account.ride_trends || false)
   const [savingRide, setSavingRide] = useState(false)
+  const [toggling, setToggling] = useState(false)
+  const [removing, setRemoving] = useState(false)
 
   const m = PLATFORM_META[account.platform] || { label: account.platform, color: 'var(--accent)', icon: 'CH' }
   const quotaPct = account.quota_limit ? Math.min(100, Math.round((account.quota_used_today / account.quota_limit) * 100)) : 0
@@ -65,14 +67,23 @@ export default function PlatformCard({ account, onChange, onChanged, onDone }) {
   }
 
   const toggle = async () => {
-    await api.post(`/accounts/${account.id}/${account.status === 'active' ? 'pause' : 'resume'}`)
-    refresh?.()
+    setToggling(true)
+    try {
+      await api.post(`/accounts/${account.id}/${account.status === 'active' ? 'pause' : 'resume'}`)
+      refresh?.()
+    } catch (e) {
+      alert('Falha ao atualizar status: ' + e.message)
+    } finally {
+      setToggling(false)
+    }
   }
 
   const remove = async () => {
     if (confirm('Remover esta conta?')) {
-      await api.del(`/accounts/${account.id}`)
-      refresh?.()
+      setRemoving(true)
+      try { await api.del(`/accounts/${account.id}`); refresh?.() }
+      catch (e) { alert('Falha ao remover conta: ' + e.message) }
+      finally { setRemoving(false) }
     }
   }
 
@@ -162,8 +173,8 @@ export default function PlatformCard({ account, onChange, onChanged, onDone }) {
               ? <button className="btn-ghost btn-sm" style={{ color: 'var(--error)' }} onClick={disconnect}>Desconectar</button>
               : <button className="btn-primary btn-sm" onClick={connect}>Conectar {m.label}</button>
             }
-            <button className="btn-ghost btn-sm" onClick={toggle}>
-              {account.status === 'active' ? 'Pausar' : 'Retomar'}
+            <button className="btn-ghost btn-sm" disabled={toggling} onClick={toggle}>
+              {toggling ? 'Aguarde...' : (account.status === 'active' ? 'Pausar' : 'Retomar')}
             </button>
             <button className="btn-ghost btn-sm" onClick={() => setExpanded((v) => !v)}>
               {expanded ? 'Fechar ajustes' : 'Ajustes'}
@@ -225,8 +236,8 @@ export default function PlatformCard({ account, onChange, onChanged, onDone }) {
             <button className="btn-ghost btn-sm" onClick={() => setRecording(true)}>
               {isClone ? 'Regravar voz clonada' : 'Clonar minha voz'}
             </button>
-            <button className="btn-ghost btn-sm" style={{ color: 'var(--error)' }} onClick={remove}>
-              Remover conta
+            <button className="btn-ghost btn-sm" style={{ color: 'var(--error)' }} disabled={removing} onClick={remove}>
+              {removing ? 'Removendo...' : 'Remover conta'}
             </button>
           </div>
         </div>

@@ -245,6 +245,12 @@ async def run_pipeline(job_id: int) -> dict:
             upd(progress=92, agent="compliance_agent")
             comp = await ComplianceAgent(job_id, ctx).execute()
             job.compliance_status = comp["status"]
+            db.commit()
+            if comp["status"] == "blocked":
+                upd(status=JobStatus.ERROR, agent=None,
+                    error_message=f"Compliance bloqueou: {'; '.join(comp.get('blocks', []))}")
+                _emit_job(job_id, status="error", compliance=comp)
+                return {"status": "error", "compliance": comp}
 
             # thumbnail (variant A landscape) for the approval card
             thumbs = ctx.get("visuals", {}).get("thumbnails", {})
@@ -257,9 +263,15 @@ async def run_pipeline(job_id: int) -> dict:
             # operator wants. The fallback is still recorded in video_context below for
             # visibility, and only logged as a warning here.
             narration = ctx.get("narration", {}) or {}
-            if narration.get("voice_fallback_used"):
+            voice_fallback_used = bool(narration.get("voice_fallback_used"))
+            if voice_fallback_used:
                 logger.warning("Job %s: voz em fallback (%s) — publicando mesmo assim (auto).",
                                job_id, narration.get("tts_provider"))
+                # Auto-published videos skip human review, so the fallback flag must be
+                # surfaced somewhere more visible than a log line — emit a dedicated
+                # WS event the operator dashboard can badge/filter on.
+                _emit_job(job_id, status="voice_fallback", voice_fallback_used=True,
+                          tts_provider=narration.get("tts_provider"))
 
             # Keep stored context lean (heavy arrays live in their JSON files on disk).
             research = ctx.get("research", {}) or {}
@@ -295,12 +307,20 @@ async def run_pipeline(job_id: int) -> dict:
                 if job.scheduled_at is None:
                     job.scheduled_at = datetime.utcnow()
                 upd(status=JobStatus.APPROVED, progress=100, agent=None, approval_status="approved")
-                _emit_job(job_id, status="approved", qc=qc, compliance=comp)
+                _emit_job(job_id, status="approved", qc=qc, compliance=comp,
+                          voice_fallback_used=voice_fallback_used)
                 # "schedule" mode: upload to YouTube NOW as scheduled (publishAt = the
                 # future slot) instead of waiting for _job_publish_due — that's what
                 # makes it show as "Agendado" and go public exactly at the slot.
                 # "immediate" mode leaves publishing to _job_publish_due at the slot.
-                if (settings.publish_mode or "schedule").lower() == "schedule":
+                # This early-dispatch trick ONLY works for YouTube: TikTok and
+                # Instagram have no publish_at/schedule support in run_publish, so
+                # dispatching now would make them go live immediately regardless of
+                # scheduled_at. When other platforms are targeted, skip the early
+                # dispatch and let _job_publish_due publish everything together once
+                # the slot actually arrives — keeping multi-platform launches in sync.
+                only_youtube = list(dict.fromkeys(job.target_platforms or ["youtube"])) == ["youtube"]
+                if only_youtube and (settings.publish_mode or "schedule").lower() == "schedule":
                     try:
                         from backend.pipeline.dispatch import dispatch_publish
                         # Claim the job (PUBLISHING) BEFORE dispatching so _job_publish_due

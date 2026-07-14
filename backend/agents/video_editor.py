@@ -113,11 +113,11 @@ class VideoEditorAgent(BaseAgent):
 
         jid = "adhoc" if self.job_id is None else self.job_id
         final_path = out_dir / f"video_{jid}_main.mp4"
-        await asyncio.to_thread(
+        video_len = await asyncio.to_thread(
             self._render, scene_assets, durations, editing_plan, narration, music, captions, work, final_path
         )
 
-        result = {"main_video_path": str(final_path), "duration": round(sum(durations), 2),
+        result = {"main_video_path": str(final_path), "duration": round(video_len, 2),
                   "resolution": f"{self.W}x{self.H}", "fps": FPS, "format": fmt}
         self.ctx_set("main_video", result)
         self.emit("progress", f"Vídeo principal pronto ({result['duration']}s)", progress=82)
@@ -184,6 +184,7 @@ class VideoEditorAgent(BaseAgent):
             cmd += ["-c:v", "copy"]
         cmd.append(str(final_path))
         _run(cmd, cwd=str(work))
+        return video_len
 
     def _render_image_scene(self, src: str, dst: Path, dur: float, cam: str, color: str, atmos):
         vf = fx.build_scene_filter(color, cam, dur, FPS, self.W, self.H, atmos)

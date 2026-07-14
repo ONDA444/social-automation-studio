@@ -115,7 +115,6 @@ def resolve_channel_config(channel: dict | None = None,
                            per_job_override: dict | None = None) -> dict:
     cfg = _deep_merge(CHANNEL_DEFAULTS, channel or {})
     cfg = _deep_merge(cfg, per_job_override or {})
-    cfg = _deep_merge(CHANNEL_DEFAULTS, cfg)
     return cfg
 
 
@@ -899,7 +898,11 @@ GERE narration_text (COM marcadores) E tts_text (LIMPO, sem nenhum colchete)."""
     def _estimate_duration(script: dict, content_type: str) -> int:
         if content_type == "quote_viral":
             return 10
-        words = len((script.get("narration_text") or "").split())
+        # Use tts_text (clean, marker-free) since that's what the TTS actually
+        # speaks; narration_text still contains [RE-HOOK]/[PAUSA]/etc. markers
+        # which would inflate the word count and overestimate duration.
+        text = script.get("tts_text") or script.get("narration_text") or ""
+        words = len(text.split())
         # ~2.5 words/second narration.
         return max(15, round(words / 2.5)) if words else 60
 

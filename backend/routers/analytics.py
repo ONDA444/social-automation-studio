@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from backend.agents.analytics import AnalyticsAgent
 from backend.agents.content_calendar import ContentCalendarAgent
@@ -23,7 +23,10 @@ def overview(db: Session = Depends(get_db)):
     so totals must collapse to one row per video per platform first."""
     totals = {"views": 0, "likes": 0, "comments": 0, "shares": 0}
     by_platform: dict[str, int] = {}
-    for job in db.execute(select(VideoJob)).scalars().all():
+    jobs = db.execute(
+        select(VideoJob).options(selectinload(VideoJob.analytics))
+    ).scalars().all()
+    for job in jobs:
         latest: dict[str, VideoAnalytics] = {}
         for r in (job.analytics or []):
             cur = latest.get(r.platform)
@@ -55,7 +58,11 @@ def videos(account_id: int | None = None, limit: int = 200, db: Session = Depend
     for job in db.execute(q).scalars().all():
         ps = job.publish_status or {}
         yt = ps.get("youtube") or {}
-        if not yt.get("video_id") and not yt.get("url"):
+        published_anywhere = any(
+            isinstance(p, dict) and (p.get("video_id") or p.get("url"))
+            for p in ps.values()
+        )
+        if not published_anywhere:
             continue  # not actually published anywhere — skip
         latest: dict[str, VideoAnalytics] = {}
         for r in (job.analytics or []):

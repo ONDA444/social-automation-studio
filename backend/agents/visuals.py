@@ -35,6 +35,13 @@ PEXELS_VIDEO = "https://api.pexels.com/videos/search"
 # generate than native 1920x1080 (honours the "don't make it heavy" constraint).
 SCENE_W, SCENE_H = 1600, 900
 
+# Pexels min_width filter for B-roll search: match the configured render
+# resolution instead of a fixed 1080. Downloading Full-HD clips for a 720p
+# (default) render wastes bandwidth/disk with no visible quality gain, since
+# the editor downscales anyway.
+_PEXELS_MIN_H = max(360, min(1080, settings.video_resolution))
+PEXELS_MIN_WIDTH = (round(_PEXELS_MIN_H * 16 / 9)) & ~1
+
 
 class VisualsAgent(BaseAgent):
     name = "visuals"
@@ -60,28 +67,43 @@ class VisualsAgent(BaseAgent):
         use_broll = settings.broll_enabled and bool(settings.pexels_api_key or settings.pixabay_api_key)
 
         self.emit("progress", f"Obtendo {len(scenes)} asset(s) visual(is)", progress=58)
-        for sc in scenes:
-            idx = sc.get("index", len(scene_assets))
+
+        # Each scene's network calls (stock-video search/download or AI-image
+        # generation) are independent and write to their own file, so they can
+        # safely run concurrently. A semaphore bounds parallelism to avoid
+        # hammering the provider APIs / local bandwidth.
+        sem = asyncio.Semaphore(settings.visuals_concurrency)
+
+        async def _one_scene(sc: dict) -> dict:
+            idx = sc.get("index", 0)
             query = self._search_terms(sc)
+            async with sem:
+                # Niche topics (gaming/brands/people) are flagged ai_image by the
+                # scriptwriter: stock banks have no real match and would return a
+                # fuzzy, off-theme clip, so skip stock and draw an ON-THEME AI
+                # image instead.
+                if use_broll and query and not sc.get("ai_image"):
+                    clip = await self._broll_clip(query, assets_dir, idx)
+                    if clip:
+                        self.emit("progress", f"Cena {idx}: vídeo real ({query[:32]})", progress=58)
+                        return {"index": idx, "path": str(clip), "type": "video",
+                                "source": "stock_video", "query": query}
 
-            # Niche topics (gaming/brands/people) are flagged ai_image by the
-            # scriptwriter: stock banks have no real match and would return a fuzzy,
-            # off-theme clip, so skip stock and draw an ON-THEME AI image instead.
-            if use_broll and query and not sc.get("ai_image"):
-                clip = await self._broll_clip(query, assets_dir, idx)
-                if clip:
-                    scene_assets.append({"index": idx, "path": str(clip), "type": "video",
-                                         "source": "stock_video", "query": query})
-                    self.emit("progress", f"Cena {idx}: vídeo real ({query[:32]})", progress=58)
-                    continue
+                # Fallback: AI image via the provider chain (animated with Ken Burns by the editor).
+                dst = assets_dir / f"scene_{idx:03d}.jpg"
+                prompt = sc.get("visual_prompt") or query or "cinematic abstract atmosphere"
+                src = await self._generate_image(self._enhance(prompt), dst, SCENE_W, SCENE_H,
+                                                 label=sc.get("narration", ""))
+                self.emit("progress", f"Cena {idx}: imagem IA ({src})", progress=58)
+                return {"index": idx, "path": str(dst), "type": "image", "source": src}
 
-            # Fallback: AI image via the provider chain (animated with Ken Burns by the editor).
-            dst = assets_dir / f"scene_{idx:03d}.jpg"
-            prompt = sc.get("visual_prompt") or query or "cinematic abstract atmosphere"
-            src = await self._generate_image(self._enhance(prompt), dst, SCENE_W, SCENE_H,
-                                             label=sc.get("narration", ""))
-            scene_assets.append({"index": idx, "path": str(dst), "type": "image", "source": src})
-            self.emit("progress", f"Cena {idx}: imagem IA ({src})", progress=58)
+        # Preserve `index` fallback behaviour of the old sequential loop (defaults
+        # to positional order) before dispatching concurrently.
+        for i, sc in enumerate(scenes):
+            sc.setdefault("index", i)
+
+        results = await asyncio.gather(*(_one_scene(sc) for sc in scenes))
+        scene_assets.extend(sorted(results, key=lambda a: a["index"]))
 
         # Thumbnails.
         self.emit("progress", "Gerando thumbnails A/B", progress=64)
@@ -236,17 +258,18 @@ class VisualsAgent(BaseAgent):
         try:
             out = subprocess.run(
                 ["ffprobe", "-v", "error", "-select_streams", "v:0",
-                 "-show_entries", "stream=codec_name", "-show_entries", "format=duration",
+                 "-show_entries", "stream=codec_name:format=duration",
                  "-of", "default=nw=1:nk=1", str(path)],
                 capture_output=True, text=True, timeout=25,
             )
+            has_codec = False
             dur = 0.0
             for tok in (out.stdout or "").split():
                 try:
                     dur = max(dur, float(tok))
                 except ValueError:
-                    pass
-            return out.returncode == 0 and dur > 0.3
+                    has_codec = True
+            return out.returncode == 0 and has_codec and dur > 0.3
         except Exception:
             return False
 
@@ -275,7 +298,7 @@ class VisualsAgent(BaseAgent):
             r = await client.get(
                 PEXELS_VIDEO,
                 headers={"Authorization": settings.pexels_api_key},
-                params={"query": query, "per_page": 5, "orientation": "landscape", "min_width": 1080},
+                params={"query": query, "per_page": 5, "orientation": "landscape", "min_width": PEXELS_MIN_WIDTH},
             )
             r.raise_for_status()
             vids = r.json().get("videos", [])

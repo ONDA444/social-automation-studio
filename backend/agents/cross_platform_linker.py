@@ -35,6 +35,10 @@ def mirror_after_publish(db: Session, source_job: VideoJob) -> list[int]:
     created: list[int] = []
     delay = timedelta(minutes=DEFAULT_DELAY_MIN)
     for platform, linked_id in (acct.linked_accounts or {}).items():
+        if platform in (source_job.target_platforms or []):
+            # source job already publishes directly to this platform; skip the
+            # mirror to avoid double-publishing to the same linked account.
+            continue
         target = db.get(PlatformAccount, linked_id) if linked_id else None
         if not target or target.status != "active":
             continue

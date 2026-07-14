@@ -69,11 +69,15 @@ def _get_redis():
 
             from backend.config import settings
 
-            _redis = redis.from_url(settings.redis_url, decode_responses=True)
-            _redis.ping()
+            client = redis.from_url(settings.redis_url, decode_responses=True)
+            client.ping()
+            _redis = client
         except Exception:
-            _redis = False  # mark as unavailable
-    return _redis or None
+            # Do NOT cache the failure: leave _redis as None so the next call
+            # retries the connection instead of permanently disabling Redis
+            # publishing for the lifetime of the process.
+            return None
+    return _redis
 
 
 def publish_event(event: dict) -> None:

@@ -100,7 +100,7 @@ async def run_publish(job_id: int) -> dict:
         # uploaded video (publish_status.youtube.ok + video_id) must NOT be
         # re-sent — that is exactly what produced the duplicate videos on the
         # channel. Mark it PUBLISHED and bail.
-        platforms = job.target_platforms or ["youtube"]
+        platforms = ["youtube"] if job.target_platforms is None else job.target_platforms
         prior = job.publish_status or {}
         if isinstance(prior, dict):
             results = dict(prior)
@@ -202,12 +202,28 @@ async def run_publish(job_id: int) -> dict:
                         "account_id": acct.id,
                     }}
                     db.commit()
-                    results["youtube"] = await self_publish_youtube(
+                    results["youtube"] = await publish_youtube(
                         job, seo, creds, publish_at, shorts, privacy,
                         content_language=getattr(acct, "content_language", None) or "pt-BR")
                 elif platform == "tiktok":
+                    # Same durable "uploading" marker as YouTube above — without it,
+                    # orphan recovery (main._apply_orphan_transition) has no way to
+                    # know a TikTok upload was in flight when the process died, and
+                    # could blindly re-publish a video that's already on TikTok.
+                    job.publish_status = {**results, "tiktok": {
+                        "status": "uploading",
+                        "started_at": datetime.utcnow().isoformat() + "Z",
+                        "account_id": acct.id,
+                    }}
+                    db.commit()
                     results["tiktok"] = await self_publish_tiktok(seo, creds, shorts, privacy)
                 elif platform == "instagram":
+                    job.publish_status = {**results, "instagram": {
+                        "status": "uploading",
+                        "started_at": datetime.utcnow().isoformat() + "Z",
+                        "account_id": acct.id,
+                    }}
+                    db.commit()
                     results["instagram"] = await self_publish_instagram(seo, creds, shorts)
                 else:
                     results[platform] = {"ok": False, "status": "unsupported"}
@@ -270,7 +286,7 @@ async def run_publish(job_id: int) -> dict:
                 job.status = JobStatus.ERROR
                 # A pre-upload step (e.g. _ensure_ready_video_local's Drive download)
                 # can raise our own wall-clock-deadline TimeoutError directly, bypassing
-                # self_publish_youtube's auth_error classification entirely. Recognize
+                # publish_youtube's auth_error classification entirely. Recognize
                 # it here too so the message matches _NO_AUTO_RETRY_MARKERS (park until
                 # reconnect) instead of getting endlessly auto-resurrected with a
                 # cryptic message that never tells the user to reconnect the channel.
@@ -297,8 +313,8 @@ _AUTH_BLOCKED = ("Login do YouTube expirou (invalid_grant) — reconecte o canal
                  "Plataformas e o vídeo publica sozinho. Não precisa clicar Retry.")
 
 
-async def self_publish_youtube(job, seo, creds, publish_at, shorts, privacy="private",
-                               content_language="pt-BR") -> dict:
+async def publish_youtube(job, seo, creds, publish_at, shorts, privacy="private",
+                          content_language="pt-BR") -> dict:
     if not (job.main_video_path and os.path.exists(job.main_video_path)):
         return {"ok": False, "platform": "youtube", "status": "file_missing", "error": _FILE_GONE}
     y = seo.get("youtube", {})
@@ -429,11 +445,11 @@ def _resolve_privacy(job) -> str:
 
 
 def _pick_short(shorts: list[str], prefer: int) -> str | None:
-    """Pick a short by its format number suffix (video_*_short_<n>.mp4), else first."""
+    """Pick a short by its format number suffix (video_*_short_<n>.mp4), else None."""
     for s in shorts:
         if f"_short_{prefer}." in s:
             return s
-    return shorts[0] if shorts else None
+    return None
 
 
 def _ready_video_id(job) -> int | None:

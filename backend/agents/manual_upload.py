@@ -196,7 +196,17 @@ def _analyze_sync(job_id: int) -> None:
             job.title = yt_title[:300]
             job.topic = yt_title
 
-        if analysis.get("aspect_ratio") == "9:16":
+        # A user-supplied forced_video_format (see routers/schedule.py's
+        # upload-video endpoint) always wins over the auto-detected aspect
+        # ratio — ffprobe can misread an atypical video (e.g. black bars) and
+        # classify long vs short wrong, and there's otherwise no way to
+        # correct it.
+        forced_format = ctx.get("forced_video_format")
+        if forced_format in ("long", "short"):
+            job.video_format = forced_format
+            if forced_format == "short":
+                job.shorts_paths = [local_path]
+        elif analysis.get("aspect_ratio") == "9:16":
             job.video_format = "short"
             job.shorts_paths = [local_path]
         elif analysis.get("aspect_ratio") == "16:9":

@@ -502,11 +502,23 @@ def _best_topic(context: dict, analysis: dict) -> str:
     return "Conteudo em destaque"
 
 
+def _truncate_title_safely(text: str, limit: int) -> str:
+    """Cut ``text`` to ``limit`` chars without splitting a word or leaving a
+    dangling preposition/article at the end (see _DANGLING_TRAILERS)."""
+    text = text.strip()
+    if len(text) <= limit:
+        return text
+    cut = text[:limit]
+    cut = re.sub(r"\s+\S*$", "", cut).rstrip(" ,:;")
+    cut = _repair_dangling_trailer(cut)
+    return cut or text[:limit]
+
+
 def _title_from_analysis(topic: str, analysis: dict, content_type: str, video_format: str) -> str:
     for option in analysis.get("title_options") or []:
         option = _clean_text(option)
         if option and not _bad_title(option):
-            return option[:82 if video_format == "short" else 95]
+            return _truncate_title_safely(option, 82 if video_format == "short" else 95)
     base = _compact_topic(topic)
     templates = {
         "sports_highlights": f"{base}: o lance que mudou o jogo",
@@ -709,7 +721,12 @@ def _score(title: str, description: str, tags: list[str], hashtags: list[str], a
         "description_quality": 16 if len(description) >= 120 and "biblioteca" not in description.lower() else 8,
         "tags_quality": 16 if len(tags) >= 8 else 8,
         "hashtag_quality": 10 if len(hashtags) >= 2 else 5,
-        "format_fit": 10 if ("#Shorts" in title or "#Shorts" not in hashtags) else 7,
+        # NOTE: hashtags only ever contains "#Shorts" when video_format == "short",
+        # and in that same case the title always gets "#Shorts" appended too
+        # (see build_drive_seo), so this condition is always true. Kept as a
+        # fixed contribution instead of a fake conditional to avoid implying
+        # the breakdown reflects a real format-fit check.
+        "format_fit": 10,
         "shorts_feed_packaging": 12 if _has_viral_title_shape(title) else 6,
     }
     value = min(95, sum(breakdown.values()))
@@ -806,15 +823,6 @@ def _strip_shorts(text: str) -> str:
     return re.sub(r"#shorts?\b", "", text or "", flags=re.I).strip()
 
 
-def _shorten_title(title: str) -> str:
-    title = re.sub(r"\s+", " ", title).strip()
-    if len(title) <= 72:
-        return title
-    cut = title[:69].rstrip(" ,:;")
-    cut = re.sub(r"\s+\S*$", "", cut).rstrip(" ,:;")
-    return cut or title[:69].rstrip(" ,:;")
-
-
 # Trailing connectors that read as a dangling, unfinished sentence when a
 # template later appends ": <hook>" right after them (e.g. truncating "...as
 # funcionalidades do software" at 55 chars can leave "...funcionalidades do",
@@ -827,6 +835,29 @@ _DANGLING_TRAILERS = {
 }
 
 
+def _repair_dangling_trailer(cut: str) -> str:
+    """Strip trailing words that leave a truncated title reading as an
+    unfinished sentence (e.g. "...funcionalidades do" -> "...funcionalidades").
+    Shared by every title-truncation path so the fix can't regress in one
+    path while staying fixed in another."""
+    while True:
+        words = cut.split(" ")
+        if len(words) <= 1 or words[-1].lower() not in _DANGLING_TRAILERS:
+            break
+        cut = " ".join(words[:-1]).rstrip(" ,:;")
+    return cut
+
+
+def _shorten_title(title: str) -> str:
+    title = re.sub(r"\s+", " ", title).strip()
+    if len(title) <= 72:
+        return title
+    cut = title[:69].rstrip(" ,:;")
+    cut = re.sub(r"\s+\S*$", "", cut).rstrip(" ,:;")
+    cut = _repair_dangling_trailer(cut)
+    return cut or title[:69].rstrip(" ,:;")
+
+
 def _compact_topic(topic: str) -> str:
     topic = _remove_internal_words(_clean_text(topic))
     if len(topic) <= 55:
@@ -835,11 +866,7 @@ def _compact_topic(topic: str) -> str:
         cut = topic[:55]
         cut = re.sub(r"\s+\S*$", "", cut)
     cut = cut.rstrip(" ,:;")
-    while True:
-        words = cut.split(" ")
-        if len(words) <= 1 or words[-1].lower() not in _DANGLING_TRAILERS:
-            break
-        cut = " ".join(words[:-1]).rstrip(" ,:;")
+    cut = _repair_dangling_trailer(cut)
     return cut or "Esse corte"
 
 

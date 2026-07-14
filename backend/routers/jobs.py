@@ -84,6 +84,7 @@ def _platform_published(st) -> bool:
 _EDITABLE_STATES = {
     JobStatus.QUEUED,
     JobStatus.AWAITING_APPROVAL,
+    JobStatus.TIKTOK_PENDING_APPROVAL,
     JobStatus.APPROVED,
     JobStatus.ERROR,
 }
@@ -247,7 +248,9 @@ def list_content_types():
 @router.get("/approvals")
 def list_approvals(db: Session = Depends(get_db)):
     """Jobs waiting for human review."""
-    stmt = select(VideoJob).where(VideoJob.status == JobStatus.AWAITING_APPROVAL).order_by(
+    stmt = select(VideoJob).where(
+        VideoJob.status.in_((JobStatus.AWAITING_APPROVAL, JobStatus.TIKTOK_PENDING_APPROVAL))
+    ).order_by(
         VideoJob.updated_at.desc()
     )
     jobs = db.execute(stmt).scalars().all()
@@ -309,7 +312,7 @@ def approve_job(job_id: int, db: Session = Depends(get_db)):
     job = db.get(VideoJob, job_id)
     if not job:
         raise HTTPException(404, "job não encontrado")
-    if job.status != JobStatus.AWAITING_APPROVAL:
+    if job.status not in (JobStatus.AWAITING_APPROVAL, JobStatus.TIKTOK_PENDING_APPROVAL):
         raise HTTPException(409, f"job não está aguardando aprovação (status={job.status.value})")
     job.approval_status = "approved"
     job.status = JobStatus.APPROVED
@@ -404,7 +407,9 @@ def publish_job(job_id: int, db: Session = Depends(get_db)):
     job = db.get(VideoJob, job_id)
     if not job:
         raise HTTPException(404, "job não encontrado")
-    if job.status not in (JobStatus.APPROVED, JobStatus.ERROR, JobStatus.PUBLISHING):
+    if job.status not in (
+        JobStatus.APPROVED, JobStatus.ERROR, JobStatus.PUBLISHING, JobStatus.TIKTOK_PENDING_APPROVAL,
+    ):
         raise HTTPException(409, f"job não pode ser republicado (status={job.status.value})")
 
     pub = job.publish_status or {}

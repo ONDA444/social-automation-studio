@@ -174,35 +174,6 @@ class SEOAgent(BaseAgent):
         self.emit("progress", "SEO pronto (YT/TikTok/IG)", progress=86)
         return seo
 
-    async def _localize(self, seo: dict) -> None:
-        """Translate title/description into settings.localize_languages (free reach).
-        One LLM call returns all languages -> seo['youtube']['localizations']. Disabled
-        (no-op) unless LOCALIZE_LANGUAGES is set. Best-effort."""
-        langs = runtime_settings.effective_localize_langs()
-        yt = seo.get("youtube", {})
-        title = yt.get("title", "")
-        if not langs or not title:
-            return
-        try:
-            prompt = (
-                f"Traduza o TÍTULO e a DESCRIÇÃO de um vídeo do YouTube para estes idiomas "
-                f"(códigos ISO): {', '.join(langs)}. Preserve o apelo de clique; NÃO traduza "
-                f"nomes próprios, hashtags nem URLs. Responda SOMENTE JSON no formato "
-                f'{{"<lang>": {{"title": "...", "description": "..."}}}}.\n\n'
-                f"TÍTULO: {title}\n\nDESCRIÇÃO:\n{(yt.get('description') or '')[:1500]}"
-            )
-            out = await llm.complete_json(prompt, system="Tradutor profissional. Só JSON válido.",
-                                          max_tokens=1500)
-            loc = {}
-            for lang in langs:
-                v = out.get(lang) if isinstance(out, dict) else None
-                if isinstance(v, dict) and v.get("title"):
-                    loc[lang] = {"title": v.get("title", ""), "description": v.get("description", "")}
-            if loc:
-                seo["youtube"]["localizations"] = loc
-        except Exception as exc:  # noqa: BLE001
-            logger.debug("localize failed: %s", exc)
-
     async def _via_llm(self, script, content_type, language) -> dict:
         title = script.get("title", "")
         keywords = script.get("seo_keywords", [])
@@ -389,13 +360,15 @@ JSON EXATO (preencha todos os campos, não omita plataformas):
         chapters = [{"time": 0.0, "title": "Início"}]
         cursor = 0
         for sc in scenes:
-            n = len((sc.get("narration") or "").split())
+            # Clean the inline markers ([PAUSA], [ENFASE]{...}, etc.) BEFORE counting
+            # words or using the narration as a chapter title — otherwise the markers
+            # leak verbatim into the published YouTube description AND inflate the
+            # word count, desyncing `cursor` from the actual `words` timestamps
+            # (which are built from the already-cleaned TTS text).
+            clean = clean_markers(sc.get("narration") or "")
+            n = len(clean.split())
             if n and cursor < len(words):
                 t = words[cursor]["start"]
-                # Clean the inline markers ([PAUSA], [ENFASE]{...}, etc.) BEFORE using
-                # the narration as a chapter title — otherwise they leak verbatim into
-                # the published YouTube description.
-                clean = clean_markers(sc.get("narration") or "")
                 label = clean.split(".")[0][:40].strip() or f"Parte {sc.get('index', 0) + 1}"
                 if t > 5:  # YouTube needs distinct timestamps; skip near-zero
                     chapters.append({"time": round(t, 1), "title": label})

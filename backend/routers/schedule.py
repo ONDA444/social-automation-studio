@@ -125,6 +125,7 @@ async def upload_video(
     file: UploadFile = File(...),
     scheduled_at: str | None = Form(None),
     hint: str = Form(""),
+    video_format: str | None = Form(None),
     db: Session = Depends(get_db),
 ):
     """Manual "Enviar video do PC": analyze a user-picked local file with the
@@ -168,19 +169,31 @@ async def upload_video(
 
     hint = (hint or "").strip()[:200]
 
+    # Optional manual override for the auto-detected aspect_ratio -> video_format
+    # mapping done in manual_upload.py: an atypical video (e.g. black bars) can
+    # get its aspect ratio misread, and there was previously no way for the
+    # user to force the correct format.
+    forced_format = (video_format or "").strip().lower() or None
+    if forced_format not in (None, "long", "short"):
+        raise HTTPException(400, "video_format inválido; use 'long' ou 'short'.")
+
+    video_context = {"source": "manual_upload", "hint": hint}
+    if forced_format:
+        video_context["forced_video_format"] = forced_format
+
     job = VideoJob(
         title=(hint or "Vídeo enviado manualmente")[:300],
         topic=hint or None,
         mode="from_manual_upload",
         content_type="film_recap_ai_images",
-        video_format="long",
+        video_format=forced_format or "long",
         target_platforms=["youtube"],
         account_id=account.id,
         status=JobStatus.PROCESSING,
         approval_status="pending",
         scheduled_at=parsed_scheduled_at,
         current_agent="manual_upload",
-        video_context={"source": "manual_upload", "hint": hint},
+        video_context=video_context,
     )
     db.add(job)
     db.flush()

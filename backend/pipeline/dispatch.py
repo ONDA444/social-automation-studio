@@ -51,7 +51,31 @@ _inflight_lock = threading.Lock()
 
 def is_inflight(job_id: int) -> bool:
     with _inflight_lock:
-        return job_id in _inflight
+        if job_id in _inflight:
+            return True
+    # The in-process set above only ever gets populated by _run_inprocess, so it
+    # is blind to work actually executing on a SEPARATE Celery worker container
+    # (USE_CELERY=1). Without this check, the web container's stuck-job sweep
+    # (scheduler._job_recover_stuck_publishing) would see nothing "inflight" for
+    # a job that is genuinely still uploading in the worker, mark it orphaned,
+    # and re-dispatch a second concurrent publish for the same job — risking a
+    # duplicate upload to the same platform. Ask Celery's own workers whether
+    # any of them currently has a task for this job_id.
+    if settings.use_celery:
+        try:
+            from backend.pipeline.celery_app import app as celery_app
+
+            active = celery_app.control.inspect(timeout=1.0).active() or {}
+            for tasks in active.values():
+                for task in tasks:
+                    if task.get("name") not in ("pipeline.process_job", "pipeline.publish_job"):
+                        continue
+                    args = list(task.get("args") or []) + list((task.get("kwargs") or {}).values())
+                    if job_id in args:
+                        return True
+        except Exception as exc:  # noqa: BLE001 — never let a broker hiccup fail this check
+            logger.warning("is_inflight: Celery inspect failed for job %s (%s)", job_id, exc)
+    return False
 
 # Cache the Redis probe briefly: each probe costs ~0.4s when Redis is down, and
 # a batch can dispatch hundreds of jobs back-to-back.
