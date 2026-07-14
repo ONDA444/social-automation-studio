@@ -11,6 +11,7 @@ import logging
 import re
 
 from backend.agents.base_agent import BaseAgent
+from backend.agents.keyword_research import related_search_queries
 from backend.config import settings
 from backend import llm
 from backend import runtime_settings
@@ -119,9 +120,20 @@ class SEOAgent(BaseAgent):
         content_type = script.get("content_type", content_type)
         language = language or settings.default_language
 
+        # Real search-behavior grounding: today every keyword/tag is pure LLM
+        # invention. Pull actual Google Trends "top"/"rising" queries related to
+        # this video's own title (not the channel's broad niche) so the SEO
+        # prompt — and the tag list, as a safety net below — are anchored to
+        # what people really search, not just what sounds plausible. Best-effort
+        # (empty list on any failure); off the event loop since pytrends is a
+        # blocking network call.
+        real_queries = await asyncio.to_thread(
+            related_search_queries, script.get("title", ""), language or "pt-BR"
+        )
+
         self.emit("progress", "Gerando SEO por plataforma", progress=84)
         try:
-            seo = await self._via_llm(script, content_type, language)
+            seo = await self._via_llm(script, content_type, language, real_queries)
         except llm.LLMUnavailable:
             seo = self._offline(script, content_type)
 
@@ -148,6 +160,19 @@ class SEOAgent(BaseAgent):
                     if isinstance(t, str) and t.strip()]
         if len(existing) < 8:
             seo["youtube"]["tags"] = self._merge_tags(existing, script, content_type)
+        # Guarantee at least a few REAL search queries land in the published
+        # tags even if the LLM ignored the grounding block in the prompt above
+        # — same "top up, LLM's own picks stay first" pattern as _merge_tags.
+        if real_queries:
+            current = seo["youtube"].get("tags") or []
+            lowered = {t.lower() for t in current if isinstance(t, str)}
+            for q in real_queries:
+                if len(current) >= 20:
+                    break
+                if q.lower() not in lowered:
+                    current.append(q)
+                    lowered.add(q.lower())
+            seo["youtube"]["tags"] = current
 
         # Pin the high-CTR title from Packaging. The SEO LLM is told NOT to regenerate
         # the title, but weak free models sometimes rewrite it anyway and the drifted
@@ -174,7 +199,7 @@ class SEOAgent(BaseAgent):
         self.emit("progress", "SEO pronto (YT/TikTok/IG)", progress=86)
         return seo
 
-    async def _via_llm(self, script, content_type, language) -> dict:
+    async def _via_llm(self, script, content_type, language, real_queries: list[str] | None = None) -> dict:
         title = script.get("title", "")
         keywords = script.get("seo_keywords", [])
         packaging = self.ctx_get("packaging") or {}
@@ -200,12 +225,20 @@ class SEOAgent(BaseAgent):
                 "Proponha first_comment (comentário-semente fixado que gera debate)."
             )
 
+        trends_block = ""
+        if real_queries:
+            trends_block = (
+                "\n\nBuscas reais relacionadas (Google Trends, o que pessoas de verdade "
+                f"digitam sobre esse tema — priorize estas sobre termos inventados quando "
+                f"fizerem sentido para search_seed/long_tail_variants/tags): {real_queries}"
+            )
+
         prompt = f"""Crie o pacote de SEO/Algoritmo em {language} para este vídeo.
 Título recomendado (Packaging — NÃO regere): "{recommended_title}"
 Tipo: {content_type}
 Keywords semente: {keywords}
 Plataformas: {target_platforms}
-Fatos verificados: {facts_snippet or 'N/A'}{perf_block}{fyp_block}
+Fatos verificados: {facts_snippet or 'N/A'}{perf_block}{fyp_block}{trends_block}
 
 JSON EXATO (preencha todos os campos, não omita plataformas):
 {{

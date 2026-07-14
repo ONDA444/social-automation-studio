@@ -213,6 +213,21 @@ def build_drive_seo(context: dict, analysis: dict | None = None) -> dict:
 
     primary = _primary_keyword(topic, entities, topics, niche)
     tags = _tags(primary, topic, entities, topics, niche, content_type, video_format)
+    # Real search-behavior grounding (see keyword_research.py docstring): top up
+    # with actual Google Trends queries related to this video's own primary
+    # keyword, same "LLM/analysis picks stay first" top-up pattern as the rest
+    # of _tags — best-effort, never blocks SEO on failure.
+    from backend.agents.keyword_research import related_search_queries
+
+    real_queries = related_search_queries(primary or topic)
+    if real_queries:
+        lowered = {t.lower() for t in tags}
+        for q in real_queries:
+            if len(tags) >= 18:
+                break
+            if q.lower() not in lowered:
+                tags.append(q)
+                lowered.add(q.lower())
     yt_hashtags = _yt_hashtags(tags, video_format)
     social_hashtags = _social_hashtags(tags, video_format)
     hook = _clean_text(analysis.get("hook") or _hook(topic, content_type))
