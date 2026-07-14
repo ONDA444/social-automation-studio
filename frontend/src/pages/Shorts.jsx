@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { api, mediaUrl } from '../api'
 import { PageHeader, EmptyState } from '../components/ui.jsx'
 
@@ -19,14 +19,17 @@ export default function Shorts() {
   useEffect(load, [])
 
   // Build a flat list of shorts across jobs, preferring the rich shorts_meta.
-  const cards = []
-  for (const j of jobs) {
-    const meta = j.video_context?.shorts_meta
-    const list = (meta && meta.length)
-      ? meta
-      : (j.shorts_paths || []).map((p, i) => ({ path: p, num: i + 1, name: 'short' }))
-    for (const s of list) cards.push({ job: j, short: s })
-  }
+  const cards = useMemo(() => {
+    const list = []
+    for (const j of jobs) {
+      const meta = j.video_context?.shorts_meta
+      const shorts = (meta && meta.length)
+        ? meta
+        : (j.shorts_paths || []).map((p, i) => ({ path: p, num: i + 1, name: 'short' }))
+      for (const s of shorts) list.push({ job: j, short: s })
+    }
+    return list
+  }, [jobs])
 
   const copy = (txt) => { if (txt) navigator.clipboard?.writeText(txt) }
 
@@ -59,7 +62,7 @@ export default function Shorts() {
 
       <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(165px, 1fr))' }}>
         {cards.map(({ job, short }, idx) => (
-          <div key={`${job.id}-${short.num}-${idx}`} className="card p-2 flex flex-col gap-1.5">
+          <div key={`${job.id}-${short.path || short.num || idx}-${idx}`} className="card p-2 flex flex-col gap-1.5">
             <div className="relative rounded-card overflow-hidden bg-black aspect-[9/16] group">
               {short.path
                 ? <video src={mediaUrl(short.path)} controls preload="metadata" className="w-full h-full object-contain" />

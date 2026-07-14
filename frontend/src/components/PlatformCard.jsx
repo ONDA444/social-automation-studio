@@ -14,7 +14,7 @@ const STATUS_LABEL = {
   disconnected: 'Desconectado',
 }
 
-function remainingUploads(account) {
+export function remainingUploads(account) {
   const limit = Number(account.quota_limit || 0)
   const used = Number(account.quota_used_today || 0)
   const cost = UPLOAD_COST[account.platform] || 1

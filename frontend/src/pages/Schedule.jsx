@@ -54,6 +54,7 @@ export default function Schedule() {
   const [history, setHistory] = useState([])   // consumed themes (already turned into videos)
   const [showHistory, setShowHistory] = useState(false)
   const [busy, setBusy]     = useState(false)
+  const [regenBusyId, setRegenBusyId] = useState(null)
   const [driveStatus, setDriveStatus] = useState(null)
   const [driveVideos, setDriveVideos] = useState([])
   const [driveVideoStats, setDriveVideoStats] = useState({})
@@ -77,8 +78,12 @@ export default function Schedule() {
     setSaveState((s) => s.status === 'saving' ? s : { status: 'dirty', message: 'Alteracoes ainda nao salvas.' })
   }
 
-  useEffect(() => {
+  const refreshCalendar = () => {
     api.get('/schedule/calendar').then((d) => setEvents(d.events || [])).catch(() => {})
+  }
+
+  useEffect(() => {
+    refreshCalendar()
     api.get('/accounts')
       .then((d) => { const a = d.accounts || []; setAccounts(a); if (a[0]) setSel(String(a[0].id)) })
       .catch(() => {})
@@ -101,7 +106,8 @@ export default function Schedule() {
     } else {
       loadDrive()
     }
-  }, [sel, accounts])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sel])
 
   const loadQueue = () => {
     if (!sel) { setQueue([]); setHistory([]); return }
@@ -118,7 +124,8 @@ export default function Schedule() {
     setSaving(true)
     setSaveState({ status: 'saving', message: 'Salvando configuracao...' })
     try {
-      const savedCfg = await api.put(`/schedule/config/${sel}`, cfg, { timeoutMs: 20000 })
+      const cleanCfg = { ...cfg, post_times: (cfg.post_times || []).map((s) => s.trim()).filter(Boolean) }
+      const savedCfg = await api.put(`/schedule/config/${sel}`, cleanCfg, { timeoutMs: 20000 })
       const savedAccount = await api.patch(`/accounts/${sel}`, driveCfg, { timeoutMs: 20000 })
       setCfg((p) => ({ ...p, ...savedCfg, post_times: savedCfg.post_times?.length ? savedCfg.post_times : p.post_times }))
       const savedDriveCfg = driveConfigFromAccount(savedAccount)
@@ -129,6 +136,7 @@ export default function Schedule() {
       const fresh = await api.get('/accounts', { timeoutMs: 20000 })
       setAccounts(fresh.accounts || [])
       await loadDrive(savedDriveCfg, savedAccount)
+      refreshCalendar()
       setSaveState({ status: 'saved', message: `Salvo com sucesso as ${new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}.` })
     } catch (e) {
       setSaveState({ status: 'error', message: e.message || 'Falha ao salvar configuracao.' })
@@ -239,11 +247,13 @@ export default function Schedule() {
     try {
       const r = await api.post('/themes', {
         account_id: Number(sel), themes: parsedThemes,
-        content_type: themeType, format: themeFormat, target_platforms: ['youtube'],
+        content_type: themeType, format: themeFormat,
+        target_platforms: selAccount && selAccount.platform ? [selAccount.platform] : ['youtube'],
       })
       alert(`${r?.created ?? 0} tema(s) adicionado(s) à fila`)
       setThemesText('')
       loadQueue()
+      refreshCalendar()
     } catch (e) { alert(e.message) } finally { setBusy(false) }
   }
 
@@ -254,7 +264,8 @@ export default function Schedule() {
   // Re-queue a consumed theme as a fresh pending one (re-uses POST /themes — no
   // backend change). Lets the user regenerate a theme whose video failed/was lost.
   const regenTheme = async (t) => {
-    if (!sel) return
+    if (!sel || regenBusyId) return
+    setRegenBusyId(t.id)
     try {
       await api.post('/themes', {
         account_id: Number(sel), themes: [t.theme],
@@ -262,7 +273,7 @@ export default function Schedule() {
         target_platforms: t.target_platforms || ['youtube'],
       })
       loadQueue()
-    } catch (e) { alert(e.message) }
+    } catch (e) { alert(e.message) } finally { setRegenBusyId(null) }
   }
 
   const clearThemes = async () => {
@@ -722,8 +733,9 @@ export default function Schedule() {
                             </p>
                           </div>
                           <button className="btn-ghost text-xs shrink-0" onClick={() => regenTheme(t)}
+                            disabled={regenBusyId !== null}
                             title="Gerar este tema de novo (vira um novo vídeo)">
-                            ↻ Gerar de novo
+                            {regenBusyId === t.id ? '...' : '↻ Gerar de novo'}
                           </button>
                         </li>
                       ))}

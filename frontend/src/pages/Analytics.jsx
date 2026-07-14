@@ -482,12 +482,14 @@ export default function Analytics() {
   const [updatedAt, setUpdatedAt] = useState(null)
   const [recentJob, setRecentJob] = useState(null)
   const [, setTick] = useState(0)
+  const requestIdRef = useRef(0)
 
   useEffect(() => {
     api.get('/accounts').then((d) => setAccounts(d.accounts || [])).catch(() => setAccounts([]))
   }, [])
 
   const load = useCallback(async () => {
+    const requestId = ++requestIdRef.current
     let vid = []
     if (selected) {
       const [v, ins, bt] = await Promise.all([
@@ -495,6 +497,7 @@ export default function Analytics() {
         api.get(`/analytics/insights/${selected}`).catch(() => null),
         api.get(`/analytics/best-times/${selected}`).catch(() => null),
       ])
+      if (requestId !== requestIdRef.current) return
       vid = v
       setVideos(v); setInsights(ins); setBestTimes(bt); setOverview(null)
     } else {
@@ -502,6 +505,7 @@ export default function Analytics() {
         api.get('/analytics/overview').catch(() => ({ totals: {}, by_platform: {} })),
         api.get('/analytics/videos').then((r) => r.videos || []).catch(() => []),
       ])
+      if (requestId !== requestIdRef.current) return
       vid = v
       setOverview(ov); setVideos(v); setInsights(null); setBestTimes(null)
     }
@@ -509,6 +513,7 @@ export default function Analytics() {
     const topJobs = (vid || []).slice(0, 12)
     const entries = await Promise.all(topJobs.map((v) =>
       api.get(`/analytics/job/${v.job_id}`).then((r) => [v.job_id, r.snapshots || []]).catch(() => [v.job_id, []])))
+    if (requestId !== requestIdRef.current) return
     setSnaps(Object.fromEntries(entries))
     setUpdatedAt(Date.now())
   }, [selected])

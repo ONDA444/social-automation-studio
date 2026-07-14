@@ -37,11 +37,11 @@ export default function RemixEngine() {
     setAnalyzing(true); setDna(null); setTypeDetected(false)
     try {
       const d = await api.post('/remix/analyze', { source })
-      const dna = d.style_dna
-      setDna(dna)
-      if (dna?.suggested_theme) setTitle(dna.suggested_theme)  // auto-detected topic
-      if (dna?.suggested_format) setFormat(dna.suggested_format)  // 9:16/1:1 -> short
-      const detected = dna?.content_type || dna?.template_recommendation  // auto-detected type
+      const styleDna = d.style_dna
+      setDna(styleDna)
+      if (styleDna?.suggested_theme) setTitle(styleDna.suggested_theme)  // auto-detected topic
+      if (styleDna?.suggested_format) setFormat(styleDna.suggested_format)  // 9:16/1:1 -> short
+      const detected = styleDna?.content_type || styleDna?.template_recommendation  // auto-detected type
       if (detected && contentTypes.some((c) => c.value === detected)) { setContentType(detected); setTypeDetected(true) }
     }
     catch (e) { alert('Falha ao analisar: ' + e.message) } finally { setAnalyzing(false) }

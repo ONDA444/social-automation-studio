@@ -117,6 +117,28 @@ function MonetizationCard() {
         className="w-full rounded-card px-3 py-2 text-sm font-mono disabled:opacity-40"
         style={inputStyle}
       />
+      {cfg.localize_enabled && (() => {
+        const raw = cfg.localize_languages || '';
+        const codes = raw
+          .split(/[,;]/)
+          .map((c) => c.trim())
+          .filter(Boolean);
+        if (codes.length === 0) return null;
+        const invalid = codes.filter((c) => !/^[a-zA-Z]{2,3}$/.test(c));
+        if (invalid.length > 0) {
+          return (
+            <p className="text-xs mt-1" style={{ color: '#e0a30f' }}>
+              Código{invalid.length > 1 ? 's' : ''} suspeito{invalid.length > 1 ? 's' : ''}: {invalid.join(', ')}.
+              Use códigos ISO de 2-3 letras (ex.: en, es, hi), não o nome do idioma.
+            </p>
+          );
+        }
+        return (
+          <p className="text-xs text-text-muted mt-1">
+            Será salvo como: <code className="font-mono">{codes.map((c) => c.toLowerCase()).join(',')}</code>
+          </p>
+        );
+      })()}
 
       <div className="flex items-center gap-3 mt-5">
         <button

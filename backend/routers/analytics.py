@@ -56,7 +56,7 @@ def videos(account_id: int | None = None, limit: int = 200, db: Session = Depend
         .order_by(VideoJob.created_at.desc())
         .limit(limit)
     )
-    if account_id:
+    if account_id is not None:
         q = q.where(VideoJob.account_id == account_id)
     out: list[dict] = []
     for job in db.execute(q).scalars().all():
@@ -85,12 +85,18 @@ def videos(account_id: int | None = None, limit: int = 200, db: Session = Depend
             if isinstance(p, dict) and (p.get("published_at") or p.get("started_at")):
                 published_at = p.get("published_at") or p.get("started_at")
                 break
+        platform = None
+        for plat_key, p in ps.items():
+            if isinstance(p, dict) and (p.get("video_id") or p.get("url")):
+                platform = plat_key
+                break
         out.append({
             "job_id": job.id,
             "title": job.title,
             "content_type": job.content_type,
             "format": getattr(job, "video_format", None),
             "account_id": job.account_id,
+            "platform": platform,
             "status": job.status.value if hasattr(job.status, "value") else job.status,
             "youtube_url": yt.get("url"),
             "views": sum(int(getattr(r, "views", 0) or 0) for r in vals),
