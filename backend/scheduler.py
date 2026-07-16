@@ -748,8 +748,6 @@ def _try_create_ready_video_job(
     from sqlalchemy.exc import IntegrityError
 
     from backend.agents.drive_library import DriveLibraryService
-    from backend.agents.ready_video_seo import build_ready_video_package
-    from backend.config import settings
     from backend.models import JobStatus, VideoJob
 
     drive = DriveLibraryService(db)
@@ -803,6 +801,24 @@ def _try_create_ready_video_job(
         db.rollback()
         return None
     ready.reserved_job_id = job.id
+    _finalize_ready_video_job(db, drive, job, ready, acct, title_seed=title, video_format=video_format, theme=theme)
+    return job.id
+
+
+def _finalize_ready_video_job(
+    db, drive, job, ready, acct, *, title_seed: str, video_format: str, theme=None
+) -> None:
+    """Download the reserved Drive file, package SEO/thumbnail, and move the
+    job to its terminal pre-publish state (or back to ERROR on failure).
+
+    Shared by `_try_create_ready_video_job` (first attempt) and
+    `retry_ready_video_job` (the only safe retry path for a `from_ready_video`
+    job — see dispatch.py's `_is_ready_video_job` guard) so the two paths
+    can't silently drift apart."""
+    from backend.agents.ready_video_seo import build_ready_video_package
+    from backend.config import settings
+    from backend.models import JobStatus
+
     try:
         local_path = drive.download_for_job(ready, job.id)
         job.main_video_path = local_path
@@ -815,12 +831,12 @@ def _try_create_ready_video_job(
             account=acct,
             content_type=job.content_type,
             video_format=video_format,
-            title_seed=title,
+            title_seed=title_seed,
         )
         job.seo_metadata = seo
         if thumbnail_path:
             job.thumbnail_path = thumbnail_path
-        yt_title = ((seo.get("youtube") or {}).get("title") or title).strip()
+        yt_title = ((seo.get("youtube") or {}).get("title") or title_seed).strip()
         if yt_title:
             job.title = yt_title[:300]
             job.topic = yt_title
@@ -864,7 +880,6 @@ def _try_create_ready_video_job(
             from backend.pipeline.dispatch import dispatch_publish
 
             dispatch_publish(job.id)
-        return job.id
     except Exception as exc:  # noqa: BLE001
         # Reset to "available" (not "error") and clear the reservation so this
         # otherwise-good Drive file re-enters reserve_next()'s pool on the next
@@ -875,8 +890,43 @@ def _try_create_ready_video_job(
         job.status = JobStatus.ERROR
         job.error_message = f"Falha ao baixar video do Drive: {exc}"[:500]
         db.commit()
-        logger.warning("ready video job failed for account %s: %s", acct.id, exc)
-        return job.id
+        logger.warning("ready video job failed for account %s: %s", getattr(acct, "id", None), exc)
+
+
+def retry_ready_video_job(job_id: int) -> None:
+    """The ONLY safe retry for a `from_ready_video` job that landed in ERROR
+    (e.g. a transient Drive download failure).
+
+    dispatch_job()'s generic retry path (manual Retry button, and the 72h
+    error-resurrection sweep in `_job_retry_errored`) runs the full AI
+    orchestrator — which would silently write a brand-new AI-scripted video
+    (TTS narration + generated images) into a job whose whole point was to
+    publish the user's own pre-made Drive file, keyed only by coincidentally
+    reusing the job's title/topic as the AI's topic. `dispatch.py`'s
+    `_is_ready_video_job` guard redirects every re-dispatch path for a
+    `from_ready_video` job here instead of `dispatch_job`.
+    """
+    from backend.agents.drive_library import DriveLibraryService
+    from backend.models import JobStatus, PlatformAccount, ReadyVideo, VideoJob
+
+    db = SessionLocal()
+    try:
+        job = db.get(VideoJob, job_id)
+        if not job:
+            return
+        ready_video_id = (job.video_context or {}).get("ready_video_id")
+        ready = db.get(ReadyVideo, ready_video_id) if ready_video_id else None
+        if ready is None:
+            job.status = JobStatus.ERROR
+            job.error_message = "Video original do Drive nao foi encontrado para nova tentativa."
+            db.commit()
+            return
+        acct = db.get(PlatformAccount, job.account_id) if job.account_id else None
+        video_format = job.video_format or ready.video_format or "long"
+        drive = DriveLibraryService(db)
+        _finalize_ready_video_job(db, drive, job, ready, acct, title_seed=job.title, video_format=video_format)
+    finally:
+        db.close()
 
 
 def _clean_ready_title(name: str | None) -> str:
