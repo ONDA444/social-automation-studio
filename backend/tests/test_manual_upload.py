@@ -67,12 +67,14 @@ class ManualUploadAnalysisTests(unittest.TestCase):
             with patch("backend.agents.manual_upload.SessionLocal", Session), patch(
                 "backend.agents.ready_video_seo.build_ready_video_package",
                 return_value=(fake_analysis, fake_seo, None),
-            ):
+            ), patch("backend.pipeline.dispatch.dispatch_publish"):
                 _analyze_sync(job_id)
             db.refresh(job)
 
-            self.assertEqual(job.status, JobStatus.AWAITING_APPROVAL)
-            self.assertEqual(job.approval_status, "pending")
+            # Manual PC uploads never need human approval — it's the user's own
+            # pre-made file, nothing here is AI-generated (same as Drive ready-videos).
+            self.assertIn(job.status, (JobStatus.APPROVED, JobStatus.PUBLISHING))
+            self.assertEqual(job.approval_status, "approved")
             self.assertEqual(job.video_format, "short")
             self.assertEqual(job.shorts_paths, [str(local_path)])
             self.assertIn("ninguém esperava", job.title)
