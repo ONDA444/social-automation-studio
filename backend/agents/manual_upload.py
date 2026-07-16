@@ -215,22 +215,14 @@ def _analyze_sync(job_id: int) -> None:
         ctx["content_analysis"] = analysis
         ctx["seo_source"] = analysis.get("analysis_source") or "fallback"
         job.video_context = ctx
-        # Manual PC uploads never need human approval — same reasoning as
-        # Drive ready-videos (backend/scheduler.py's _finalize_ready_video_job):
-        # it's the user's own pre-made file, nothing here is AI-generated.
-        from backend.config import settings as _settings
-
-        job.approval_status = "approved"
-        job.status = (
-            JobStatus.PUBLISHING if (_settings.publish_mode or "schedule").lower() == "schedule" else JobStatus.APPROVED
-        )
+        # Manual PC uploads always stop for human approval — unlike Drive
+        # ready-videos, the user explicitly wants to review these before they
+        # go out (only AI-generated and Drive videos auto-publish).
+        job.status = JobStatus.AWAITING_APPROVAL
+        job.approval_status = "pending"
         job.qc_status = "skipped_manual_upload"
         job.compliance_status = "needs_rights_review"
         db.commit()
-        _emit(job.id, status="approved")
-        if (_settings.publish_mode or "schedule").lower() == "schedule":
-            from backend.pipeline.dispatch import dispatch_publish
-
-            dispatch_publish(job.id)
+        _emit(job.id, status="awaiting_approval")
     finally:
         db.close()

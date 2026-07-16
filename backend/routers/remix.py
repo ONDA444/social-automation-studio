@@ -60,6 +60,10 @@ async def create_remix(payload: RemixCreate, db: Session = Depends(get_db)):
         account_id=payload.account_id,
         target_platforms=payload.target_platforms,
         status=JobStatus.QUEUED,
+        # Remix is a manual, user-initiated creation (unlike the scheduler's
+        # hands-off theme automation) — it always stops at the approval gate,
+        # same as a manual PC upload, even with AUTO_PUBLISH on.
+        video_context={"require_approval": True},
     )
     db.add(job)
     db.commit()
