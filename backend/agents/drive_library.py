@@ -8,7 +8,7 @@ from datetime import datetime
 from typing import Iterable
 from urllib.parse import parse_qs, unquote_plus, urlparse
 
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, or_, select, update
 from sqlalchemy.orm import Session
 
 from backend.config import settings
@@ -259,7 +259,7 @@ class DriveLibraryService:
             for key in ("imported", "updated", "seen", "files_seen", "ignored_audio", "ignored_non_video"):
                 total[key] += int(result.get(key) or 0)
             seen_file_ids.update(result.get("seen_file_ids") or [])
-        total["stale"] = self._mark_stale_account_videos(account_id, seen_file_ids)
+        total["stale"] = self._mark_stale_account_videos(account_id, seen_file_ids, folder_ids=folder_ids)
         return total
 
     def index_niche_tree(
@@ -312,7 +312,9 @@ class DriveLibraryService:
             for key in ("imported", "updated", "seen", "files_seen", "ignored_audio", "ignored_non_video"):
                 total[key] += int(result.get(key) or 0)
             seen_file_ids.update(result.get("seen_file_ids") or [])
-        total["stale"] = self._mark_stale_account_videos(account_id, seen_file_ids)
+        total["stale"] = self._mark_stale_account_videos(
+            account_id, seen_file_ids, folder_ids=[folder_id for folder_id, _ in roots]
+        )
         return total
 
     def _index_folder_id(
@@ -354,24 +356,29 @@ class DriveLibraryService:
                 row = ReadyVideo(drive_file_id=item["id"])
                 self.db.add(row)
                 imported += 1
-            row.drive_folder_id = folder_id
-            row.name = item_name
-            row.mime_type = item_mime
-            row.niche = niche or self._guess_niche(folder_parts or path)
-            row.folder_path = " / ".join(folder_parts)
-            row.content_type = content_type or "auto"
-            row.video_format = video_format or guess_format(row.name, row.mime_type)
-            row.account_id = account_id
-            row.size_bytes = int(item["size"]) if (item.get("size") or "").isdigit() else None
-            row.metadata_json = {
-                **(row.metadata_json or {}),
-                "webViewLink": item.get("webViewLink"),
-                "modifiedTime": item.get("modifiedTime"),
-                "drive_path": path,
-                "folder_parts": folder_parts,
-            }
-            if row.status == "missing":
-                row.status = "available"
+            # A row that's mid-download/publish ('reserved') or already published
+            # ('used') must keep its assigned account/niche/format so an in-flight
+            # job or historical record isn't reassigned out from under it by a
+            # later or concurrent re-index sweep.
+            if row.status not in ("reserved", "used"):
+                row.drive_folder_id = folder_id
+                row.name = item_name
+                row.mime_type = item_mime
+                row.niche = niche or self._guess_niche(folder_parts or path)
+                row.folder_path = " / ".join(folder_parts)
+                row.content_type = content_type or "auto"
+                row.video_format = video_format or guess_format(row.name, row.mime_type)
+                row.account_id = account_id
+                row.size_bytes = int(item["size"]) if (item.get("size") or "").isdigit() else None
+                row.metadata_json = {
+                    **(row.metadata_json or {}),
+                    "webViewLink": item.get("webViewLink"),
+                    "modifiedTime": item.get("modifiedTime"),
+                    "drive_path": path,
+                    "folder_parts": folder_parts,
+                }
+                if row.status == "missing":
+                    row.status = "available"
         self.db.commit()
         return {
             "folder_id": folder_id,
@@ -384,13 +391,21 @@ class DriveLibraryService:
             "ignored_non_video": ignored_non_video,
         }
 
-    def _mark_stale_account_videos(self, account_id: int | None, seen_file_ids: set[str]) -> int:
+    def _mark_stale_account_videos(
+        self, account_id: int | None, seen_file_ids: set[str], *, folder_ids: list[str] | None = None
+    ) -> int:
         if not account_id or self.db is None:
             return 0
+        # Scope to the folder(s) this call actually walked (row.drive_folder_id is the
+        # root folder_id passed to _index_folder_id). Without this, a call covering
+        # only part of the account's Drive tree (e.g. a re-sync after drive_folder_url
+        # changed to a different folder) would wipe rows/reservations belonging to
+        # folders it never looked at.
         stale_statuses = {"available", "reserved", "rejected", "error", "missing"}
-        rows = self.db.execute(
-            select(ReadyVideo).where(ReadyVideo.account_id == account_id)
-        ).scalars().all()
+        query = select(ReadyVideo).where(ReadyVideo.account_id == account_id)
+        if folder_ids:
+            query = query.where(ReadyVideo.drive_folder_id.in_(folder_ids))
+        rows = self.db.execute(query).scalars().all()
         changed = 0
         for row in rows:
             if row.drive_file_id in seen_file_ids or row.status == "used" or row.status not in stale_statuses:
@@ -504,8 +519,14 @@ class DriveLibraryService:
                     queue.append((parent_id, depth + 1))
         return exact or partial
 
-    def _walk_folders(self, svc, folder_id: str, *, path: list[str] | None = None):
+    def _walk_folders(self, svc, folder_id: str, *, path: list[str] | None = None, _visited: set[str] | None = None):
         path = path or []
+        # Shortcuts can legally point back at an ancestor (or themselves); track
+        # visited folder ids so such cycles terminate instead of recursing forever.
+        _visited = _visited if _visited is not None else set()
+        if folder_id in _visited:
+            return
+        _visited.add(folder_id)
         page_token = None
         while True:
             resp = svc.files().list(
@@ -529,16 +550,22 @@ class DriveLibraryService:
                     if shortcut.get("targetMimeType") == FOLDER_MIME:
                         folder_item = {**item, "id": shortcut["targetId"], "mimeType": FOLDER_MIME}
                         yield folder_item, item_path
-                        yield from self._walk_folders(svc, shortcut["targetId"], path=item_path)
+                        yield from self._walk_folders(svc, shortcut["targetId"], path=item_path, _visited=_visited)
                 elif mime_type == FOLDER_MIME:
                     yield item, item_path
-                    yield from self._walk_folders(svc, item["id"], path=item_path)
+                    yield from self._walk_folders(svc, item["id"], path=item_path, _visited=_visited)
             page_token = resp.get("nextPageToken")
             if not page_token:
                 break
 
-    def _walk_folder(self, svc, folder_id: str, *, recursive: bool, path: list[str] | None = None):
+    def _walk_folder(self, svc, folder_id: str, *, recursive: bool, path: list[str] | None = None, _visited: set[str] | None = None):
         path = path or []
+        # Guard against shortcut cycles (a shortcut pointing at an ancestor/itself)
+        # the same way _resolve_niche_from_ancestors does, so recursion terminates.
+        _visited = _visited if _visited is not None else set()
+        if folder_id in _visited:
+            return
+        _visited.add(folder_id)
         page_token = None
         while True:
             resp = svc.files().list(
@@ -563,7 +590,7 @@ class DriveLibraryService:
                     target_mime = shortcut.get("targetMimeType")
                     if target_mime == FOLDER_MIME:
                         if recursive:
-                            yield from self._walk_folder(svc, shortcut["targetId"], recursive=recursive, path=item_path)
+                            yield from self._walk_folder(svc, shortcut["targetId"], recursive=recursive, path=item_path, _visited=_visited)
                     else:
                         yield {
                             **item,
@@ -573,7 +600,7 @@ class DriveLibraryService:
                         }, item_path
                 elif mime_type == FOLDER_MIME:
                     if recursive:
-                        yield from self._walk_folder(svc, item["id"], recursive=recursive, path=item_path)
+                        yield from self._walk_folder(svc, item["id"], recursive=recursive, path=item_path, _visited=_visited)
                 else:
                     yield item, item_path
             page_token = resp.get("nextPageToken")
@@ -608,7 +635,15 @@ class DriveLibraryService:
             ReadyVideo.video_format == video_format,
         ]
         if niche:
-            conditions.append(or_(ReadyVideo.niche.is_(None), ReadyVideo.niche.ilike(f"%{niche}%")))
+            # Escape LIKE metacharacters so a literal '%' or '_' in the niche
+            # string can't alter the match (backslash is the escape char).
+            escaped_niche = niche.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            conditions.append(
+                or_(
+                    ReadyVideo.niche.is_(None),
+                    ReadyVideo.niche.ilike(f"%{escaped_niche}%", escape="\\"),
+                )
+            )
         stmt = (
             select(ReadyVideo)
             .where(and_(*conditions))
@@ -618,9 +653,23 @@ class DriveLibraryService:
         row = self.db.execute(stmt).scalars().first()
         if not row:
             return None
-        row.status = "reserved"
-        row.reserved_at = datetime.utcnow()
+        # Atomic claim (mirrors backend/scheduler.py's `_create_theme_job` /
+        # `_job_quota_reset` pattern): the plain SELECT above can race with
+        # another scheduler tick/replica reading the same still-"available"
+        # row before either commits, so both would reserve the same Drive
+        # file and each create its own VideoJob -> duplicate uploads with an
+        # identical title. Re-check `status == "available"` in the UPDATE's
+        # WHERE clause and bail out if another transaction won the claim
+        # first (rowcount == 0).
+        result = self.db.execute(
+            update(ReadyVideo)
+            .where(ReadyVideo.id == row.id, ReadyVideo.status == "available")
+            .values(status="reserved", reserved_at=datetime.utcnow())
+        )
         self.db.flush()
+        if result.rowcount == 0:
+            return None
+        self.db.refresh(row)
         return row
 
     def download_for_job(self, ready: ReadyVideo, job_id: int) -> str:
@@ -647,17 +696,24 @@ class DriveLibraryService:
         # normal exception instead of hanging the publish pipeline indefinitely.
         import time as _time
 
-        with dest.open("wb") as fh:
-            downloader = MediaIoBaseDownload(fh, request, chunksize=1024 * 1024 * 8)
-            done = False
-            deadline = _time.monotonic() + 240
-            while not done:
-                if _time.monotonic() > deadline:
-                    raise TimeoutError(
-                        "Download do Drive travado (sem progresso) — provável token "
-                        "OAuth inválido ou falha de rede persistente."
-                    )
-                _, done = downloader.next_chunk()
+        try:
+            with dest.open("wb") as fh:
+                downloader = MediaIoBaseDownload(fh, request, chunksize=1024 * 1024 * 8)
+                done = False
+                deadline = _time.monotonic() + 240
+                while not done:
+                    if _time.monotonic() > deadline:
+                        raise TimeoutError(
+                            "Download do Drive travado (sem progresso) — provável token "
+                            "OAuth inválido ou falha de rede persistente."
+                        )
+                    _, done = downloader.next_chunk()
+        except BaseException:
+            # A failed/interrupted download must not leave a truncated file behind:
+            # the size>0 cache check above would treat it as complete on the next
+            # retry (scheduler.py job creation / publisher.py _ensure_ready_video_local).
+            dest.unlink(missing_ok=True)
+            raise
         ready.local_path = str(dest)
         self.db.commit()
         return str(dest)

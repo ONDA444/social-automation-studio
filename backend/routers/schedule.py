@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Upload
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from backend.agents.content_calendar import ContentCalendarAgent
 from backend.database import get_db
@@ -62,6 +62,8 @@ class ScheduleConfigIn(BaseModel):
 
 @router.get("/config/{account_id}")
 def get_config(account_id: int, db: Session = Depends(get_db)):
+    if db.get(PlatformAccount, account_id) is None:
+        raise HTTPException(404, f"conta {account_id} não encontrada")
     cfg = db.execute(
         select(ScheduleConfig).where(ScheduleConfig.account_id == account_id)
     ).scalars().first()
@@ -106,6 +108,8 @@ def upsert_config(account_id: int, payload: ScheduleConfigIn, db: Session = Depe
 @router.get("/{account_id}/slots")
 def next_slots(account_id: int, count: int = Query(5, le=30), mode: str | None = None,
                db: Session = Depends(get_db)):
+    if db.get(PlatformAccount, account_id) is None:
+        raise HTTPException(404, f"conta {account_id} não encontrada")
     cal = ContentCalendarAgent(db)
     slots = cal.next_slots(account_id, count, mode)
     cfg = db.execute(
@@ -126,7 +130,9 @@ def next_slots(account_id: int, count: int = Query(5, le=30), mode: str | None =
 @router.get("/calendar")
 def calendar(db: Session = Depends(get_db)):
     rows = db.execute(
-        select(VideoJob).where(VideoJob.scheduled_at.isnot(None)).order_by(VideoJob.scheduled_at)
+        select(VideoJob)
+        .options(selectinload(VideoJob.account))  # avoid N+1 lazy-loads of account per job
+        .where(VideoJob.scheduled_at.isnot(None)).order_by(VideoJob.scheduled_at)
     ).scalars().all()
     return {"events": [{"job_id": j.id, "title": j.title, "platforms": j.target_platforms,
                         "scheduled_at": j.scheduled_at.isoformat() if j.scheduled_at else None,

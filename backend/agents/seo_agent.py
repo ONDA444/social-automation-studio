@@ -11,7 +11,7 @@ import logging
 import re
 
 from backend.agents.base_agent import BaseAgent
-from backend.agents.keyword_research import related_search_queries
+from backend.agents.keyword_research import region_for_language, related_search_queries
 from backend.config import settings
 from backend import llm
 from backend import runtime_settings
@@ -127,8 +127,9 @@ class SEOAgent(BaseAgent):
         # what people really search, not just what sounds plausible. Best-effort
         # (empty list on any failure); off the event loop since pytrends is a
         # blocking network call.
+        lang_code = language or "pt-BR"
         real_queries = await asyncio.to_thread(
-            related_search_queries, script.get("title", ""), language or "pt-BR"
+            related_search_queries, script.get("title", ""), lang_code, region_for_language(lang_code)
         )
 
         self.emit("progress", "Gerando SEO por plataforma", progress=84)
@@ -418,8 +419,15 @@ JSON EXATO (preencha todos os campos, não omita plataformas):
             # No chapters → strip the marker so the literal "[CAPÍTULOS]" never
             # leaks into the published description.
             return SEOAgent._CHAPTERS_MARKER.sub("", desc).strip()
+        def _fmt(seconds: int) -> str:
+            # YouTube requires H:MM:SS (not raw M:SS) once a video passes 60 minutes,
+            # otherwise chapters past the 1-hour mark aren't recognized at all.
+            h, rem = divmod(seconds, 3600)
+            m, s = divmod(rem, 60)
+            return f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
+
         block = "⏱️ Capítulos:\n" + "\n".join(
-            f"{divmod(int(ch['time']), 60)[0]}:{divmod(int(ch['time']), 60)[1]:02d} {ch['title']}"
+            f"{_fmt(int(ch['time']))} {ch['title']}"
             for ch in chapters
         )
         # Substitute the [CAPÍTULOS] marker IN PLACE (the LLM places it mid-description

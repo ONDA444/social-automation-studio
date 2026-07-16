@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from backend.content_types import CONTENT_TYPE_KEYS
@@ -13,6 +14,7 @@ from backend.models.theme_queue import ThemeQueue
 router = APIRouter(prefix="/themes", tags=["themes"])
 
 MAX_THEMES = 300
+THEME_STATUSES = {"pending", "consumed"}
 
 
 class ThemeCreate(BaseModel):
@@ -47,8 +49,14 @@ def create_themes(payload: ThemeCreate, db: Session = Depends(get_db)):
     if not cleaned:
         return {"created": 0, "ids": []}
 
-    # Continue FIFO ordering after the current max position.
-    base = db.query(ThemeQueue).count()
+    # Continue FIFO ordering after the current max position. with_for_update()
+    # takes a row lock on the max-position row (Postgres) so a concurrent
+    # POST /themes blocks until this transaction commits, instead of both
+    # requests reading the same base and producing colliding positions.
+    max_position = (
+        db.query(func.max(ThemeQueue.position)).with_for_update().scalar()
+    )
+    base = 0 if max_position is None else max_position + 1
 
     rows: list[ThemeQueue] = []
     for offset, theme in enumerate(cleaned):
@@ -145,6 +153,8 @@ def bulk_delete_themes(payload: BulkDelete, db: Session = Depends(get_db)):
     """
     if payload.ids is None and payload.status is None:
         return {"deleted": []}
+    if payload.status is not None and payload.status not in THEME_STATUSES:
+        raise HTTPException(400, f"status inválido: {payload.status}")
     if payload.ids is None and payload.account_id is None:
         raise HTTPException(
             400, "account_id obrigatório ao limpar por status (evita apagar de todos os canais)"

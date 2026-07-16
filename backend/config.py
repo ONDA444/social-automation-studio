@@ -172,6 +172,10 @@ class Settings(BaseSettings):
     # disk in chunks either way, but a hard cap keeps a mistaken huge upload from
     # filling the container's ephemeral disk.
     max_manual_upload_mb: int = 500
+    # Cap on a voice-clone recording upload (Perfil "Clonar voz"). Small because it's
+    # a ~10s mic sample, not a video — keeps an oversized POST from being buffered
+    # fully in memory before being forwarded to LMNT.
+    max_voice_clone_upload_mb: int = 25
     # Monetization CTA injected at the TOP of every YouTube description (affiliate /
     # digital product / newsletter links + FTC disclosure). The only revenue that does
     # NOT require the channel to be in the YPP. Empty = disabled. Set MONETIZATION_CTA

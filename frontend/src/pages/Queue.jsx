@@ -1,7 +1,4 @@
 import { useEffect, useRef, useState } from 'react'
-import { DndContext, closestCenter, PointerSensor, useSensor, useSensors } from '@dnd-kit/core'
-import { SortableContext, useSortable, verticalListSortingStrategy, arrayMove } from '@dnd-kit/sortable'
-import { CSS } from '@dnd-kit/utilities'
 import { api, mediaUrl } from '../api'
 import { useWs } from '../App.jsx'
 import AddJobModal from '../components/AddJobModal.jsx'
@@ -11,7 +8,6 @@ import { PLATFORM_META, fmtDate } from '../lib'
 const CHANNEL_EDITABLE = new Set(['queued', 'awaiting_approval', 'approved', 'error', 'tiktok_pending_approval'])
 
 function Row({ job, accounts, selected, onToggleSelect, onChannelChange, onRetry, onRepublish, onDelete }) {
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: job.id })
   const [showPlayer, setShowPlayer] = useState(false)
   const [showFullError, setShowFullError] = useState(false)
   const canEditChannel = CHANNEL_EDITABLE.has(job.status)
@@ -21,14 +17,10 @@ function Row({ job, accounts, selected, onToggleSelect, onChannelChange, onRetry
   const errShort = errMsg.length > 90 ? errMsg.slice(0, 90) + '…' : errMsg
 
   return (
-    <div
-      ref={setNodeRef}
-      style={{ transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.5 : 1 }}
-      className="card px-3 py-2 fade-in">
+    <div className="card px-3 py-2 fade-in">
       {/* Uma linha só no desktop; empilha no mobile (flex-wrap). */}
       <div className="flex items-center gap-2 sm:gap-3 flex-wrap">
         <input type="checkbox" className="shrink-0 accent-accent w-4 h-4" checked={selected} onChange={() => onToggleSelect(job.id)} />
-        <span {...attributes} {...listeners} className="cursor-grab text-text-muted select-none text-lg leading-none shrink-0">⠿</span>
 
         <div className="flex-1 min-w-0" style={{ flexBasis: '180px' }}>
           <p className="font-medium truncate text-sm leading-tight">
@@ -123,7 +115,6 @@ export default function Queue() {
   const [query, setQuery] = useState('')
   const fileRef = useRef(null)
   const { count } = useWs()
-  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }))
 
   const load = () => api.get('/jobs?limit=200')
     .then((d) => setJobs(d.jobs || []))
@@ -144,17 +135,6 @@ export default function Queue() {
       return next.size === prev.size ? prev : next
     })
   }, [jobs])
-
-  const onDragEnd = (e) => {
-    const { active, over } = e
-    if (over && active.id !== over.id) {
-      setJobs((j) => arrayMove(
-        j,
-        j.findIndex((x) => x.id === active.id),
-        j.findIndex((x) => x.id === over.id),
-      ))
-    }
-  }
 
   const retry = async (id) => {
     try { await api.post(`/jobs/${id}/retry`); load() }
@@ -199,9 +179,21 @@ export default function Queue() {
       return next
     })
   }
-  const allSelected = jobs.length > 0 && selected.size === jobs.length
+  const errCount = jobs.filter((j) => j.status === 'error').length
+  const filteredJobs = jobs.filter((j) => {
+    const source = j.video_context?.source === 'drive_ready_video' ? 'drive' : 'ai'
+    const matchesStatus = statusFilter === 'all' || j.status === statusFilter
+    const matchesSource = sourceFilter === 'all' || sourceFilter === source
+    const q = query.trim().toLowerCase()
+    const matchesQuery = !q || [j.title, j.content_type, j.topic].filter(Boolean).join(' ').toLowerCase().includes(q)
+    return matchesStatus && matchesSource && matchesQuery
+  })
+
+  // "Select all" must operate on filteredJobs (what the user actually sees), not the
+  // full jobs array, otherwise a filtered view can silently select/delete hidden jobs.
+  const allSelected = filteredJobs.length > 0 && selected.size === filteredJobs.length && filteredJobs.every((j) => selected.has(j.id))
   const toggleSelectAll = () => {
-    setSelected(allSelected ? new Set() : new Set(jobs.map((j) => j.id)))
+    setSelected(allSelected ? new Set() : new Set(filteredJobs.map((j) => j.id)))
   }
 
   const deleteSelected = async () => {
@@ -217,16 +209,6 @@ export default function Queue() {
     try { await api.post('/jobs/bulk-delete', { status: 'error' }); setSelected(new Set()); load() }
     catch (err) { alert(err.message) }
   }
-
-  const errCount = jobs.filter((j) => j.status === 'error').length
-  const filteredJobs = jobs.filter((j) => {
-    const source = j.video_context?.source === 'drive_ready_video' ? 'drive' : 'ai'
-    const matchesStatus = statusFilter === 'all' || j.status === statusFilter
-    const matchesSource = sourceFilter === 'all' || sourceFilter === source
-    const q = query.trim().toLowerCase()
-    const matchesQuery = !q || [j.title, j.content_type, j.topic].filter(Boolean).join(' ').toLowerCase().includes(q)
-    return matchesStatus && matchesSource && matchesQuery
-  })
 
   return (
     <div className="space-y-4 fade-in">
@@ -307,25 +289,21 @@ export default function Queue() {
             hint="Ajuste os filtros para ver outros jobs da fila." />
         </div>
       ) : (
-        <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
-          <SortableContext items={filteredJobs.map((j) => j.id)} strategy={verticalListSortingStrategy}>
-            <div className="space-y-1.5">
-              {filteredJobs.map((j) => (
-                <Row
-                  key={j.id}
-                  job={j}
-                  accounts={accounts}
-                  selected={selected.has(j.id)}
-                  onToggleSelect={toggleSelect}
-                  onChannelChange={changeChannel}
-                  onRetry={retry}
-                  onRepublish={republish}
-                  onDelete={del}
-                />
-              ))}
-            </div>
-          </SortableContext>
-        </DndContext>
+        <div className="space-y-1.5">
+          {filteredJobs.map((j) => (
+            <Row
+              key={j.id}
+              job={j}
+              accounts={accounts}
+              selected={selected.has(j.id)}
+              onToggleSelect={toggleSelect}
+              onChannelChange={changeChannel}
+              onRetry={retry}
+              onRepublish={republish}
+              onDelete={del}
+            />
+          ))}
+        </div>
       )}
 
       <AddJobModal open={modal} onClose={() => setModal(false)} onCreated={load} />

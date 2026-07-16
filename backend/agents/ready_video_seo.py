@@ -217,9 +217,10 @@ def build_drive_seo(context: dict, analysis: dict | None = None) -> dict:
     # with actual Google Trends queries related to this video's own primary
     # keyword, same "LLM/analysis picks stay first" top-up pattern as the rest
     # of _tags — best-effort, never blocks SEO on failure.
-    from backend.agents.keyword_research import related_search_queries
+    from backend.agents.keyword_research import region_for_language, related_search_queries
 
-    real_queries = related_search_queries(primary or topic)
+    lang_code = context.get("language") or "pt-BR"
+    real_queries = related_search_queries(primary or topic, lang_code, region_for_language(lang_code))
     if real_queries:
         lowered = {t.lower() for t in tags}
         for q in real_queries:
@@ -502,11 +503,15 @@ def _fallback_analysis(context: dict) -> dict:
 
 def _best_topic(context: dict, analysis: dict) -> str:
     for value in (
+        # title_seed/drive_name must outrank hook/summary: the deterministic
+        # fallback path derives analysis["hook"] from title_seed and writes it
+        # back into `analysis`, so checking hook first would feed that
+        # generated hook back in as the topic on the next _best_topic call.
+        context.get("title_seed"),
+        _clean_filename(context.get("drive_name")),
         analysis.get("hook"),
         (analysis.get("title_options") or [None])[0],
         analysis.get("summary"),
-        context.get("title_seed"),
-        _clean_filename(context.get("drive_name")),
         context.get("niche"),
         context.get("account_niche"),
     ):
@@ -542,10 +547,39 @@ def _title_from_analysis(topic: str, analysis: dict, content_type: str, video_fo
         "true_crime_mystery": f"{base}: o detalhe que ninguem explicou",
         "explainer_curiosity": f"{base}: por que isso acontece?",
         "reaction_commentary": f"{base}: o detalhe que chamou atencao",
+        "film_recap_ai_images": f"{base}: o resumo que voce precisa ver",
+        "quote_viral": base,
+        "top_list_ranking": f"{base}: o numero 1 vai te surpreender",
     }
+    title = templates.get(content_type) or _varied_fallback_title(base, topic)
     if video_format == "short":
-        return _shorten_title(templates.get(content_type, f"{base}: espera o final"))
-    return templates.get(content_type, f"{base}: o detalhe que prende ate o fim")[:95]
+        return _shorten_title(title)
+    return title[:95]
+
+
+# `_generic_viral_title` below already blocklists a handful of literal phrases
+# ("espera o final", "detalhe que prende ate o fim") — those USED to be this
+# function's own hardcoded fallback, which meant every Drive video whose
+# content_type fell through (the common case: default is
+# "film_recap_ai_images", not covered by `templates` above) got the exact
+# same generic title/hook, and the description then echoed the title verbatim
+# (see `_viral_shorts_profile`'s first_line logic) — a templated, repetitive
+# pattern across the whole channel that reads as low-effort/spam to viewers
+# and to YouTube's own distribution signals. Rotate through distinct,
+# non-blocklisted phrasings instead, keyed off the topic so it stays stable
+# per video without repeating the same literal on every upload.
+_FALLBACK_TITLE_ENDINGS = (
+    "voce nao vai acreditar no que acontece a seguir",
+    "isso muda tudo bem no final",
+    "ninguem esperava por esse desfecho",
+    "presta atencao no que rola depois disso",
+    "o que aconteceu na sequencia surpreendeu todo mundo",
+)
+
+
+def _varied_fallback_title(base: str, topic: str) -> str:
+    idx = sum(ord(c) for c in (topic or base)) % len(_FALLBACK_TITLE_ENDINGS)
+    return f"{base}: {_FALLBACK_TITLE_ENDINGS[idx]}"
 
 
 def _apply_viral_shorts_title(title: str, topic: str, analysis: dict, content_type: str, video_format: str) -> str:
@@ -571,7 +605,9 @@ def _apply_viral_shorts_title(title: str, topic: str, analysis: dict, content_ty
         return _shorten_title(title)
 
     base = _compact_topic(topic)
-    if analysis.get("analysis_source") in {"vision_llm", "text_llm"} and len(_title_terms(title)) >= 3:
+    # text_llm has no visual grounding (bare filename/folder/niche metadata), so an
+    # AI-authored title from that path is not trusted to stand unmodified like vision_llm.
+    if analysis.get("analysis_source") == "vision_llm" and len(_title_terms(title)) >= 3:
         return _shorten_title(title)
 
     templates = {
@@ -655,7 +691,19 @@ def _tags(primary: str, topic: str, entities: list[str], topics: list[str], nich
     if video_format == "short":
         raw.extend(["shorts", "cortes virais"])
     out = _clean_terms(raw)
-    return out[:18] if len(out) >= 8 else (out + ["cortes", "entretenimento", "viral"])[:12]
+    if len(out) >= 8:
+        return out[:18]
+    # Guarantee >=8 tags (tags_quality scoring assumes it): keep adding filler
+    # until the threshold is met instead of a fixed one-shot 3-term pad.
+    seen = {t.lower() for t in out}
+    filler = ["cortes", "entretenimento", "viral", "video", "conteudo", "destaque", "melhores momentos", "assista"]
+    for term in filler:
+        if len(out) >= 8:
+            break
+        if term.lower() not in seen:
+            out.append(term)
+            seen.add(term.lower())
+    return out[:12]
 
 
 def _yt_hashtags(tags: list[str], video_format: str) -> list[str]:
@@ -730,8 +778,18 @@ def _remove_internal_words(text: str) -> str:
 
 
 def _score(title: str, description: str, tags: list[str], hashtags: list[str], analysis: dict) -> dict:
+    # text_llm is unverified (no frames to ground it, just filename/folder/niche),
+    # so it earns partial credit between genuine vision_llm grounding and the bare
+    # deterministic fallback, instead of being trusted as much as vision analysis.
+    analysis_source = analysis.get("analysis_source")
+    if analysis_source == "vision_llm":
+        analysis_points = 20
+    elif analysis_source == "text_llm":
+        analysis_points = 12
+    else:
+        analysis_points = 8
     breakdown = {
-        "analysis": 20 if analysis.get("analysis_source") in {"vision_llm", "text_llm"} else 8,
+        "analysis": analysis_points,
         "title_specificity": 18 if len(_title_terms(title)) >= 3 else 10,
         "description_quality": 16 if len(description) >= 120 and "biblioteca" not in description.lower() else 8,
         "tags_quality": 16 if len(tags) >= 8 else 8,
@@ -756,6 +814,8 @@ def _notes(score: dict, analysis: dict) -> list[str]:
     notes: list[str] = []
     if analysis.get("analysis_source") not in {"vision_llm", "text_llm"}:
         notes.append("SEO gerado por fallback deterministico; IA de analise indisponivel.")
+    elif analysis.get("analysis_source") == "text_llm":
+        notes.append("Analise sem frames de video; titulo/resumo podem nao refletir o conteudo real.")
     if score.get("value", 0) < 75:
         notes.append("Score abaixo do ideal porque o conteudo real do video foi inferido com sinais limitados.")
     return notes
@@ -790,6 +850,15 @@ def _summary(topic: str, niche: str, content_type: str) -> str:
     return f"Um corte direto ao ponto sobre {topic.lower()}."
 
 
+_FALLBACK_HOOK_ENDINGS = (
+    "tem uma parte que muita gente perde de primeira.",
+    "o desfecho pega quem nao esperava.",
+    "vale assistir ate o fim para entender.",
+    "poucos reparam nesse detalhe na primeira vez.",
+    "a reacao mudou assim que isso aconteceu.",
+)
+
+
 def _hook(topic: str, content_type: str) -> str:
     base = _compact_topic(topic)
     hooks = {
@@ -798,8 +867,15 @@ def _hook(topic: str, content_type: str) -> str:
         "reddit_story": f"Essa historia muda quando voce percebe o detalhe.",
         "true_crime_mystery": f"O detalhe desse caso ainda intriga muita gente.",
         "explainer_curiosity": f"{base}: tem um detalhe que pouca gente percebe.",
+        "reaction_commentary": f"{base}: o detalhe que chamou atencao de quem assistiu.",
+        "film_recap_ai_images": f"{base}: o resumo direto do que aconteceu.",
+        "quote_viral": base,
+        "top_list_ranking": f"{base}: veja como cada posicao se destacou.",
     }
-    return hooks.get(content_type, f"{base}: o detalhe que prende ate o fim.")
+    if content_type in hooks:
+        return hooks[content_type]
+    idx = sum(ord(c) for c in (topic or base)) % len(_FALLBACK_HOOK_ENDINGS)
+    return f"{base}: {_FALLBACK_HOOK_ENDINGS[idx]}"
 
 
 def _first_comment(topic: str, content_type: str) -> str:

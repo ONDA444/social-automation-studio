@@ -15,15 +15,23 @@ router = APIRouter(prefix="/workspaces", tags=["workspaces"])
 @router.get("")
 def list_workspaces(db: Session = Depends(get_db)):
     svc = AccountProfileService(db)
+    accounts = svc.list()
+
+    # Single grouped query for all accounts instead of one query per account (avoids N+1).
+    account_ids = [acct.id for acct in accounts]
+    counts_by_account: dict[int, dict] = {}
+    if account_ids:
+        rows = db.execute(
+            select(VideoJob.account_id, VideoJob.status, func.count())
+            .where(VideoJob.account_id.in_(account_ids))
+            .group_by(VideoJob.account_id, VideoJob.status)
+        ).all()
+        for account_id, status, count in rows:
+            counts_by_account.setdefault(account_id, {})[status] = count
+
     out = []
-    for acct in svc.list():
-        counts = dict(
-            db.execute(
-                select(VideoJob.status, func.count())
-                .where(VideoJob.account_id == acct.id)
-                .group_by(VideoJob.status)
-            ).all()
-        )
+    for acct in accounts:
+        counts = counts_by_account.get(acct.id, {})
         out.append({
             "account": acct.to_dict(),
             "queue_counts": {(k.value if hasattr(k, "value") else k): v for k, v in counts.items()},

@@ -150,7 +150,9 @@ def _to_public_url(video_path: str) -> str | None:
     try:
         name = os.path.basename(video_path)
         with open(video_path, "rb") as f:
-            r = httpx.put(f"{host}/{name}", content=f.read(), timeout=300)
+            # Stream the file handle instead of f.read() to avoid buffering the
+            # whole video in memory for the duration of the PUT.
+            r = httpx.put(f"{host}/{name}", content=f, timeout=300)
             r.raise_for_status()
             return r.text.strip()
     except Exception as exc:  # noqa: BLE001
@@ -196,13 +198,26 @@ def upload_reel(video_path: str, caption: str, credentials: dict, public_url: st
                 return {"ok": False, "platform": "instagram", "status": "error",
                         "error": "Container de mídia falhou no Instagram."}
             time.sleep(5)
+        else:
+            # Loop exhausted without reaching FINISHED — publishing now would use an
+            # unfinished container, so fail explicitly instead of falling through.
+            return {"ok": False, "platform": "instagram", "status": "timeout",
+                    "error": "Tempo esgotado aguardando o processamento do vídeo no Instagram."}
 
         # 3) publish
         pub = httpx.post(f"{GRAPH}/{ig_user}/media_publish", params={
             "creation_id": container_id, "access_token": token,
         }, timeout=60)
         pub.raise_for_status()
-        media_id = pub.json()["id"]
+        # Meta has already published the Reel at this point -- a failure to parse
+        # the response body must NOT surface as a generic "error" status, since
+        # _with_retry only checks ok=True/False and would otherwise retry and
+        # publish a duplicate Reel from scratch.
+        try:
+            media_id = pub.json()["id"]
+        except Exception:
+            return {"ok": True, "platform": "instagram", "video_id": None, "status": "published",
+                    "error": "Reel publicado no Instagram, mas a resposta da API não pôde ser lida (sem media_id)."}
         return {"ok": True, "platform": "instagram", "video_id": media_id, "status": "published"}
     except Exception as exc:  # noqa: BLE001
         status, error_msg = _friendly_api_error(exc, "publicar o Reel")

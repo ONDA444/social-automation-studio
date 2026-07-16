@@ -80,6 +80,14 @@ class VideoJob(Base):
     target_platforms: Mapped[list] = mapped_column(JSON, default=list)  # ["youtube","tiktok",...]
     publish_status: Mapped[dict] = mapped_column(JSON, default=dict)  # {platform: status}
     scheduled_at: Mapped[datetime | None] = mapped_column(DateTime, default=None)
+    # Set ONLY by the automated scheduler's slot-filling path (backend/scheduler.py
+    # _create_theme_job / _try_create_ready_video_job) to "{account_id}:{slot_iso}".
+    # A unique index on this column (see database.ensure_indexes) turns the
+    # slot-clash check from a racy check-then-act SELECT into a real DB-enforced
+    # claim: two concurrent inserts for the same slot can no longer both succeed.
+    # Left NULL for manual/immediate/mirror jobs, which may legitimately share a
+    # scheduled_at.
+    schedule_slot_key: Mapped[str | None] = mapped_column(String(160), default=None)
 
     # Cross-platform mirror bookkeeping
     is_mirror: Mapped[bool] = mapped_column(default=False)

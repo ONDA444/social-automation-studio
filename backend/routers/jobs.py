@@ -4,6 +4,8 @@ from __future__ import annotations
 import csv
 import io
 import logging
+import threading
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 
@@ -91,6 +93,27 @@ _EDITABLE_STATES = {
 
 # Statuses that block destructive / re-dispatch actions (job is running).
 _RUNNING_STATES = {JobStatus.PROCESSING, JobStatus.PUBLISHING}
+
+# Per-job_id lock guarding the read-check-mutate-commit(-dispatch) sequence in
+# approve/reject/publish/retry/patch/delete below. Without it, two concurrent
+# requests for the same job_id (double-click, or a UI action racing a
+# webhook/scheduler retry) can both read the same pre-transition status, both
+# pass the guard, and both dispatch — a duplicate publish/process risk (real
+# on TikTok/IG, per _platform_published above). FastAPI runs these sync `def`
+# endpoints in Starlette's threadpool, so this is a genuine multi-thread race
+# within one process; a plain in-process lock closes it, consistent with the
+# pipeline's own single-process design (backend/pipeline/dispatch.py serializes
+# work on one worker loop and tracks in-flight jobs the same way).
+_job_locks: dict[int, threading.Lock] = {}
+_job_locks_guard = threading.Lock()
+
+
+@contextmanager
+def _job_lock(job_id: int):
+    with _job_locks_guard:
+        lock = _job_locks.setdefault(job_id, threading.Lock())
+    with lock:
+        yield
 
 
 def _validate(payload: JobCreate) -> None:
@@ -267,34 +290,36 @@ def get_job(job_id: int, db: Session = Depends(get_db)):
 
 @router.delete("/{job_id}")
 def delete_job(job_id: int, db: Session = Depends(get_db)):
-    job = db.get(VideoJob, job_id)
-    if not job:
-        raise HTTPException(404, "job não encontrado")
-    if job.status in _RUNNING_STATES:
-        raise HTTPException(409, f"job em execução não pode ser deletado (status={job.status.value})")
+    with _job_lock(job_id):
+        job = db.get(VideoJob, job_id)
+        if not job:
+            raise HTTPException(404, "job não encontrado")
+        if job.status in _RUNNING_STATES:
+            raise HTTPException(409, f"job em execução não pode ser deletado (status={job.status.value})")
 
-    # Best-effort cleanup of generated artifacts before dropping the row.
-    _cleanup_job_files(job)
+        # Best-effort cleanup of generated artifacts before dropping the row.
+        _cleanup_job_files(job)
 
-    db.delete(job)
-    db.commit()
-    return {"deleted": job_id}
+        db.delete(job)
+        db.commit()
+        return {"deleted": job_id}
 
 
 @router.post("/{job_id}/retry")
 def retry_job(job_id: int, db: Session = Depends(get_db)):
-    job = db.get(VideoJob, job_id)
-    if not job:
-        raise HTTPException(404, "job não encontrado")
-    if job.status in _RUNNING_STATES:
-        raise HTTPException(409, f"job em execução não pode ser reprocessado (status={job.status.value})")
-    job.status = JobStatus.QUEUED
-    job.error_message = None
-    job.progress = 0
-    job.retry_count = (job.retry_count or 0) + 1
-    db.commit()
-    transport = dispatch_job(job.id)
-    return {"job": job.to_dict(), "dispatch": transport}
+    with _job_lock(job_id):
+        job = db.get(VideoJob, job_id)
+        if not job:
+            raise HTTPException(404, "job não encontrado")
+        if job.status in _RUNNING_STATES:
+            raise HTTPException(409, f"job em execução não pode ser reprocessado (status={job.status.value})")
+        job.status = JobStatus.QUEUED
+        job.error_message = None
+        job.progress = 0
+        job.retry_count = (job.retry_count or 0) + 1
+        db.commit()
+        transport = dispatch_job(job.id)
+        return {"job": job.to_dict(), "dispatch": transport}
 
 
 @router.patch("/{job_id}/seo")
@@ -309,47 +334,49 @@ def edit_seo(job_id: int, payload: SEOUpdate, db: Session = Depends(get_db)):
 
 @router.post("/{job_id}/approve")
 def approve_job(job_id: int, db: Session = Depends(get_db)):
-    job = db.get(VideoJob, job_id)
-    if not job:
-        raise HTTPException(404, "job não encontrado")
-    if job.status not in (JobStatus.AWAITING_APPROVAL, JobStatus.TIKTOK_PENDING_APPROVAL):
-        raise HTTPException(409, f"job não está aguardando aprovação (status={job.status.value})")
-    job.approval_status = "approved"
-    job.status = JobStatus.APPROVED
-    db.commit()
-
-    dispatched = None
-    dispatch_error = None
-    try:
-        import importlib.util
-
-        if importlib.util.find_spec("backend.agents.publisher"):
-            dispatched = dispatch_publish(job.id)
-    except Exception as exc:  # noqa: BLE001
-        dispatched = None
-        dispatch_error = str(exc)
-    if dispatched:
-        note = None
-    elif dispatch_error:
-        note = dispatch_error
-        job.error_message = dispatch_error
+    with _job_lock(job_id):
+        job = db.get(VideoJob, job_id)
+        if not job:
+            raise HTTPException(404, "job não encontrado")
+        if job.status not in (JobStatus.AWAITING_APPROVAL, JobStatus.TIKTOK_PENDING_APPROVAL):
+            raise HTTPException(409, f"job não está aguardando aprovação (status={job.status.value})")
+        job.approval_status = "approved"
+        job.status = JobStatus.APPROVED
         db.commit()
-    else:
-        note = "Publisher ainda não configurado — vídeo aprovado e salvo localmente."
-    return {"job": job.to_dict(), "publish_dispatch": dispatched, "note": note}
+
+        dispatched = None
+        dispatch_error = None
+        try:
+            import importlib.util
+
+            if importlib.util.find_spec("backend.agents.publisher"):
+                dispatched = dispatch_publish(job.id)
+        except Exception as exc:  # noqa: BLE001
+            dispatched = None
+            dispatch_error = str(exc)
+        if dispatched:
+            note = None
+        elif dispatch_error:
+            note = dispatch_error
+            job.error_message = dispatch_error
+            db.commit()
+        else:
+            note = "Publisher ainda não configurado — vídeo aprovado e salvo localmente."
+        return {"job": job.to_dict(), "publish_dispatch": dispatched, "note": note}
 
 
 @router.post("/{job_id}/reject")
 def reject_job(job_id: int, db: Session = Depends(get_db)):
-    job = db.get(VideoJob, job_id)
-    if not job:
-        raise HTTPException(404, "job não encontrado")
-    if job.status not in (JobStatus.AWAITING_APPROVAL, JobStatus.TIKTOK_PENDING_APPROVAL):
-        raise HTTPException(409, f"job não está aguardando aprovação (status={job.status.value})")
-    job.approval_status = "rejected"
-    job.status = JobStatus.REJECTED
-    db.commit()
-    return {"job": job.to_dict()}
+    with _job_lock(job_id):
+        job = db.get(VideoJob, job_id)
+        if not job:
+            raise HTTPException(404, "job não encontrado")
+        if job.status not in (JobStatus.AWAITING_APPROVAL, JobStatus.TIKTOK_PENDING_APPROVAL):
+            raise HTTPException(409, f"job não está aguardando aprovação (status={job.status.value})")
+        job.approval_status = "rejected"
+        job.status = JobStatus.REJECTED
+        db.commit()
+        return {"job": job.to_dict()}
 
 
 @router.post("/import-csv")
@@ -413,33 +440,34 @@ def publish_job(job_id: int, db: Session = Depends(get_db)):
     not re-sent. This rescues orphaned APPROVED jobs recovered at boot that
     otherwise had no way to be published.
     """
-    job = db.get(VideoJob, job_id)
-    if not job:
-        raise HTTPException(404, "job não encontrado")
-    if job.status not in (
-        JobStatus.APPROVED, JobStatus.ERROR, JobStatus.PUBLISHING, JobStatus.TIKTOK_PENDING_APPROVAL,
-    ):
-        raise HTTPException(409, f"job não pode ser republicado (status={job.status.value})")
+    with _job_lock(job_id):
+        job = db.get(VideoJob, job_id)
+        if not job:
+            raise HTTPException(404, "job não encontrado")
+        if job.status not in (
+            JobStatus.APPROVED, JobStatus.ERROR, JobStatus.PUBLISHING, JobStatus.TIKTOK_PENDING_APPROVAL,
+        ):
+            raise HTTPException(409, f"job não pode ser republicado (status={job.status.value})")
 
-    pub = job.publish_status or {}
-    targets = job.target_platforms or []
-    pending = [p for p in targets if not _platform_published(pub.get(p))]
+        pub = job.publish_status or {}
+        targets = job.target_platforms or []
+        pending = [p for p in targets if not _platform_published(pub.get(p))]
 
-    # Everything already published — nothing to do (idempotent no-op).
-    if targets and not pending:
-        if job.status != JobStatus.PUBLISHED:
-            job.status = JobStatus.PUBLISHED
-            db.commit()
-        return {"job": job.to_dict(), "publish_dispatch": None, "pending_platforms": [],
-                "note": "Todas as plataformas já publicadas — nada a reenviar."}
+        # Everything already published — nothing to do (idempotent no-op).
+        if targets and not pending:
+            if job.status != JobStatus.PUBLISHED:
+                job.status = JobStatus.PUBLISHED
+                db.commit()
+            return {"job": job.to_dict(), "publish_dispatch": None, "pending_platforms": [],
+                    "note": "Todas as plataformas já publicadas — nada a reenviar."}
 
-    if job.status != JobStatus.APPROVED:
-        job.status = JobStatus.APPROVED
-    job.approval_status = "approved"
-    db.commit()
+        if job.status != JobStatus.APPROVED:
+            job.status = JobStatus.APPROVED
+        job.approval_status = "approved"
+        db.commit()
 
-    transport = dispatch_publish(job.id)
-    return {"job": job.to_dict(), "publish_dispatch": transport, "pending_platforms": pending}
+        transport = dispatch_publish(job.id)
+        return {"job": job.to_dict(), "publish_dispatch": transport, "pending_platforms": pending}
 
 
 @router.patch("/{job_id}")
@@ -450,27 +478,28 @@ def patch_job(job_id: int, payload: JobPatch, db: Session = Depends(get_db)):
     rejected with 409 for PROCESSING/PUBLISHING. account_id (when sent non-null)
     must exist in platform_accounts.
     """
-    job = db.get(VideoJob, job_id)
-    if not job:
-        raise HTTPException(404, "job não encontrado")
-    if job.status not in _EDITABLE_STATES:
-        raise HTTPException(409, f"job não pode ser editado (status={job.status.value})")
+    with _job_lock(job_id):
+        job = db.get(VideoJob, job_id)
+        if not job:
+            raise HTTPException(404, "job não encontrado")
+        if job.status not in _EDITABLE_STATES:
+            raise HTTPException(409, f"job não pode ser editado (status={job.status.value})")
 
-    fields = payload.model_fields_set
+        fields = payload.model_fields_set
 
-    if "account_id" in fields:
-        _require_account(db, payload.account_id)
-        job.account_id = payload.account_id
-    if "target_platforms" in fields and payload.target_platforms is not None:
-        job.target_platforms = payload.target_platforms
-    if "scheduled_at" in fields:
-        job.scheduled_at = payload.scheduled_at
-    if "title" in fields and payload.title is not None:
-        job.title = payload.title
+        if "account_id" in fields:
+            _require_account(db, payload.account_id)
+            job.account_id = payload.account_id
+        if "target_platforms" in fields and payload.target_platforms is not None:
+            job.target_platforms = payload.target_platforms
+        if "scheduled_at" in fields:
+            job.scheduled_at = payload.scheduled_at
+        if "title" in fields and payload.title is not None:
+            job.title = payload.title
 
-    db.commit()
-    db.refresh(job)
-    return {"job": job.to_dict()}
+        db.commit()
+        db.refresh(job)
+        return {"job": job.to_dict()}
 
 
 @router.post("/bulk-delete")
@@ -481,6 +510,8 @@ def bulk_delete_jobs(payload: BulkDelete, db: Session = Depends(get_db)):
     if payload.ids:
         stmt = select(VideoJob).where(VideoJob.id.in_(payload.ids))
     elif payload.status:
+        if payload.status not in {s.value for s in JobStatus}:
+            raise HTTPException(400, f"status inválido: {payload.status}")
         stmt = select(VideoJob).where(VideoJob.status == payload.status)
     else:
         raise HTTPException(400, "informe 'ids' ou 'status'")

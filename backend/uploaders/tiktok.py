@@ -162,9 +162,12 @@ def upload_video(video_path: str, caption: str, credentials: dict, privacy: str 
                     "error": f"init sem upload_url: {r.text[:200]}"}
 
         with open(video_path, "rb") as f:
+            # Stream the file handle instead of f.read() — avoids buffering the
+            # whole video in memory for the duration of the PUT (httpx streams
+            # file-like objects chunk-by-chunk).
             put = httpx.put(
                 upload_url,
-                content=f.read(),
+                content=f,
                 headers={"Content-Range": f"bytes 0-{size - 1}/{size}",
                          "Content-Type": "video/mp4"},
                 timeout=300,

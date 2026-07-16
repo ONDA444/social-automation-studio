@@ -19,7 +19,15 @@ import logging
 logger = logging.getLogger("studio.keyword_research")
 
 
-def related_search_queries(seed: str, language: str = "pt-BR", region: str = "BR") -> list[str]:
+def region_for_language(language: str | None) -> str:
+    """Best-effort language->geo mapping so Trends isn't silently geo-locked to
+    Brazil for non-pt channels (same "pt -> BR else US" rule scheduler.py
+    already applies when calling TrendingMomentAgent)."""
+    lang = (language or "").strip().lower()
+    return "BR" if lang.startswith("pt") else "US"
+
+
+def related_search_queries(seed: str, language: str = "pt-BR", region: str | None = None) -> list[str]:
     """Real Google Trends queries related to `seed` — both "top" (most
     searched) and "rising" (trending now), deduplicated. `seed` should be the
     video's own title or primary topic, not the channel's broad niche (unlike
@@ -28,6 +36,7 @@ def related_search_queries(seed: str, language: str = "pt-BR", region: str = "BR
     seed = (seed or "").strip()
     if not seed:
         return []
+    region = region or region_for_language(language)
     try:
         from pytrends.request import TrendReq
 

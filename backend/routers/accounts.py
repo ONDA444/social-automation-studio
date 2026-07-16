@@ -9,9 +9,12 @@ from sqlalchemy.orm import Session
 from backend.database import get_db
 from backend.agents.account_profile import AccountProfileService
 from backend.agents.drive_library import extract_folder_id
+from backend.models.video_job import JobStatus, VideoJob
 from backend.uploaders import instagram as ig
 from backend.uploaders import tiktok as tk
 from backend.uploaders import youtube as yt
+
+_RUNNING_STATES = {JobStatus.PROCESSING, JobStatus.PUBLISHING}
 
 router = APIRouter(tags=["accounts"])
 
@@ -105,6 +108,13 @@ def delete_account(account_id: int, db: Session = Depends(get_db)):
     acct = svc.get(account_id)
     if not acct:
         raise HTTPException(404, "conta não encontrada")
+    # account_id is FK ondelete=SET NULL, so a delete here would silently null it
+    # out on any in-flight job still reading it mid-pipeline (orchestrator/publisher).
+    running = db.query(VideoJob).filter(
+        VideoJob.account_id == account_id, VideoJob.status.in_(_RUNNING_STATES)
+    ).first()
+    if running:
+        raise HTTPException(409, f"conta possui job em execução (status={running.status.value})")
     db.delete(acct)
     db.commit()
     return {"deleted": account_id}
@@ -126,7 +136,17 @@ async def clone_voice(account_id: int, file: UploadFile = File(...), db: Session
     acct = svc.get(account_id)
     if not acct:
         raise HTTPException(404, "conta não encontrada")
-    audio = await file.read()
+    max_bytes = settings.max_voice_clone_upload_mb * 1024 * 1024
+    chunks = []
+    total = 0
+    while chunk := await file.read(1024 * 1024):
+        total += len(chunk)
+        if total > max_bytes:
+            raise HTTPException(
+                413, f"Arquivo maior que o limite de {settings.max_voice_clone_upload_mb}MB."
+            )
+        chunks.append(chunk)
+    audio = b"".join(chunks)
     if len(audio) < 20_000:
         raise HTTPException(400, "Gravação muito curta — fale por ~10 segundos e tente de novo.")
     try:

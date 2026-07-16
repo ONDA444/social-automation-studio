@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { api, mediaUrl } from '../api'
 import { PLATFORM_META, fmtDate } from '../lib'
 
@@ -6,6 +6,14 @@ export default function ApprovalCard({ job, onDone }) {
   const [showPlayer, setShowPlayer] = useState(false)
   const [editing, setEditing] = useState(false)
   const [seo, setSeo] = useState(job.seo_metadata || {})
+
+  // Approvals.jsx keys cards by job.id, so this instance persists across
+  // list refreshes (e.g. websocket-triggered reloads). Re-sync local seo
+  // state whenever the server-provided job.seo_metadata changes, unless the
+  // user is actively editing it, to avoid clobbering newer server data.
+  useEffect(() => {
+    if (!editing) setSeo(job.seo_metadata || {})
+  }, [job.seo_metadata, editing])
   const [busy, setBusy] = useState(false)
   const ctx = job.video_context || {}
   const qc = ctx.qc || {}

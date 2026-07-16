@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { api, API_BASE } from '../api'
 import CalendarView from '../components/CalendarView.jsx'
 import ManualUploadModal from '../components/ManualUploadModal.jsx'
@@ -37,6 +37,9 @@ export default function Schedule() {
   const [events, setEvents]     = useState([])
   const [accounts, setAccounts] = useState([])
   const [sel, setSel]           = useState('')
+  const driveReqIdRef = useRef(0)
+  const cfgReqIdRef = useRef(0)
+  const queueReqIdRef = useRef(0)
   const [cfg, setCfg]           = useState({
     mode: 'fixed', videos_per_day: 1, post_times: ['19:00'],
     timezone: 'America/Sao_Paulo', auto_shorts: true, shorts_formats: [1, 2, 4],
@@ -94,10 +97,14 @@ export default function Schedule() {
 
   useEffect(() => {
     if (!sel) return
+    // Guard against stale responses: only the most recent sel change may commit its result.
+    const reqId = ++cfgReqIdRef.current
     api.get(`/schedule/config/${sel}`)
-      .then((c) => setCfg((p) => ({ ...p, ...c, post_times: c.post_times?.length ? c.post_times : p.post_times })))
+      .then((c) => { if (reqId === cfgReqIdRef.current) setCfg((p) => ({ ...p, ...c, post_times: c.post_times?.length ? c.post_times : p.post_times })) })
       .catch(() => {})
-    api.get(`/schedule/${sel}/slots?count=6`).then((d) => { setSlots(d.slots || []); setSlotsMeta(d) }).catch(() => {})
+    api.get(`/schedule/${sel}/slots?count=6`)
+      .then((d) => { if (reqId === cfgReqIdRef.current) { setSlots(d.slots || []); setSlotsMeta(d) } })
+      .catch(() => {})
     const acct = accounts.find((a) => String(a.id) === sel)
     if (acct) {
       const nextDriveCfg = driveConfigFromAccount(acct)
@@ -111,11 +118,15 @@ export default function Schedule() {
 
   const loadQueue = () => {
     if (!sel) { setQueue([]); setHistory([]); return }
-    api.get(`/themes?account_id=${sel}&status=pending`).then((d) => setQueue(d.themes || [])).catch(() => setQueue([]))
+    // Guard against stale responses: only the most recent loadQueue() call may commit its result.
+    const reqId = ++queueReqIdRef.current
+    api.get(`/themes?account_id=${sel}&status=pending`)
+      .then((d) => { if (reqId === queueReqIdRef.current) setQueue(d.themes || []) })
+      .catch(() => { if (reqId === queueReqIdRef.current) setQueue([]) })
     // Consumed themes (already generated) — shown as history so they don't look "lost".
     api.get(`/themes?account_id=${sel}&status=consumed`)
-      .then((d) => setHistory((d.themes || []).slice().reverse()))
-      .catch(() => setHistory([]))
+      .then((d) => { if (reqId === queueReqIdRef.current) setHistory((d.themes || []).slice().reverse()) })
+      .catch(() => { if (reqId === queueReqIdRef.current) setHistory([]) })
   }
   useEffect(() => { loadQueue() }, [sel])
 
@@ -186,6 +197,8 @@ export default function Schedule() {
   const loadDrive = async (cfgOverride = null, acctOverride = null, accountIdOverride = null) => {
     const accountId = accountIdOverride || sel
     if (!accountId) return
+    // Guard against stale responses: only the most recent loadDrive() call may commit its result.
+    const reqId = ++driveReqIdRef.current
     try {
       const acct = acctOverride || accounts.find((a) => String(a.id) === String(accountId))
       const effectiveDriveCfg = cfgOverride || driveCfg
@@ -195,10 +208,12 @@ export default function Schedule() {
         api.get('/drive-library/status').catch(() => null),
         api.get(`/drive-library/videos?account_id=${accountId}&status=available&limit=500${nicheParam}`).catch(() => ({ videos: [] })),
       ])
+      if (reqId !== driveReqIdRef.current) return
       setDriveStatus(status)
       setDriveVideos(videos.videos || [])
       setDriveVideoStats(videos.stats || {})
     } catch {
+      if (reqId !== driveReqIdRef.current) return
       setDriveVideos([])
       setDriveVideoStats({})
     }

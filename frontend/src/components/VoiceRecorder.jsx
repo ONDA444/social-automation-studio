@@ -12,6 +12,7 @@ export default function VoiceRecorder({ account, onClose, onCloned }) {
   const mediaRef = useRef(null)
   const chunksRef = useRef([])
   const timerRef = useRef(null)
+  const secondsRef = useRef(0)
 
   // ── Upload ──
   const [uploadFile, setUploadFile] = useState(null)
@@ -32,11 +33,14 @@ export default function VoiceRecorder({ account, onClose, onCloned }) {
       mr.onstop = () => { stream.getTracks().forEach((t) => t.stop()); setRecorded(chunksRef.current.length > 0) }
       mr.start()
       mediaRef.current = mr
-      setRecording(true); setSeconds(0)
-      timerRef.current = setInterval(() => setSeconds((s) => {
-        if (s + 1 >= MAX) { stop() }
-        return s + 1
-      }), 1000)
+      setRecording(true); setSeconds(0); secondsRef.current = 0
+      timerRef.current = setInterval(() => {
+        // stop() is a side effect and must run outside the setSeconds updater,
+        // which React may invoke more than once (e.g. StrictMode dev double-invoke).
+        secondsRef.current += 1
+        setSeconds(secondsRef.current)
+        if (secondsRef.current >= MAX) { stop() }
+      }, 1000)
     } catch (e) {
       setStatus('Não consegui acessar o microfone. Permita o acesso no navegador. (' + e.message + ')')
     }

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { api } from '../api'
 import { PLATFORM_META, LANGUAGES, voicesForLang } from '../lib'
 import VoiceRecorder from './VoiceRecorder.jsx'
@@ -37,6 +37,15 @@ export default function PlatformCard({ account, onChange, onChanged, onDone }) {
   const [savingRide, setSavingRide] = useState(false)
   const [toggling, setToggling] = useState(false)
   const [removing, setRemoving] = useState(false)
+
+  // account is not remounted (keyed by stable account.id in Platforms.jsx), so when the
+  // parent refetches and passes a new account object, resync local fields from it here.
+  useEffect(() => {
+    setLang(account.content_language || 'pt-BR')
+    setVoice(account.preferred_voice?.startsWith('v_') ? '' : (account.preferred_voice || ''))
+    setMusic(account.music_style || 'balanced')
+    setRide(account.ride_trends || false)
+  }, [account.content_language, account.preferred_voice, account.music_style, account.ride_trends])
 
   const m = PLATFORM_META[account.platform] || { label: account.platform, color: 'var(--accent)', icon: 'CH' }
   const quotaPct = account.quota_limit ? Math.min(100, Math.round((account.quota_used_today / account.quota_limit) * 100)) : 0

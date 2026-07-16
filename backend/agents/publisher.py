@@ -26,7 +26,8 @@ from backend.uploaders import tiktok as tk
 from backend.uploaders import instagram as ig
 
 logger = logging.getLogger("studio.publisher")
-RETRY_BACKOFFS = [60, 300, 900]  # 1min / 5min / 15min
+RETRY_BACKOFFS = [60, 300]  # 1min / 5min gaps between the 3 attempts in _with_retry
+# (only 2 gaps exist for 3 attempts; nothing sleeps after the final attempt)
 
 # How often the publish heartbeat below touches video_jobs.updated_at while an
 # upload is in flight. Must be comfortably shorter than
@@ -116,17 +117,22 @@ async def _with_retry(fn, *args, label="upload", **kwargs) -> dict:
                 asyncio.to_thread(fn, *args, **kwargs), timeout=_UPLOAD_TIMEOUT_S
             )
         except asyncio.TimeoutError:
-            result = {"ok": False, "status": "error",
+            # wait_for can't cancel the underlying OS thread — `fn` keeps running
+            # after we give up on it and may still complete (and publish) later.
+            # Treat this as terminal, NOT retried: retrying here would send a
+            # second upload while the first orphaned attempt could still land,
+            # producing two published videos/posts for one job.
+            result = {"ok": False, "status": "timeout",
                       "error": f"{label} timed out after {_UPLOAD_TIMEOUT_S}s"}
         if result.get("ok"):
             return result
         last = result
-        # Don't retry terminal states (approval/quota/auth/config/missing media).
+        # Don't retry terminal states (approval/quota/auth/config/missing media/timeout).
         # Retrying these never succeeds and — critically — sleeping through the
         # backoff while holding a worker slot is what jammed the pipeline.
         if result.get("status") in {"tiktok_pending_approval", "quota_exceeded",
                                      "auth_error", "not_configured", "library_missing",
-                                     "file_missing", "no_short"}:
+                                     "file_missing", "no_short", "timeout"}:
             return result
         if attempt < 2:
             await asyncio.sleep(2 if fast else RETRY_BACKOFFS[attempt])
@@ -228,8 +234,19 @@ async def run_publish(job_id: int, platforms: list | None = None) -> dict:
         pinned = svc.get(job.account_id) if job.account_id else None
 
         for platform in run_platforms:
-            if isinstance(results.get(platform), dict) and results[platform].get("ok"):
-                _emit(job_id, platform=platform, status=results[platform].get("status", "already_published"))
+            prior_state = results.get(platform)
+            if isinstance(prior_state, dict) and prior_state.get("ok"):
+                _emit(job_id, platform=platform, status=prior_state.get("status", "already_published"))
+                continue
+            # A durable "uploading" marker means a previous run_publish call is (or
+            # was, until a crash) mid-upload for this platform. Re-entry here — a
+            # stray scheduler tick or duplicate dispatch across replicas — must not
+            # start a second concurrent upload; only external orphan-recovery
+            # (main._apply_orphan_transition), which can check elapsed time/actual
+            # remote state, is allowed to clear this and retry.
+            if isinstance(prior_state, dict) and prior_state.get("status") == "uploading":
+                results[platform] = prior_state
+                _emit(job_id, platform=platform, status="uploading")
                 continue
             # Isolate each platform: a crash uploading to one must never abort the
             # others (or leave the whole multi-platform job stuck/ERROR).
@@ -555,6 +572,8 @@ def _ensure_ready_video_local(job_id: int) -> None:
     usage — indistinguishable from a hung network call, and the reason this
     session spent hours chasing what looked like a dead socket. A dedicated
     session per thread removes that hazard entirely."""
+    from sqlalchemy import update
+
     from backend.agents.drive_library import DriveLibraryService
     from backend.models import ReadyVideo
 
@@ -572,10 +591,26 @@ def _ensure_ready_video_local(job_id: int) -> None:
         if not ready:
             return
         path = DriveLibraryService(db).download_for_job(ready, job.id)
-        job.main_video_path = path
-        if (job.video_format or "long") == "short":
-            job.shorts_paths = [path]
+        # The download can outlive run_publish's wait_for timeout: if that
+        # already fired, run_publish's own session marked the job ERROR and
+        # committed while this thread kept downloading. Guard with a
+        # conditional UPDATE (not a re-check-then-write on the stale `job`
+        # object) so we never resurrect main_video_path on a job that has
+        # since been finalized to a terminal, non-PUBLISHING status.
+        result = db.execute(
+            update(VideoJob)
+            .where(VideoJob.id == job_id, VideoJob.status == JobStatus.PUBLISHING)
+            .values(
+                main_video_path=path,
+                shorts_paths=[path] if (job.video_format or "long") == "short" else job.shorts_paths,
+            )
+        )
         db.commit()
+        if result.rowcount == 0:
+            logger.info(
+                "Drive download for job %s finished after the job left PUBLISHING; discarding path.",
+                job_id,
+            )
     finally:
         db.close()
 

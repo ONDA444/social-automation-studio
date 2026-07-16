@@ -309,7 +309,9 @@ def _job_recover_stuck_publishing() -> None:
          same up-to-date "still alive" state — a job is only ever considered
          stuck once its heartbeat has genuinely stopped.
     """
-    from sqlalchemy import select
+    from types import SimpleNamespace
+
+    from sqlalchemy import select, update
 
     from backend.main import _apply_orphan_transition, _safe_boot
     from backend.models import JobStatus, VideoJob
@@ -333,13 +335,45 @@ def _job_recover_stuck_publishing() -> None:
         recovered = 0
         for job in stuck:
             was_publishing = job.status == JobStatus.PUBLISHING
-            _apply_orphan_transition(job, safe)
+            # Compute the transition on a DETACHED shadow copy, never on the
+            # loaded ORM `job` — that instance can go stale between our SELECT
+            # above and the claim below (e.g. the real publish path commits
+            # status=PUBLISHED from another session in that window). Deciding
+            # from stale state and then blind-committing it would silently
+            # clobber a real PUBLISHED row and re-dispatch a duplicate upload.
+            shadow = SimpleNamespace(
+                status=job.status,
+                publish_status=job.publish_status,
+                orphan_resume_count=job.orphan_resume_count,
+                error_message=job.error_message,
+                current_agent=job.current_agent,
+                progress=job.progress,
+            )
+            _apply_orphan_transition(shadow, safe)
+            # ATOMIC claim: only apply the transition if the row's status is
+            # STILL what we read it as. If another tick/replica already
+            # recovered (or the real publish finished) in between, rowcount==0
+            # and we skip — so the same job can never be dispatched twice.
+            claimed = db.execute(
+                update(VideoJob)
+                .where(VideoJob.id == job.id, VideoJob.status == job.status)
+                .values(
+                    status=shadow.status,
+                    error_message=shadow.error_message,
+                    current_agent=shadow.current_agent,
+                    progress=shadow.progress,
+                    orphan_resume_count=shadow.orphan_resume_count,
+                )
+                .execution_options(synchronize_session=False)
+            ).rowcount
+            db.commit()
+            if not claimed:
+                continue  # lost the race — another replica/tick already handled it
             recovered += 1
-            if was_publishing and job.status == JobStatus.APPROVED:
+            if was_publishing and shadow.status == JobStatus.APPROVED:
                 to_publish.append(job.id)
-            elif (not was_publishing) and job.status == JobStatus.QUEUED:
+            elif (not was_publishing) and shadow.status == JobStatus.QUEUED:
                 to_requeue.append(job.id)
-        db.commit()
         logger.info(
             "Varredura de jobs presos: %d job(s) travado(s) em PUBLISHING/PROCESSING "
             "(> %dmin, sem tarefa viva) ajustado(s); %d reenviado(s) para publicação, "
@@ -637,9 +671,17 @@ def _slots_due_today(hhmm_times: list[str], per_day: int, tz_name: str | None, n
     return due
 
 
-def _create_theme_job(db, account_id: int, theme, scheduled_naive: datetime) -> int:
-    """Create a QUEUED VideoJob from a theme, mark the theme consumed, dispatch it."""
+def _create_theme_job(db, account_id: int, theme, scheduled_naive: datetime, slot_key: str | None = None) -> int:
+    """Create a QUEUED VideoJob from a theme, mark the theme consumed, dispatch it.
+
+    `slot_key` (schedule/publish-ahead callers only — immediate mode passes None)
+    is written to VideoJob.schedule_slot_key, which carries a DB unique index
+    (see database.ensure_indexes). That turns the caller's slot-clash SELECT
+    from check-then-act into a real claim: if a second process raced past the
+    same SELECT for this slot, its insert here hits IntegrityError and loses.
+    """
     from sqlalchemy import update as _update
+    from sqlalchemy.exc import IntegrityError
 
     from backend.models import JobStatus, PlatformAccount, ThemeQueue, VideoJob
     from backend.pipeline.dispatch import dispatch_job
@@ -660,7 +702,7 @@ def _create_theme_job(db, account_id: int, theme, scheduled_naive: datetime) -> 
     acct = db.get(PlatformAccount, account_id)
     source_mode = getattr(acct, "video_source_mode", "ai") if acct else "ai"
     if source_mode in {"drive", "mixed"} and acct is not None:
-        ready_job_id = _try_create_ready_video_job(db, acct, scheduled_naive, theme=theme)
+        ready_job_id = _try_create_ready_video_job(db, acct, scheduled_naive, theme=theme, slot_key=slot_key)
         if ready_job_id:
             return ready_job_id
         if source_mode == "drive":
@@ -680,17 +722,31 @@ def _create_theme_job(db, account_id: int, theme, scheduled_naive: datetime) -> 
         account_id=account_id,
         status=JobStatus.QUEUED,
         scheduled_at=scheduled_naive,
+        schedule_slot_key=slot_key,
     )
     db.add(job)
-    db.flush()
+    try:
+        db.flush()
+    except IntegrityError:
+        # Another process already claimed this slot between our clash-check
+        # SELECT and this insert. Release the theme claim back to pending and
+        # bail out instead of double-booking the slot.
+        db.rollback()
+        theme.status = "pending"
+        db.commit()
+        return 0
     theme.consumed_job_id = job.id
     db.commit()
     dispatch_job(job.id)
     return job.id
 
 
-def _try_create_ready_video_job(db, acct, scheduled_naive: datetime, theme=None) -> int | None:
+def _try_create_ready_video_job(
+    db, acct, scheduled_naive: datetime, theme=None, slot_key: str | None = None
+) -> int | None:
     """Reserve a Drive ready-video and create a publishable VideoJob."""
+    from sqlalchemy.exc import IntegrityError
+
     from backend.agents.drive_library import DriveLibraryService
     from backend.agents.ready_video_seo import build_ready_video_package
     from backend.config import settings
@@ -734,9 +790,18 @@ def _try_create_ready_video_job(db, acct, scheduled_naive: datetime, theme=None)
         },
         qc_status="skipped_ready_video",
         compliance_status="needs_rights_review",
+        schedule_slot_key=slot_key,
     )
     db.add(job)
-    db.flush()
+    try:
+        db.flush()
+    except IntegrityError:
+        # Another process already claimed this slot between the caller's
+        # clash-check SELECT and this insert. drive.reserve_next()'s ReadyVideo
+        # claim above is uncommitted in this same transaction, so rolling back
+        # here also releases it for the next reservation attempt.
+        db.rollback()
+        return None
     ready.reserved_job_id = job.id
     try:
         local_path = drive.download_for_job(ready, job.id)
@@ -801,7 +866,12 @@ def _try_create_ready_video_job(db, acct, scheduled_naive: datetime, theme=None)
             dispatch_publish(job.id)
         return job.id
     except Exception as exc:  # noqa: BLE001
-        ready.status = "error"
+        # Reset to "available" (not "error") and clear the reservation so this
+        # otherwise-good Drive file re-enters reserve_next()'s pool on the next
+        # run instead of being permanently sidelined until a full reindex.
+        ready.status = "available"
+        ready.reserved_job_id = None
+        ready.reserved_at = None
         job.status = JobStatus.ERROR
         job.error_message = f"Falha ao baixar video do Drive: {exc}"[:500]
         db.commit()
@@ -925,10 +995,15 @@ def _job_consume_themes() -> None:
                             pidx += 1
                         elif source_mode != "drive":
                             break
+                        # Backstop for the SELECT-based clash check above: passed down
+                        # to a DB-unique column so a second process racing this same
+                        # slot loses atomically at insert time instead of also passing
+                        # the (non-locking) clash SELECT and double-booking the slot.
+                        slot_key = f"{acct.id}:{slot_naive.isoformat()}"
                         jid = (
-                            _create_theme_job(db, acct.id, theme, slot_naive)
+                            _create_theme_job(db, acct.id, theme, slot_naive, slot_key=slot_key)
                             if theme is not None
-                            else _try_create_ready_video_job(db, acct, slot_naive)
+                            else _try_create_ready_video_job(db, acct, slot_naive, slot_key=slot_key)
                         )
                         if jid:
                             logger.info("Agendado: %s -> job %s (conta %s, publica %s UTC).",
@@ -943,16 +1018,21 @@ def _job_consume_themes() -> None:
                     midnight_local = datetime.combine(now_utc.astimezone(tz).date(),
                                                       datetime.min.time(), tzinfo=tz)
                     midnight_naive_utc = midnight_local.astimezone(_tz.utc).replace(tzinfo=None)
-                    generated_today = db.execute(
-                        select(func.count(VideoJob.id)).where(
-                            VideoJob.account_id == acct.id,
-                            VideoJob.created_at >= midnight_naive_utc,
-                        )
-                    ).scalar() or 0
-                    budget = int(due) - int(generated_today)
-                    if budget <= 0:
-                        continue
-                    for idx in range(budget):
+                    for idx in range(int(due)):
+                        # Re-read the live count on every iteration (instead of computing
+                        # a single "budget" up front) so a concurrent scheduler replica's
+                        # just-committed VideoJob rows for this account/day are visible
+                        # before we decide to create another — this closes the TOCTOU
+                        # window down to a single count-then-create per job instead of
+                        # per tick.
+                        generated_today = db.execute(
+                            select(func.count(VideoJob.id)).where(
+                                VideoJob.account_id == acct.id,
+                                VideoJob.created_at >= midnight_naive_utc,
+                            )
+                        ).scalar() or 0
+                        if generated_today >= due:
+                            break
                         theme = pending[idx] if idx < len(pending) else None
                         if theme is None and source_mode != "drive":
                             break

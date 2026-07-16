@@ -83,6 +83,7 @@ def ensure_columns() -> None:
         ("video_analytics", "avg_view_pct", "FLOAT DEFAULT 0"),
         ("video_analytics", "subscribers_gained", "INTEGER DEFAULT 0"),
         ("video_jobs", "orphan_resume_count", "INTEGER DEFAULT 0"),
+        ("video_jobs", "schedule_slot_key", "VARCHAR(160)"),
         ("platform_accounts", "channel_optimization",
          "JSON DEFAULT '{}'" if not settings.sqlalchemy_url.startswith("sqlite") else "TEXT DEFAULT '{}'"),
     ]
@@ -115,6 +116,9 @@ def ensure_indexes() -> None:
         # rows are still protected by the ORM-level check-then-insert fallback
         # in routers/schedule.upsert_config.
         ("uq_schedule_configs_account_id", "schedule_configs", "account_id", True),
+        # Enforces the scheduler's slot dedup at the DB level (NULLs — manual/
+        # immediate/mirror jobs — don't participate in the uniqueness check).
+        ("uq_jobs_schedule_slot_key", "video_jobs", "schedule_slot_key", True),
     ]
     try:
         with engine.begin() as conn:
