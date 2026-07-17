@@ -355,7 +355,13 @@ async def run_publish(job_id: int, platforms: list | None = None) -> dict:
                 # Dead token: don't make the user click Retry (it can't work until the
                 # channel is reconnected). Tell them what to do — the reconnect itself
                 # auto-republishes this job (see dispatch.resume_account_blocked_jobs).
-                job.error_message = _AUTH_BLOCKED
+                # Name the ACTUAL platform that failed — a TikTok/Instagram token dying
+                # used to show "Login do YouTube expirou" regardless, which sent the
+                # user to reconnect the wrong account.
+                auth_platform = next(
+                    (p for p, r in results.items() if (r or {}).get("status") == "auth_error"), None
+                )
+                job.error_message = _auth_blocked_message(auth_platform)
             else:
                 first_err = next((r.get("error") for r in results.values()
                                   if isinstance(r, dict) and r.get("error")), None)
@@ -393,7 +399,13 @@ async def run_publish(job_id: int, platforms: list | None = None) -> dict:
                 # reconnect) instead of getting endlessly auto-resurrected with a
                 # cryptic message that never tells the user to reconnect the channel.
                 if "travado" in str(exc).lower():
-                    job.error_message = _AUTH_BLOCKED
+                    # This branch only ever fires from _ensure_ready_video_local's
+                    # Drive-download timeout (the platform loop's own OAuth failures
+                    # are caught and classified locally — see auth_platform above).
+                    # It used to say "Login do YouTube expirou", which sent the user
+                    # to reconnect a YouTube channel when the actual dead credential
+                    # was the shared Google Drive connection.
+                    job.error_message = _DRIVE_AUTH_BLOCKED
                 else:
                     job.error_message = f"Falha na publicação: {exc}"[:500]
                 db.commit()
@@ -410,11 +422,25 @@ async def run_publish(job_id: int, platforms: list | None = None) -> dict:
 _FILE_GONE = ("Os arquivos do vídeo foram perdidos (o servidor reiniciou). "
               "Gere o vídeo novamente (↻) para poder publicar.")
 
-# Keep the "invalid_grant" token in this string: scheduler._NO_AUTO_RETRY_MARKERS and
-# dispatch.resume_account_blocked_jobs both match on it to (a) NOT waste LLM retrying
-# while blocked and (b) auto-republish the moment the channel is reconnected.
-_AUTH_BLOCKED = ("Login do YouTube expirou (invalid_grant) — reconecte o canal em "
-                 "Plataformas e o vídeo publica sozinho. Não precisa clicar Retry.")
+_PLATFORM_LOGIN_LABEL = {"youtube": "do YouTube", "tiktok": "do TikTok", "instagram": "do Instagram"}
+
+
+def _auth_blocked_message(platform: str | None) -> str:
+    """Keep the "invalid_grant" token in the returned string: scheduler.
+    _NO_AUTO_RETRY_MARKERS and dispatch.resume_account_blocked_jobs both match
+    on it to (a) NOT waste LLM retrying while blocked and (b) auto-republish
+    the moment the channel is reconnected."""
+    label = _PLATFORM_LOGIN_LABEL.get(platform, "da conta")
+    return (f"Login {label} expirou (invalid_grant) — reconecte o canal em "
+            "Plataformas e o vídeo publica sozinho. Não precisa clicar Retry.")
+
+
+# Same reconnect-and-it-self-heals design as _auth_blocked_message, but for the
+# single SHARED Drive connection (see dispatch.resume_drive_blocked_jobs) —
+# reconnecting one YouTube channel would NOT fix this.
+_DRIVE_AUTH_BLOCKED = ("Conexão com o Google Drive expirou (invalid_grant) — reconecte "
+                       "o Drive em Plataformas/Agenda e o vídeo publica sozinho. "
+                       "Não precisa clicar Retry.")
 
 
 async def publish_youtube(job, seo, creds, publish_at, shorts, privacy="private",

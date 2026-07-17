@@ -367,6 +367,8 @@ def resume_account_blocked_jobs(account_id: int) -> list[int]:
         db.rollback()
         logger.exception("resume_account_blocked_jobs falhou (conta %s)", account_id)
         return resumed
+    finally:
+        db.close()
 
 
 def resume_drive_blocked_jobs() -> list[int]:

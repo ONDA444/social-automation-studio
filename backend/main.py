@@ -94,6 +94,7 @@ _ROUTER_MODULES = [
     "backend.routers.themes",
     "backend.routers.settings",
     "backend.routers.drive_library",
+    "backend.routers.system",
 ]
 
 

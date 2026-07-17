@@ -56,6 +56,12 @@ def friendly_error(msg: str | None) -> str | None:
     """
     if not msg:
         return None
+    # Some call sites (backend.agents.publisher._auth_blocked_message /
+    # _DRIVE_AUTH_BLOCKED) already write a specific, human-Portuguese message
+    # naming the exact platform/connection to reconnect — don't flatten that
+    # into the generic explanation below and lose which one it was.
+    if "reconecte" in msg.lower():
+        return msg
     for markers, explanation in _RULES:
         if any(marker in msg for marker in markers):
             return explanation

@@ -64,6 +64,24 @@ def get_system_health() -> dict:
                      if (settings.groq_api_key or settings.gemini_api_key)
                      else {"status": "yellow", "detail": "sem chave LLM (usando offline)"})
 
+    # Scheduler (fila, publicação, retry automático, etc. rodam daqui). A
+    # non-leader replica never runs it by design — that's not a failure.
+    try:
+        from backend.scheduler import scheduler_status
+
+        sched = scheduler_status()
+        if not sched["leader"]:
+            checks["scheduler"] = {"status": "green", "detail": "réplica secundária (roda em outra instância)"}
+        elif sched["alive"]:
+            checks["scheduler"] = {"status": "green", "detail": "ativo"}
+        else:
+            checks["scheduler"] = {
+                "status": "red",
+                "detail": "parado ou travado — tarefas automáticas (fila, publicação, retry) não estão rodando",
+            }
+    except Exception as exc:  # noqa: BLE001
+        checks["scheduler"] = {"status": "red", "detail": str(exc)[:80]}
+
     overall = "green"
     if any(c["status"] == "red" for c in checks.values()):
         overall = "red"

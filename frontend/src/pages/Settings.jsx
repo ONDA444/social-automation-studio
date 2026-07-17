@@ -165,10 +165,10 @@ function FixErrorsCard() {
   const [result, setResult] = useState(null)
 
   const run = async () => {
-    if (!confirm('Isso vai reenviar automaticamente todos os vídeos com erro (exceto os que arriscam duplicar um envio já feito). Continuar?')) return
+    if (!confirm('Isso vai tentar consertar TUDO que estiver travado no sistema agora: vídeos com erro, contas desconectadas, downloads do Drive parados, tarefas automáticas paradas. Continuar?')) return
     setBusy(true); setResult(null)
     try {
-      const r = await api.post('/jobs/fix-errors', {})
+      const r = await api.post('/system/fix-all', {})
       setResult(r)
     } catch (e) {
       setResult({ error: e.message })
@@ -177,13 +177,20 @@ function FixErrorsCard() {
     }
   }
 
+  const accountsResumedCount = result?.accounts_resumed
+    ? Object.values(result.accounts_resumed).reduce((sum, ids) => sum + ids.length, 0)
+    : 0
+
   return (
-    <SectionCard title="Corrigir erros" sub="Reenvia de uma vez todo vídeo travado com erro na Fila.">
+    <SectionCard title="Corrigir sistema" sub="Um clique para consertar tudo que estiver travado — não só vídeos.">
       <p className="text-xs text-text-muted mb-4">
-        Ao clicar, o sistema recoloca na fila e tenta publicar de novo, agora, todo vídeo com status
-        de erro — token do Google expirado, limite de upload do YouTube, falha de rede no Drive, cota
-        de IA esgotada, etc. Vídeos onde reenviar poderia duplicar um envio já feito (ex.: upload
-        interrompido no meio) ficam de fora e continuam precisando de conferência manual.
+        Não é só sobre vídeo: ao clicar, o sistema tenta reativar de uma vez tudo que possa ter caído —
+        vídeos com erro (token do Google expirado, limite de upload do YouTube, falha de rede, cota de IA
+        esgotada), contas/canais reconectados cujos vídeos ainda não voltaram sozinhos, downloads do Drive
+        travados, tarefas automáticas paradas (fila, publicação, retry) e limpeza de espaço em disco. Só
+        fica de fora o que exige conferência humana (ex.: um upload que pode já ter ido ao ar — forçar de
+        novo arriscaria duplicar) ou uma falha de infraestrutura real (banco de dados fora do ar, chave de
+        API faltando).
       </p>
       <button
         type="button"
@@ -192,20 +199,40 @@ function FixErrorsCard() {
         className="rounded-card px-4 py-2 text-sm font-semibold disabled:opacity-50"
         style={{ background: 'var(--accent)', color: '#04110b' }}
       >
-        {busy ? 'Corrigindo…' : '🔧 Corrigir erros automaticamente'}
+        {busy ? 'Corrigindo tudo…' : '🔧 Corrigir sistema agora'}
       </button>
 
       {result && !result.error && (
-        <div className="mt-3 text-xs space-y-1">
+        <div className="mt-3 text-xs space-y-2">
           <p style={{ color: 'var(--success)' }}>
-            {result.fixed_count} vídeo{result.fixed_count === 1 ? '' : 's'} reenviado{result.fixed_count === 1 ? '' : 's'} agora.
+            ✓ {result.video_jobs?.fixed_count ?? 0} vídeo{result.video_jobs?.fixed_count === 1 ? '' : 's'} reenviado{result.video_jobs?.fixed_count === 1 ? '' : 's'}.
+            {accountsResumedCount > 0 && ` ${accountsResumedCount} vídeo${accountsResumedCount === 1 ? '' : 's'} retomado${accountsResumedCount === 1 ? '' : 's'} por reconexão de conta.`}
+            {result.drive_resumed?.length > 0 && ` ${result.drive_resumed.length} vídeo${result.drive_resumed.length === 1 ? '' : 's'} retomado${result.drive_resumed.length === 1 ? '' : 's'} do Drive.`}
+            {result.stuck_jobs_swept && ' Varredura de jobs travados executada.'}
           </p>
-          {result.skipped_count > 0 && (
+          {result.scheduler?.was_down && (
+            <p style={{ color: result.scheduler.now_running ? 'var(--success)' : 'var(--error)' }}>
+              {result.scheduler.now_running
+                ? '✓ As tarefas automáticas tinham parado e foram reiniciadas agora.'
+                : '✗ As tarefas automáticas estavam paradas e não foi possível reiniciá-las — avise o suporte.'}
+            </p>
+          )}
+          {result.video_jobs?.skipped_count > 0 && (
             <div style={{ color: 'var(--warning)' }}>
-              <p>{result.skipped_count} deixado{result.skipped_count === 1 ? '' : 's'} de fora (precisa conferir manualmente):</p>
+              <p>{result.video_jobs.skipped_count} vídeo{result.video_jobs.skipped_count === 1 ? '' : 's'} deixado{result.video_jobs.skipped_count === 1 ? '' : 's'} de fora (precisa conferir manualmente):</p>
               <ul className="list-disc ml-4 mt-1 space-y-0.5">
-                {result.skipped.map((s) => (
+                {result.video_jobs.skipped.map((s) => (
                   <li key={s.id}><strong>{s.title}</strong> — {s.reason}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {result.needs_human?.length > 0 && (
+            <div style={{ color: 'var(--error)' }}>
+              <p>Isso aqui precisa de uma ação humana (não é algo que um clique resolve):</p>
+              <ul className="list-disc ml-4 mt-1 space-y-0.5">
+                {result.needs_human.map((h) => (
+                  <li key={h.check}><strong>{h.check}</strong> — {h.detail}</li>
                 ))}
               </ul>
             </div>

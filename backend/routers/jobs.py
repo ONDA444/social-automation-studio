@@ -517,10 +517,16 @@ def patch_job(job_id: int, payload: JobPatch, db: Session = Depends(get_db)):
 def fix_errors(db: Session = Depends(get_db)):
     """One-click recovery: requeues and re-dispatches every ERROR job right now,
     instead of waiting for the scheduler's own backoff sweep — meant for the
-    Config page's 'Corrigir erros' button. Skips only jobs where a forced
-    retry could duplicate an upload or repeat a crash (_DUPLICATE_RISK_MARKERS);
-    those are returned under `skipped` with a plain-Portuguese reason so the
-    user knows why they were left alone.
+    Config page's 'Corrigir erros' button (also called by /system/fix-all).
+    Skips only jobs where a forced retry could duplicate an upload or repeat a
+    crash (_DUPLICATE_RISK_MARKERS); those are returned under `skipped` with a
+    plain-Portuguese reason so the user knows why they were left alone.
+
+    Same smart-resume rule as dispatch.resume_account_blocked_jobs: if the
+    video already rendered (main_video_path survives on disk), only republish
+    it — routing everything through dispatch_job would otherwise burn a full
+    AI re-render (script/TTS/images) on a job that failed at the PUBLISH step,
+    not the render step (e.g. a token that died after rendering finished).
     """
     rows = db.execute(select(VideoJob).where(VideoJob.status == JobStatus.ERROR)).scalars().all()
     fixed: list[int] = []
@@ -531,11 +537,18 @@ def fix_errors(db: Session = Depends(get_db)):
             skipped.append({"id": job.id, "title": job.title, "reason": friendly_error(msg)})
             continue
         job.error_message = None
-        job.status = JobStatus.QUEUED
         job.progress = 0
         job.retry_count = (job.retry_count or 0) + 1
-        db.commit()
-        dispatch_job(job.id)
+        if job.main_video_path and Path(job.main_video_path).exists():
+            job.status = JobStatus.APPROVED
+            job.approval_status = "approved"
+            db.commit()
+            dispatch_publish(job.id)
+        else:
+            job.status = JobStatus.QUEUED
+            job.current_agent = None
+            db.commit()
+            dispatch_job(job.id)
         fixed.append(job.id)
     return {"fixed": fixed, "fixed_count": len(fixed), "skipped": skipped, "skipped_count": len(skipped)}
 

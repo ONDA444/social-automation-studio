@@ -48,6 +48,13 @@ from backend.events import publish_event
 
 logger = logging.getLogger("studio.scheduler")
 _scheduler: BackgroundScheduler | None = None
+# Stamped by _job_heartbeat on every successful tick — the only proof the
+# scheduler is genuinely still ticking, not just that BackgroundScheduler's
+# thread object exists. A frozen/deadlocked scheduler thread would otherwise
+# be invisible: nothing before this tracked "last time a job actually ran."
+_last_heartbeat_at: datetime | None = None
+# Heartbeat runs every 30s; 3 misses in a row is a real stall, not a GC pause.
+_HEARTBEAT_STALE_AFTER = timedelta(seconds=90)
 
 
 def _is_scheduler_leader() -> bool:
@@ -73,7 +80,12 @@ def start_scheduler() -> None:
     sched = BackgroundScheduler(timezone="America/Sao_Paulo")
     sched.add_job(_job_trending, "cron", hour="6,14", id="trending", replace_existing=True)
     sched.add_job(_job_quota_reset, "cron", hour=0, minute=5, id="quota_reset", replace_existing=True)
-    sched.add_job(_job_heartbeat, "interval", seconds=30, id="heartbeat", replace_existing=True)
+    # next_run_time=now: without it, APScheduler's first interval tick is 30s
+    # OUT, so scheduler_status()/get_system_health() would show a false "red"
+    # (no heartbeat yet) for the first 30s after every boot/restart — including
+    # right after ensure_scheduler_running() just fixed a dead scheduler.
+    sched.add_job(_job_heartbeat, "interval", seconds=30, id="heartbeat", replace_existing=True,
+                  next_run_time=datetime.now(timezone.utc))
     sched.add_job(_job_collect_analytics, "interval", minutes=15, id="analytics", replace_existing=True)
     # Near-real-time refresh: overwrite each published video's "live" snapshot with the
     # platform's CURRENT numbers so the Analytics tab matches YouTube/etc., not a frozen
@@ -113,12 +125,44 @@ def shutdown_scheduler() -> None:
         _scheduler = None
 
 
+def scheduler_status() -> dict:
+    """Liveness snapshot: is the in-process APScheduler actually running AND
+    still ticking (not just instantiated)? Used by get_system_health() and by
+    the 'fix everything' action to decide whether to restart it."""
+    running = bool(_scheduler and _scheduler.running)
+    stale = (
+        _last_heartbeat_at is None
+        or (datetime.utcnow() - _last_heartbeat_at) > _HEARTBEAT_STALE_AFTER
+    )
+    return {
+        "leader": _is_scheduler_leader(),
+        "running": running,
+        "last_heartbeat_at": _last_heartbeat_at.isoformat() if _last_heartbeat_at else None,
+        "alive": running and not stale,
+    }
+
+
+def ensure_scheduler_running() -> bool:
+    """Best-effort self-heal for a dead/never-started scheduler: (re)starts it
+    if this replica is the leader and it isn't already running. No-ops (and
+    returns False) on a non-leader replica, matching start_scheduler's own
+    ownership guard. Returns True if the scheduler is running after the call."""
+    global _scheduler
+    if _scheduler and _scheduler.running:
+        return True
+    _scheduler = None  # drop a dead/half-shutdown instance before restarting
+    start_scheduler()
+    return bool(_scheduler and _scheduler.running)
+
+
 # ---- jobs ----
 def _job_heartbeat() -> None:
+    global _last_heartbeat_at
     try:
         from backend.agents.error_recovery import heartbeat
 
         heartbeat()
+        _last_heartbeat_at = datetime.utcnow()
     except Exception as exc:  # noqa: BLE001
         logger.debug("heartbeat failed: %s", exc)
 
