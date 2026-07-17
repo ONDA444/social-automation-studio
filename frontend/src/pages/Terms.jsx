@@ -1,6 +1,6 @@
 export default function Terms() {
   return (
-    <div style={{ maxWidth: 760, margin: '0 auto', padding: '48px 24px', fontFamily: 'system-ui, sans-serif', lineHeight: 1.7, color: '#111' }}>
+    <div style={{ maxWidth: 760, margin: '0 auto', padding: '48px 24px', fontFamily: 'system-ui, sans-serif', lineHeight: 1.7, color: '#111', background: '#fff', minHeight: '100vh' }}>
       <h1 style={{ fontSize: 28, fontWeight: 700, marginBottom: 4 }}>Terms of Service</h1>
       <p style={{ color: '#555', marginBottom: 32 }}>Last updated: July 9, 2026</p>
 
