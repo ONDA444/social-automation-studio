@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 
 from backend.content_types import CONTENT_TYPE_KEYS, public_list
 from backend.database import get_db
+from backend.error_messages import friendly_error
 from backend.models import JobStatus, PlatformAccount, VideoJob
 from backend.pipeline.dispatch import dispatch_job, dispatch_publish
 
@@ -93,6 +94,16 @@ _EDITABLE_STATES = {
 
 # Statuses that block destructive / re-dispatch actions (job is running).
 _RUNNING_STATES = {JobStatus.PROCESSING, JobStatus.PUBLISHING}
+
+# Errors where forcing a retry risks a DUPLICATE upload or crashing the worker
+# again — these are left for a human even in the one-click "fix everything"
+# action below. Every other ERROR job (dead token, network blip, YouTube's own
+# upload-limit block, exhausted LLM quota, ...) is safe to requeue and resend.
+_DUPLICATE_RISK_MARKERS = (
+    "PODE já estar no canal",
+    "Verifique o YouTube",
+    "Render interrompido",
+)
 
 # Per-job_id lock guarding the read-check-mutate-commit(-dispatch) sequence in
 # approve/reject/publish/retry/patch/delete below. Without it, two concurrent
@@ -500,6 +511,33 @@ def patch_job(job_id: int, payload: JobPatch, db: Session = Depends(get_db)):
         db.commit()
         db.refresh(job)
         return {"job": job.to_dict()}
+
+
+@router.post("/fix-errors")
+def fix_errors(db: Session = Depends(get_db)):
+    """One-click recovery: requeues and re-dispatches every ERROR job right now,
+    instead of waiting for the scheduler's own backoff sweep — meant for the
+    Config page's 'Corrigir erros' button. Skips only jobs where a forced
+    retry could duplicate an upload or repeat a crash (_DUPLICATE_RISK_MARKERS);
+    those are returned under `skipped` with a plain-Portuguese reason so the
+    user knows why they were left alone.
+    """
+    rows = db.execute(select(VideoJob).where(VideoJob.status == JobStatus.ERROR)).scalars().all()
+    fixed: list[int] = []
+    skipped: list[dict] = []
+    for job in rows:
+        msg = job.error_message or ""
+        if any(marker in msg for marker in _DUPLICATE_RISK_MARKERS):
+            skipped.append({"id": job.id, "title": job.title, "reason": friendly_error(msg)})
+            continue
+        job.error_message = None
+        job.status = JobStatus.QUEUED
+        job.progress = 0
+        job.retry_count = (job.retry_count or 0) + 1
+        db.commit()
+        dispatch_job(job.id)
+        fixed.append(job.id)
+    return {"fixed": fixed, "fixed_count": len(fixed), "skipped": skipped, "skipped_count": len(skipped)}
 
 
 @router.post("/bulk-delete")

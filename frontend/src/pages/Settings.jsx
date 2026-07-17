@@ -160,6 +160,65 @@ function MonetizationCard() {
   )
 }
 
+function FixErrorsCard() {
+  const [busy, setBusy] = useState(false)
+  const [result, setResult] = useState(null)
+
+  const run = async () => {
+    if (!confirm('Isso vai reenviar automaticamente todos os vídeos com erro (exceto os que arriscam duplicar um envio já feito). Continuar?')) return
+    setBusy(true); setResult(null)
+    try {
+      const r = await api.post('/jobs/fix-errors', {})
+      setResult(r)
+    } catch (e) {
+      setResult({ error: e.message })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <SectionCard title="Corrigir erros" sub="Reenvia de uma vez todo vídeo travado com erro na Fila.">
+      <p className="text-xs text-text-muted mb-4">
+        Ao clicar, o sistema recoloca na fila e tenta publicar de novo, agora, todo vídeo com status
+        de erro — token do Google expirado, limite de upload do YouTube, falha de rede no Drive, cota
+        de IA esgotada, etc. Vídeos onde reenviar poderia duplicar um envio já feito (ex.: upload
+        interrompido no meio) ficam de fora e continuam precisando de conferência manual.
+      </p>
+      <button
+        type="button"
+        onClick={run}
+        disabled={busy}
+        className="rounded-card px-4 py-2 text-sm font-semibold disabled:opacity-50"
+        style={{ background: 'var(--accent)', color: '#04110b' }}
+      >
+        {busy ? 'Corrigindo…' : '🔧 Corrigir erros automaticamente'}
+      </button>
+
+      {result && !result.error && (
+        <div className="mt-3 text-xs space-y-1">
+          <p style={{ color: 'var(--success)' }}>
+            {result.fixed_count} vídeo{result.fixed_count === 1 ? '' : 's'} reenviado{result.fixed_count === 1 ? '' : 's'} agora.
+          </p>
+          {result.skipped_count > 0 && (
+            <div style={{ color: 'var(--warning)' }}>
+              <p>{result.skipped_count} deixado{result.skipped_count === 1 ? '' : 's'} de fora (precisa conferir manualmente):</p>
+              <ul className="list-disc ml-4 mt-1 space-y-0.5">
+                {result.skipped.map((s) => (
+                  <li key={s.id}><strong>{s.title}</strong> — {s.reason}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+      )}
+      {result?.error && (
+        <p className="mt-3 text-xs" style={{ color: 'var(--error)' }}>{result.error}</p>
+      )}
+    </SectionCard>
+  )
+}
+
 export default function Settings() {
   const [health, setHealth] = useState(null)
   useEffect(() => { api.get('/dashboard/health').then(setHealth).catch(() => {}) }, [])
@@ -189,6 +248,8 @@ export default function Settings() {
           </div>
         )}
       </SectionCard>
+
+      <FixErrorsCard />
 
       <MonetizationCard />
 

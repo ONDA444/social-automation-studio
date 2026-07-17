@@ -8,6 +8,7 @@ from sqlalchemy import JSON, DateTime, Enum, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from backend.database import Base
+from backend.error_messages import friendly_error
 
 
 class JobStatus(str, enum.Enum):
@@ -120,6 +121,7 @@ class VideoJob(Base):
             "progress": self.progress,
             "retry_count": self.retry_count,
             "error_message": self.error_message,
+            "error_message_friendly": friendly_error(self.error_message),
             "style_dna": self.style_dna,
             "script": self.script,
             "editing_plan": self.editing_plan,

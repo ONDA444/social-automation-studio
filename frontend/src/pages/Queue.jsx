@@ -14,7 +14,9 @@ function Row({ job, accounts, selected, onToggleSelect, onChannelChange, onRetry
   const canRepublish   = job.status === 'approved' || job.status === 'error' || job.status === 'tiktok_pending_approval'
 
   const errMsg = job.error_message || ''
-  const errShort = errMsg.length > 90 ? errMsg.slice(0, 90) + '…' : errMsg
+  const errFriendly = job.error_message_friendly || errMsg
+  const errShort = errFriendly.length > 90 ? errFriendly.slice(0, 90) + '…' : errFriendly
+  const hasTechnicalDetail = errMsg && errFriendly !== errMsg
 
   return (
     <div className="card px-3 py-2 fade-in">
@@ -76,11 +78,16 @@ function Row({ job, accounts, selected, onToggleSelect, onChannelChange, onRetry
         <button
           className="text-left mt-1.5 w-full"
           onClick={() => setShowFullError((v) => !v)}
-          title={showFullError ? 'Clique para recolher' : 'Clique para ver completo'}>
+          title={showFullError ? 'Clique para recolher' : (hasTechnicalDetail ? 'Clique para ver o erro técnico' : 'Clique para ver completo')}>
           <p className="text-[11px] leading-snug" style={{ color: 'var(--error)' }}>
-            {showFullError ? errMsg : errShort}
-            {errMsg.length > 90 && <span className="opacity-70">{showFullError ? '  ▲' : '  ▼'}</span>}
+            {showFullError ? errFriendly : errShort}
+            {(errFriendly.length > 90 || hasTechnicalDetail) && (
+              <span className="opacity-70">{showFullError ? '  ▲' : '  ▼'}</span>
+            )}
           </p>
+          {showFullError && hasTechnicalDetail && (
+            <p className="text-[10px] leading-snug mt-1 opacity-60 font-mono break-all">{errMsg}</p>
+          )}
         </button>
       )}
 
