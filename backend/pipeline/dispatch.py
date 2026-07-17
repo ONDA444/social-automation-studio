@@ -367,5 +367,52 @@ def resume_account_blocked_jobs(account_id: int) -> list[int]:
         db.rollback()
         logger.exception("resume_account_blocked_jobs falhou (conta %s)", account_id)
         return resumed
+
+
+def resume_drive_blocked_jobs() -> list[int]:
+    """The Drive connection was just reconnected with a fresh, working OAuth
+    token — auto-resume every `from_ready_video` job parked because the SHARED
+    Drive token had died (unlike a YouTube channel token, Drive's connection
+    isn't scoped to one account_id, so this scans across all accounts).
+
+    Requeues to QUEUED and re-dispatches via dispatch_job, which already routes
+    `mode == "from_ready_video"` jobs to dispatch_retry_ready_video (see
+    _is_ready_video_job below) — this re-downloads from Drive instead of
+    regenerating via AI. Fire-and-forget, never blocks the OAuth callback.
+    """
+    from sqlalchemy import or_, select
+
+    from backend.database import SessionLocal
+    from backend.models import JobStatus, VideoJob
+
+    db = SessionLocal()
+    resumed: list[int] = []
+    try:
+        rows = db.execute(
+            select(VideoJob).where(
+                VideoJob.mode == "from_ready_video",
+                VideoJob.status == JobStatus.ERROR,
+                or_(
+                    VideoJob.error_message.contains("invalid_grant"),
+                    VideoJob.error_message.contains("expired or revoked"),
+                ),
+            )
+        ).scalars().all()
+        for job in rows:
+            job.error_message = None
+            job.status = JobStatus.QUEUED
+            job.progress = 0
+            job.current_agent = None
+            db.commit()
+            dispatch_job(job.id)
+            resumed.append(job.id)
+        if resumed:
+            logger.info("Reconexão do Drive — %d job(s) retomado(s) automaticamente: %s",
+                        len(resumed), resumed)
+        return resumed
+    except Exception:  # noqa: BLE001 — must never break the OAuth callback
+        db.rollback()
+        logger.exception("resume_drive_blocked_jobs falhou")
+        return resumed
     finally:
         db.close()

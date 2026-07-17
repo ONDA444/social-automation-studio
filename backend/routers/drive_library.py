@@ -57,6 +57,14 @@ def auth_callback(code: str = Query(""), error: str = Query(""), db: Session = D
         DriveLibraryService(db).exchange_code(code)
     except Exception as exc:  # noqa: BLE001
         return _html(f"Falha ao conectar Drive: {exc}")
+    try:
+        from backend.pipeline.dispatch import resume_drive_blocked_jobs
+
+        resumed = resume_drive_blocked_jobs()
+    except Exception:  # noqa: BLE001 — connection succeeded regardless
+        resumed = []
+    if resumed:
+        return _html(f"Drive conectado com sucesso. {len(resumed)} vídeo(s) retomado(s) automaticamente. Pode fechar esta janela.")
     return _html("Drive conectado com sucesso. Pode fechar esta janela.")
 
 

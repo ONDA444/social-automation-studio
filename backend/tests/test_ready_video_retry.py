@@ -127,5 +127,57 @@ class RetryReadyVideoJobTests(unittest.TestCase):
         self.assertEqual(refreshed.status, JobStatus.ERROR)
 
 
+class ResumeDriveBlockedJobsTests(unittest.TestCase):
+    """When the shared Drive OAuth connection is reconnected, every job parked
+    on a dead-token download failure must resume by itself — the user should
+    never have to manually retry each one after fixing the connection."""
+
+    def test_reconnect_requeues_only_drive_auth_failures_and_dispatches_them(self) -> None:
+        db, Session = _make_session()
+        account = PlatformAccount(platform="youtube", display_name="Canal", video_source_mode="drive")
+        db.add(account)
+        db.flush()
+
+        blocked = VideoJob(
+            title="Video do Drive",
+            mode="from_ready_video",
+            account_id=account.id,
+            status=JobStatus.ERROR,
+            error_message="Falha ao baixar video do Drive: ('invalid_grant: Token has been expired or revoked.', ...)",
+        )
+        unrelated_error = VideoJob(
+            title="Outro erro",
+            mode="from_ready_video",
+            account_id=account.id,
+            status=JobStatus.ERROR,
+            error_message="Falha ao baixar video do Drive: timeout de rede",
+        )
+        ai_job = VideoJob(
+            title="Video de IA",
+            mode="theme_automatic",
+            account_id=account.id,
+            status=JobStatus.ERROR,
+            error_message="invalid_grant: Token has been expired or revoked.",
+        )
+        db.add_all([blocked, unrelated_error, ai_job])
+        db.commit()
+        blocked_id, unrelated_id, ai_id = blocked.id, unrelated_error.id, ai_job.id
+
+        with patch("backend.database.SessionLocal", Session), patch.object(
+            dispatch, "dispatch_job"
+        ) as fake_dispatch:
+            resumed = dispatch.resume_drive_blocked_jobs()
+
+        self.assertEqual(resumed, [blocked_id])
+        fake_dispatch.assert_called_once_with(blocked_id)
+
+        db2 = Session()
+        self.assertEqual(db2.get(VideoJob, blocked_id).status, JobStatus.QUEUED)
+        self.assertIsNone(db2.get(VideoJob, blocked_id).error_message)
+        # Neither a differently-failed Drive job nor a non-Drive (AI) job should move.
+        self.assertEqual(db2.get(VideoJob, unrelated_id).status, JobStatus.ERROR)
+        self.assertEqual(db2.get(VideoJob, ai_id).status, JobStatus.ERROR)
+
+
 if __name__ == "__main__":
     unittest.main()
