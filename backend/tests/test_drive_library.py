@@ -15,7 +15,7 @@ from backend.agents.drive_library import (
     normalize_drive_name,
 )
 from backend.database import Base
-from backend.models import ReadyVideo
+from backend.models import JobStatus, PlatformAccount, ReadyVideo, VideoJob
 
 
 class _FakeListRequest:
@@ -321,6 +321,94 @@ class DriveLibraryTests(unittest.TestCase):
             self.assertEqual(rows["reserved"].status, "missing")
             self.assertIsNone(rows["reserved"].reserved_job_id)
             self.assertEqual(rows["used"].status, "used")
+
+    def test_reserve_matching_skips_a_ready_video_already_published_for_this_account(self) -> None:
+        """Production had the same Drive file published twice on the same
+        channel (confirmed: jobs 83/87 and 81/85 reused the same ready_video
+        after it had already gone out). _reserve_matching must never hand
+        back a ready_video this account has already successfully published,
+        even though the row itself is 'available' again."""
+        engine = create_engine("sqlite:///:memory:", future=True)
+        Base.metadata.create_all(bind=engine)
+        Session = sessionmaker(bind=engine, future=True)
+        with Session() as db:
+            account = PlatformAccount(platform="youtube", display_name="Canal Teste", niche="geral")
+            db.add(account)
+            db.flush()
+
+            already_published = ReadyVideo(
+                drive_file_id="reused-file",
+                name="corte.mp4",
+                content_type="film_recap_ai_images",
+                video_format="short",
+                account_id=account.id,
+                status="available",  # somehow reservable again
+            )
+            fresh = ReadyVideo(
+                drive_file_id="fresh-file",
+                name="corte2.mp4",
+                content_type="film_recap_ai_images",
+                video_format="short",
+                account_id=account.id,
+                status="available",
+            )
+            db.add_all([already_published, fresh])
+            db.flush()
+
+            published_job = VideoJob(
+                title="Ja publicado",
+                mode="from_ready_video",
+                content_type="film_recap_ai_images",
+                video_format="short",
+                account_id=account.id,
+                status=JobStatus.PUBLISHED,
+                video_context={"source": "drive_ready_video", "ready_video_id": already_published.id},
+            )
+            db.add(published_job)
+            db.commit()
+
+            reserved = DriveLibraryService(db)._reserve_matching(
+                account, content_type="film_recap_ai_images", video_format="short"
+            )
+
+            self.assertIsNotNone(reserved)
+            self.assertEqual(reserved.id, fresh.id)
+
+    def test_reserve_matching_returns_none_when_only_candidate_was_already_published(self) -> None:
+        engine = create_engine("sqlite:///:memory:", future=True)
+        Base.metadata.create_all(bind=engine)
+        Session = sessionmaker(bind=engine, future=True)
+        with Session() as db:
+            account = PlatformAccount(platform="youtube", display_name="Canal Teste", niche="geral")
+            db.add(account)
+            db.flush()
+
+            ready = ReadyVideo(
+                drive_file_id="reused-file",
+                name="corte.mp4",
+                content_type="film_recap_ai_images",
+                video_format="short",
+                account_id=account.id,
+                status="available",
+            )
+            db.add(ready)
+            db.flush()
+            db.add(VideoJob(
+                title="Ja publicado",
+                mode="from_ready_video",
+                content_type="film_recap_ai_images",
+                video_format="short",
+                account_id=account.id,
+                status=JobStatus.PUBLISHED,
+                video_context={"source": "drive_ready_video", "ready_video_id": ready.id},
+            ))
+            db.commit()
+
+            reserved = DriveLibraryService(db)._reserve_matching(
+                account, content_type="film_recap_ai_images", video_format="short"
+            )
+
+            self.assertIsNone(reserved)
 
     def test_clear_account_inventory_does_not_touch_other_channels(self) -> None:
         engine = create_engine("sqlite:///:memory:", future=True)

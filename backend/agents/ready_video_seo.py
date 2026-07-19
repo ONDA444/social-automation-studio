@@ -12,6 +12,7 @@ import json
 import logging
 import re
 import subprocess
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -77,6 +78,15 @@ def build_ready_video_package(
     """
     context = _context_dict(ready, account, content_type, video_format, title_seed)
     analysis = analyze_ready_video(job_id=job_id, local_path=local_path, context=context)
+    # Grep-able monitoring signal: how often does title/SEO generation actually
+    # get real AI grounding (vision_llm/text_llm) vs falling back to the fixed
+    # per-content_type template (probe_fallback/metadata_fallback)? A fallback
+    # rate that's consistently high is exactly what produces the repetitive,
+    # templated titles/descriptions that read as "reused content" to YouTube.
+    logger.info(
+        "ready_video_analysis_source job_id=%s account_id=%s content_type=%s source=%s",
+        job_id, getattr(account, "id", None), content_type, analysis.get("analysis_source"),
+    )
     if analysis.get("aspect_ratio") == "9:16":
         context["video_format"] = "short"
     elif analysis.get("aspect_ratio") == "16:9" and context.get("video_format") != "short":
@@ -401,23 +411,37 @@ def _describe_with_gemini(frames: list[str], context: dict, analysis: dict) -> d
             "responseMimeType": "application/json",
         },
     }
-    try:
-        with httpx.Client(timeout=60) as client:
-            response = client.post(
-                GEMINI_VISION_URL.format(model=GEMINI_VISION_MODEL),
-                params={"key": settings.gemini_api_key},
-                json=payload,
-            )
-            if response.status_code in (400, 401, 403, 404, 429):
-                logger.info("Gemini vision skipped with status %s", response.status_code)
-                return None
-            response.raise_for_status()
-            data = response.json()
-            text = data["candidates"][0]["content"]["parts"][0]["text"]
-            return llm.extract_json(text)
-    except Exception as exc:  # noqa: BLE001
-        logger.info("Gemini vision ready-video analysis failed: %s", exc)
-        return None
+    # 429 (rate limit/quota) is transient — several channels can hit the same
+    # Gemini quota in the same scheduler tick. Retrying with backoff instead of
+    # giving up immediately is what keeps a title from falling back to the
+    # fixed per-content_type template on every single busy tick (the fallback
+    # was found to dominate almost all Drive video titles in production).
+    # 400/401/403/404 are permanent (bad key/request) — no point retrying those.
+    backoff_seconds = (0, 2, 5)
+    for attempt, delay in enumerate(backoff_seconds, start=1):
+        if delay:
+            time.sleep(delay)
+        try:
+            with httpx.Client(timeout=60) as client:
+                response = client.post(
+                    GEMINI_VISION_URL.format(model=GEMINI_VISION_MODEL),
+                    params={"key": settings.gemini_api_key},
+                    json=payload,
+                )
+                if response.status_code == 429:
+                    logger.info("Gemini vision rate-limited (tentativa %d/%d)", attempt, len(backoff_seconds))
+                    continue
+                if response.status_code in (400, 401, 403, 404):
+                    logger.info("Gemini vision skipped with status %s", response.status_code)
+                    return None
+                response.raise_for_status()
+                data = response.json()
+                text = data["candidates"][0]["content"]["parts"][0]["text"]
+                return llm.extract_json(text)
+        except Exception as exc:  # noqa: BLE001
+            logger.info("Gemini vision ready-video analysis failed (tentativa %d/%d): %s", attempt, len(backoff_seconds), exc)
+            continue
+    return None
 
 
 def _describe_with_text_llm(context: dict, analysis: dict) -> dict | None:
@@ -541,17 +565,58 @@ def _title_from_analysis(topic: str, analysis: dict, content_type: str, video_fo
             return _truncate_title_safely(option, 82 if video_format == "short" else 95)
     base = _compact_topic(topic)
     templates = {
-        "sports_highlights": f"{base}: o lance que mudou o jogo",
-        "motivational_speech": f"{base}: a virada comeca aqui",
-        "reddit_story": f"{base}: eu devia ter percebido antes",
-        "true_crime_mystery": f"{base}: o detalhe que ninguem explicou",
-        "explainer_curiosity": f"{base}: por que isso acontece?",
-        "reaction_commentary": f"{base}: o detalhe que chamou atencao",
-        "film_recap_ai_images": f"{base}: o resumo que voce precisa ver",
-        "quote_viral": base,
-        "top_list_ranking": f"{base}: o numero 1 vai te surpreender",
+        "sports_highlights": (
+            f"{base}: o lance que mudou o jogo",
+            f"{base}: o lance decisivo da partida",
+            f"{base}: a jogada que ninguem esperava",
+            f"{base}: o momento que definiu tudo",
+        ),
+        "motivational_speech": (
+            f"{base}: a virada comeca aqui",
+            f"{base}: o ponto de virada",
+            f"{base}: a mensagem que muda o dia",
+            f"{base}: comeca a mudanca agora",
+        ),
+        "reddit_story": (
+            f"{base}: eu devia ter percebido antes",
+            f"{base}: o relato completo",
+            f"{base}: ninguem esperava esse desfecho",
+            f"{base}: a historia que todo mundo comenta",
+        ),
+        "true_crime_mystery": (
+            f"{base}: o detalhe que ninguem explicou",
+            f"{base}: o detalhe do caso",
+            f"{base}: a parte que intriga todo mundo",
+            f"{base}: o que ainda intriga",
+        ),
+        "explainer_curiosity": (
+            f"{base}: por que isso acontece?",
+            f"{base}: o que aconteceu",
+            f"{base}: a explicacao que faltava",
+            f"{base}: entenda o motivo",
+        ),
+        "reaction_commentary": (
+            f"{base}: o detalhe que chamou atencao",
+            f"{base}: o momento da cena",
+            f"{base}: a reacao que ninguem esperava",
+            f"{base}: o que chamou atencao",
+        ),
+        "film_recap_ai_images": (
+            f"{base}: o resumo que voce precisa ver",
+            f"{base}: o resumo direto do que aconteceu",
+            f"{base}: veja o que rolou",
+            f"{base}: o corte que resume tudo",
+        ),
+        "quote_viral": (base,),
+        "top_list_ranking": (
+            f"{base}: o numero 1 vai te surpreender",
+            f"{base}: o top que vale a pena ver",
+            f"{base}: o ranking completo",
+            f"{base}: qual ficou em primeiro?",
+        ),
     }
-    title = templates.get(content_type) or _varied_fallback_title(base, topic)
+    variants = templates.get(content_type)
+    title = _pick_variant(topic or base, variants) if variants else _varied_fallback_title(base, topic)
     if video_format == "short":
         return _shorten_title(title)
     return title[:95]
@@ -580,6 +645,24 @@ _FALLBACK_TITLE_ENDINGS = (
 def _varied_fallback_title(base: str, topic: str) -> str:
     idx = sum(ord(c) for c in (topic or base)) % len(_FALLBACK_TITLE_ENDINGS)
     return f"{base}: {_FALLBACK_TITLE_ENDINGS[idx]}"
+
+
+def _hash_index(seed: str, n: int) -> int:
+    """Stable per-topic index into an n-option sequence: the SAME video always
+    lands on the same variant (stable across retries/re-renders), but
+    different topics spread across different variants instead of every video
+    of a content_type sharing the exact same literal title/hook/tags — the
+    pattern that reads as mass-produced/templated content to viewers and to
+    YouTube's own distribution signals."""
+    if n <= 0:
+        return 0
+    return sum(ord(c) for c in (seed or "")) % n
+
+
+def _pick_variant(seed: str, options: tuple[str, ...]) -> str:
+    if not options:
+        return ""
+    return options[_hash_index(seed, len(options))]
 
 
 def _apply_viral_shorts_title(title: str, topic: str, analysis: dict, content_type: str, video_format: str) -> str:
@@ -611,14 +694,51 @@ def _apply_viral_shorts_title(title: str, topic: str, analysis: dict, content_ty
         return _shorten_title(title)
 
     templates = {
-        "sports_highlights": f"{base}: o lance decisivo",
-        "motivational_speech": f"{base}: a virada de chave",
-        "reddit_story": f"{base}: o relato completo",
-        "true_crime_mystery": f"{base}: o detalhe do caso",
-        "explainer_curiosity": f"{base}: o que aconteceu",
-        "reaction_commentary": f"{base}: o momento da cena",
+        "sports_highlights": (
+            f"{base}: o lance decisivo",
+            f"{base}: o momento chave",
+            f"{base}: a jogada que decidiu",
+            f"{base}: o lance que viralizou",
+        ),
+        "motivational_speech": (
+            f"{base}: a virada de chave",
+            f"{base}: o momento decisivo",
+            f"{base}: a mensagem que fica",
+            f"{base}: o instante que muda tudo",
+        ),
+        "reddit_story": (
+            f"{base}: o relato completo",
+            f"{base}: a historia real",
+            f"{base}: o que aconteceu de verdade",
+            f"{base}: o relato direto",
+        ),
+        "true_crime_mystery": (
+            f"{base}: o detalhe do caso",
+            f"{base}: o que ainda intriga",
+            f"{base}: a parte que ninguem viu",
+            f"{base}: o misterio por tras disso",
+        ),
+        "explainer_curiosity": (
+            f"{base}: o que aconteceu",
+            f"{base}: a explicacao direta",
+            f"{base}: entenda em poucos segundos",
+            f"{base}: o motivo por tras disso",
+        ),
+        "reaction_commentary": (
+            f"{base}: o momento da cena",
+            f"{base}: a reacao ao vivo",
+            f"{base}: o que rolou na hora",
+            f"{base}: o detalhe da cena",
+        ),
     }
-    return _shorten_title(templates.get(content_type, f"{base}: o momento principal"))
+    default_variants = (
+        f"{base}: o momento principal",
+        f"{base}: o ponto alto",
+        f"{base}: o que voce precisa ver",
+        f"{base}: o destaque do video",
+    )
+    variants = templates.get(content_type, default_variants)
+    return _shorten_title(_pick_variant(topic or base, variants))
 
 
 def _is_too_thin_title(title: str) -> bool:
@@ -672,13 +792,37 @@ def _clean_terms(values: list | tuple | set) -> list[str]:
 
 def _tags(primary: str, topic: str, entities: list[str], topics: list[str], niche: str, content_type: str, video_format: str) -> list[str]:
     generic_by_type = {
-        "sports_highlights": ["melhores momentos", "lance decisivo", "futebol"],
-        "motivational_speech": ["motivacao", "reflexao", "virada de chave"],
-        "reddit_story": ["historia reddit", "relato", "storytime"],
-        "true_crime_mystery": ["misterio", "caso real", "investigacao"],
-        "explainer_curiosity": ["curiosidades", "explicacao", "voce sabia"],
-        "reaction_commentary": ["reacao", "comentario", "cultura pop"],
+        "sports_highlights": (
+            ["melhores momentos", "lance decisivo", "futebol"],
+            ["compilado de jogadas", "melhores lances", "futebol brasileiro"],
+        ),
+        "motivational_speech": (
+            ["motivacao", "reflexao", "virada de chave"],
+            ["mensagem motivacional", "superacao", "mentalidade forte"],
+        ),
+        "reddit_story": (
+            ["historia reddit", "relato", "storytime"],
+            ["relato real", "historia verdadeira", "confissao"],
+        ),
+        "true_crime_mystery": (
+            ["misterio", "caso real", "investigacao"],
+            ["crime real", "caso resolvido", "detetive"],
+        ),
+        "explainer_curiosity": (
+            ["curiosidades", "explicacao", "voce sabia"],
+            ["fatos curiosos", "voce nao sabia", "explicado"],
+        ),
+        "reaction_commentary": (
+            ["reacao", "comentario", "cultura pop"],
+            ["reagindo", "comentando", "cena marcante"],
+        ),
     }
+    default_variants = (
+        ["cortes", "humor", "entretenimento"],
+        ["destaque", "video viral", "cena marcante"],
+    )
+    type_variants = generic_by_type.get(content_type, default_variants)
+    generic_tags = type_variants[_hash_index(topic or primary, len(type_variants))]
     raw = [
         primary,
         topic,
@@ -686,7 +830,7 @@ def _tags(primary: str, topic: str, entities: list[str], topics: list[str], nich
         *topics,
         niche,
         *(_folder_terms(niche)),
-        *(generic_by_type.get(content_type) or ["cortes", "humor", "entretenimento"]),
+        *generic_tags,
     ]
     if video_format == "short":
         raw.extend(["shorts", "cortes virais"])
@@ -694,10 +838,17 @@ def _tags(primary: str, topic: str, entities: list[str], topics: list[str], nich
     if len(out) >= 8:
         return out[:18]
     # Guarantee >=8 tags (tags_quality scoring assumes it): keep adding filler
-    # until the threshold is met instead of a fixed one-shot 3-term pad.
+    # until the threshold is met. Rotated by topic hash instead of always
+    # starting from the same first term, so different videos don't all end up
+    # with the exact same filler tags in the exact same order.
     seen = {t.lower() for t in out}
-    filler = ["cortes", "entretenimento", "viral", "video", "conteudo", "destaque", "melhores momentos", "assista"]
-    for term in filler:
+    filler_pool = [
+        "cortes", "entretenimento", "viral", "video", "conteudo", "destaque",
+        "melhores momentos", "assista", "em alta", "recomendado", "para voce", "trending",
+    ]
+    start = _hash_index(topic or primary, len(filler_pool))
+    rotated_filler = filler_pool[start:] + filler_pool[:start]
+    for term in rotated_filler:
         if len(out) >= 8:
             break
         if term.lower() not in seen:
@@ -843,11 +994,30 @@ def _generic_viral_title(clean_lower_title: str) -> bool:
 
 
 def _summary(topic: str, niche: str, content_type: str) -> str:
+    topic_l = topic.lower()
+    seed = f"{topic}{niche}"
     if niche:
-        return f"Um corte direto sobre {topic.lower()} para quem acompanha {niche.lower()}."
+        niche_l = niche.lower()
+        variants = (
+            f"Um corte direto sobre {topic_l} para quem acompanha {niche_l}.",
+            f"Separei esse momento sobre {topic_l} pra quem curte {niche_l}.",
+            f"Direto ao ponto: {topic_l}, pensado pra quem gosta de {niche_l}.",
+            f"Esse corte sobre {topic_l} e pra quem acompanha {niche_l} de perto.",
+        )
+        return _pick_variant(seed, variants)
     if content_type == "reaction_commentary":
-        return f"Um corte curto com humor e contexto sobre {topic.lower()}."
-    return f"Um corte direto ao ponto sobre {topic.lower()}."
+        variants = (
+            f"Um corte curto com humor e contexto sobre {topic_l}.",
+            f"Rapidinho, com humor, sobre {topic_l}.",
+            f"Um recorte leve e direto sobre {topic_l}.",
+        )
+        return _pick_variant(seed, variants)
+    variants = (
+        f"Um corte direto ao ponto sobre {topic_l}.",
+        f"Separei esse momento sobre {topic_l}.",
+        f"Direto ao ponto: {topic_l}.",
+    )
+    return _pick_variant(seed, variants)
 
 
 _FALLBACK_HOOK_ENDINGS = (
@@ -862,18 +1032,59 @@ _FALLBACK_HOOK_ENDINGS = (
 def _hook(topic: str, content_type: str) -> str:
     base = _compact_topic(topic)
     hooks = {
-        "sports_highlights": f"O detalhe desse lance passou batido por muita gente.",
-        "motivational_speech": f"Essa mensagem pode virar a chave hoje.",
-        "reddit_story": f"Essa historia muda quando voce percebe o detalhe.",
-        "true_crime_mystery": f"O detalhe desse caso ainda intriga muita gente.",
-        "explainer_curiosity": f"{base}: tem um detalhe que pouca gente percebe.",
-        "reaction_commentary": f"{base}: o detalhe que chamou atencao de quem assistiu.",
-        "film_recap_ai_images": f"{base}: o resumo direto do que aconteceu.",
-        "quote_viral": base,
-        "top_list_ranking": f"{base}: veja como cada posicao se destacou.",
+        "sports_highlights": (
+            "O detalhe desse lance passou batido por muita gente.",
+            "Poucos repararam nesse detalhe do lance.",
+            "Esse lance tem um detalhe que quase ninguem viu.",
+            "A jogada esconde um detalhe que vale a pena ver de novo.",
+        ),
+        "motivational_speech": (
+            "Essa mensagem pode virar a chave hoje.",
+            "Essa frase pode mudar o seu dia.",
+            "Vale guardar essa mensagem pra hoje.",
+            "Um lembrete que chega na hora certa.",
+        ),
+        "reddit_story": (
+            "Essa historia muda quando voce percebe o detalhe.",
+            "O relato tem uma virada que pega todo mundo.",
+            "Tem um detalhe nessa historia que muda tudo.",
+            "Essa historia real surpreende no final.",
+        ),
+        "true_crime_mystery": (
+            "O detalhe desse caso ainda intriga muita gente.",
+            "Esse caso tem uma parte que ninguem explica direito.",
+            "Ainda tem gente tentando entender esse detalhe do caso.",
+            "O misterio por tras desse caso segue intrigando.",
+        ),
+        "explainer_curiosity": (
+            f"{base}: tem um detalhe que pouca gente percebe.",
+            f"{base}: a explicacao e mais simples do que parece.",
+            f"{base}: poucos sabem o motivo real disso.",
+            f"{base}: entenda o que faz isso acontecer.",
+        ),
+        "reaction_commentary": (
+            f"{base}: o detalhe que chamou atencao de quem assistiu.",
+            f"{base}: a reacao de quem viu isso ao vivo.",
+            f"{base}: o momento que rendeu comentario.",
+            f"{base}: o detalhe que ninguem esperava ver.",
+        ),
+        "film_recap_ai_images": (
+            f"{base}: o resumo direto do que aconteceu.",
+            f"{base}: veja o que rolou em poucos segundos.",
+            f"{base}: o corte que resume a cena.",
+            f"{base}: direto ao ponto sobre o que aconteceu.",
+        ),
+        "quote_viral": (base,),
+        "top_list_ranking": (
+            f"{base}: veja como cada posicao se destacou.",
+            f"{base}: cada posicao tem seu motivo.",
+            f"{base}: o ranking completo, ponto a ponto.",
+            f"{base}: veja o que definiu cada posicao.",
+        ),
     }
-    if content_type in hooks:
-        return hooks[content_type]
+    variants = hooks.get(content_type)
+    if variants:
+        return _pick_variant(topic or base, variants)
     idx = sum(ord(c) for c in (topic or base)) % len(_FALLBACK_HOOK_ENDINGS)
     return f"{base}: {_FALLBACK_HOOK_ENDINGS[idx]}"
 

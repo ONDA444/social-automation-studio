@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 
 from backend.config import settings
 from backend.crypto import decrypt_credentials, encrypt_credentials
-from backend.models import DriveConnection, PlatformAccount, ReadyVideo
+from backend.models import DriveConnection, JobStatus, PlatformAccount, ReadyVideo, VideoJob
 
 logger = logging.getLogger("studio.drive_library")
 
@@ -648,9 +648,28 @@ class DriveLibraryService:
             select(ReadyVideo)
             .where(and_(*conditions))
             .order_by(ReadyVideo.account_id.desc(), ReadyVideo.created_at.asc(), ReadyVideo.id.asc())
-            .limit(1)
+            .limit(10)
         )
-        row = self.db.execute(stmt).scalars().first()
+        candidates = self.db.execute(stmt).scalars().all()
+        if not candidates:
+            return None
+        # Defensive dedupe: a ready video already PUBLISHED for THIS account must
+        # never be reserved again. Confirmed in production that the same Drive
+        # file got published twice to the same channel (e.g. reserved a second
+        # time after a status reset elsewhere) — this closes that hole at the
+        # one chokepoint every reservation goes through, regardless of how the
+        # row became reservable again.
+        already_published_ids = {
+            (job.video_context or {}).get("ready_video_id")
+            for job in self.db.execute(
+                select(VideoJob).where(
+                    VideoJob.account_id == account.id,
+                    VideoJob.mode == "from_ready_video",
+                    VideoJob.status == JobStatus.PUBLISHED,
+                )
+            ).scalars().all()
+        }
+        row = next((c for c in candidates if c.id not in already_published_ids), None)
         if not row:
             return None
         # Atomic claim (mirrors backend/scheduler.py's `_create_theme_job` /

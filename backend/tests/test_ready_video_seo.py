@@ -192,5 +192,125 @@ class ReadyVideoSeoTests(unittest.TestCase):
         self.assertEqual(seo_again["youtube"]["description"].count(cta), 1)
 
 
+class FallbackTemplateDiversificationTests(unittest.TestCase):
+    """Regression guard for the near-zero-reach investigation: when the AI
+    analysis is unavailable, title/hook/summary/tags used to be the exact
+    same literal string for every video of a given content_type — a pattern
+    that reads as mass-produced/templated content to YouTube's distribution
+    algorithm. These must now vary by topic while staying stable per video."""
+
+    _TOPICS = [
+        {"drive_name": f"corte_{i}.mp4", "folder_path": f"NICHO {i}", "niche": f"Nicho {i}"}
+        for i in range(8)
+    ]
+
+    def _seo_for(self, topic_ctx: dict, content_type: str) -> dict:
+        return build_drive_seo(
+            context={**topic_ctx, "content_type": content_type, "video_format": "long"},
+            analysis={},
+        )
+
+    def test_film_recap_titles_vary_across_topics_not_one_fixed_string(self) -> None:
+        titles = {self._seo_for(ctx, "film_recap_ai_images")["youtube"]["title"] for ctx in self._TOPICS}
+        # Every title still ends with the same fixed suffix would mean the
+        # fallback is one literal string again — assert real variety instead.
+        self.assertGreater(len(titles), 1)
+
+    def test_same_topic_always_produces_the_same_title(self) -> None:
+        ctx = self._TOPICS[0]
+        first = self._seo_for(ctx, "film_recap_ai_images")["youtube"]["title"]
+        second = self._seo_for(ctx, "film_recap_ai_images")["youtube"]["title"]
+        self.assertEqual(first, second)
+
+    def test_hooks_vary_across_topics_for_a_fixed_content_type(self) -> None:
+        hooks = set()
+        for ctx in self._TOPICS:
+            seo = self._seo_for(ctx, "true_crime_mystery")
+            hooks.add(seo["feed"]["viral_shorts_profile"]["first_line"])
+        self.assertGreater(len(hooks), 1)
+
+    def test_descriptions_vary_across_topics_with_niche(self) -> None:
+        summaries = set()
+        for ctx in self._TOPICS:
+            seo = self._seo_for(ctx, "explainer_curiosity")
+            summaries.add(seo["youtube"]["description"])
+        self.assertGreater(len(summaries), 1)
+
+    def test_filler_tags_are_not_identical_across_unrelated_topics(self) -> None:
+        tag_sets = set()
+        for ctx in self._TOPICS:
+            seo = self._seo_for(ctx, "quote_viral")
+            tag_sets.add(tuple(seo["youtube"]["tags"]))
+        self.assertGreater(len(tag_sets), 1)
+
+
+class GeminiVisionRetryTests(unittest.TestCase):
+    """A 429 (rate limit) from Gemini must be retried with backoff instead of
+    immediately falling back to the fixed title template — several channels
+    hitting the same quota in the same scheduler tick was identified as a
+    likely cause of the fallback dominating in production."""
+
+    def _frames_and_context(self):
+        return (["frame.jpg"], {"content_type": "film_recap_ai_images", "video_format": "short"}, {})
+
+    def test_429_is_retried_and_succeeds_on_a_later_attempt(self) -> None:
+        from unittest.mock import MagicMock
+
+        from backend.agents import ready_video_seo as mod
+
+        rate_limited = SimpleNamespace(status_code=429)
+        success = SimpleNamespace(
+            status_code=200,
+            json=lambda: {"candidates": [{"content": {"parts": [{"text": '{"summary": "ok"}'}]}}]},
+        )
+        success.raise_for_status = lambda: None
+        calls = {"n": 0}
+
+        def fake_post(*args, **kwargs):
+            calls["n"] += 1
+            return rate_limited if calls["n"] < 2 else success
+
+        # MagicMock (not SimpleNamespace) is required here: the `with` statement
+        # looks up __enter__/__exit__ on the TYPE, not the instance, so a plain
+        # object with instance-level __enter__/__exit__ attributes is silently
+        # skipped by the context-manager protocol — MagicMock configures those
+        # as real dunder methods.
+        client_cm = MagicMock()
+        client_cm.__enter__.return_value.post = fake_post
+        frames, context, analysis = self._frames_and_context()
+        with patch("backend.agents.ready_video_seo.settings.gemini_api_key", "fake-key"), \
+             patch("backend.agents.ready_video_seo.Path.read_bytes", return_value=b"x"), \
+             patch("backend.agents.ready_video_seo.httpx.Client", return_value=client_cm), \
+             patch("backend.agents.ready_video_seo.time.sleep"):
+            result = mod._describe_with_gemini(frames, context, analysis)
+
+        self.assertEqual(calls["n"], 2)
+        self.assertEqual(result, {"summary": "ok"})
+
+    def test_permanent_error_status_does_not_retry(self) -> None:
+        from unittest.mock import MagicMock
+
+        from backend.agents import ready_video_seo as mod
+
+        forbidden = SimpleNamespace(status_code=403)
+        calls = {"n": 0}
+
+        def fake_post(*args, **kwargs):
+            calls["n"] += 1
+            return forbidden
+
+        client_cm = MagicMock()
+        client_cm.__enter__.return_value.post = fake_post
+        frames, context, analysis = self._frames_and_context()
+        with patch("backend.agents.ready_video_seo.settings.gemini_api_key", "fake-key"), \
+             patch("backend.agents.ready_video_seo.Path.read_bytes", return_value=b"x"), \
+             patch("backend.agents.ready_video_seo.httpx.Client", return_value=client_cm), \
+             patch("backend.agents.ready_video_seo.time.sleep"):
+            result = mod._describe_with_gemini(frames, context, analysis)
+
+        self.assertEqual(calls["n"], 1)
+        self.assertIsNone(result)
+
+
 if __name__ == "__main__":
     unittest.main()
