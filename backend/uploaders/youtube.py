@@ -433,6 +433,14 @@ def set_watermark(creds: dict, channel_id: str, image_path: str,
         return False
 
 
+# How long next_chunk() may go with ZERO forward progress before we treat
+# the upload as dead (see the stall-detection loop inside upload_video).
+# Long enough that a slow-but-healthy chunk upload never trips it; short
+# enough that a genuinely dead token (spinning with no progress) is caught
+# well within a single publish attempt.
+_UPLOAD_STALL_TIMEOUT_S = 120
+
+
 # ---------------------------------------------------------------- upload
 def upload_video(
     video_path: str,
@@ -508,28 +516,32 @@ def upload_video(
         # normal auth_error path (msg matching below) take over.
         import time as _time
 
-        # TEMP DIAGNOSTIC (see commit message): deadline shortened to 25s and
-        # loop instrumented with CANARY_UPLOAD_LOOP log lines to prove, from
-        # Railway logs alone, whether this exact code path is what's actually
-        # running and whether the deadline check is really being reached —
-        # prior 240s deadline never visibly fired in production despite two
-        # rounds of fixes, so stop guessing and get direct proof.
-        logger.warning("CANARY_UPLOAD_LOOP start job video_path=%s", video_path)
+        # STALL detection, not a cap on total upload time: a real video upload
+        # (many MB at 8MB/chunk) routinely takes well over any short fixed
+        # deadline, so a wall-clock cap on the WHOLE upload (a prior version
+        # used 25s — confirmed in production to abort and mis-classify
+        # perfectly healthy, just-slow-because-the-file-is-big uploads as
+        # "auth_error", which then got auto-resurrected into a brand-new
+        # render+upload — the exact mechanism behind duplicate videos showing
+        # up on the same channel) is the wrong tool. Instead, reset the
+        # deadline every time next_chunk() reports forward progress; only a
+        # STALL (no new bytes for a long stretch — the dead-token 401-refresh
+        # storm this originally targeted spins with zero progress) raises.
         response = None
-        deadline = _time.monotonic() + 25
-        _iter = 0
+        last_progress_at = _time.monotonic()
+        last_bytes = 0
         while response is None:
-            _iter += 1
-            if _iter % 20 == 0:
-                logger.warning("CANARY_UPLOAD_LOOP iter=%s elapsed=%.1fs",
-                               _iter, 25 - (deadline - _time.monotonic()))
-            if _time.monotonic() > deadline:
-                logger.warning("CANARY_UPLOAD_LOOP deadline hit at iter=%s", _iter)
+            status, response = request.next_chunk(num_retries=3)
+            now = _time.monotonic()
+            current_bytes = getattr(status, "resumable_progress", None) if status else None
+            if current_bytes is not None and current_bytes > last_bytes:
+                last_bytes = current_bytes
+                last_progress_at = now
+            elif now - last_progress_at > _UPLOAD_STALL_TIMEOUT_S:
                 raise TimeoutError(
                     "Upload travado (sem progresso) — provável token OAuth inválido "
                     "ou falha de rede persistente."
                 )
-            _, response = request.next_chunk(num_retries=3)
         video_id = response["id"]
 
         if thumbnail_path:
@@ -561,6 +573,38 @@ def upload_video(
         else:
             status = "error"
         return {"ok": False, "platform": "youtube", "error": msg, "status": status}
+
+
+def get_video_processing_status(video_id: str, credentials: dict) -> dict:
+    """Check whether a video upload_video() already returned an id for has
+    actually finished processing on YouTube's side.
+
+    upload_video() only confirms the API ACCEPTED the bytes (an insert()
+    response with an id) — it has no way to know if YouTube's own
+    server-side transcode pipeline ever completes. A malformed/unusual
+    source file can sit forever as uploadStatus='uploaded' (visible in
+    Studio as permanently "Pendente"), completely invisible to our own
+    pipeline since nothing about the upload call itself failed. Used by the
+    periodic sweep in scheduler._job_check_stuck_youtube_processing.
+    """
+    try:
+        yt = _service(credentials)
+        resp = yt.videos().list(part="status,processingDetails", id=video_id).execute()
+        item = (resp.get("items") or [None])[0]
+        if not item:
+            return {"found": False}
+        status = item.get("status") or {}
+        processing = item.get("processingDetails") or {}
+        return {
+            "found": True,
+            "upload_status": status.get("uploadStatus"),
+            "privacy_status": status.get("privacyStatus"),
+            "processing_status": processing.get("processingStatus"),
+            "failure_reason": status.get("failureReason") or status.get("rejectionReason"),
+        }
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("get_video_processing_status failed for %s: %s", video_id, exc)
+        return {"found": None, "error": str(exc)}
 
 
 def upload_captions(credentials: dict, video_id: str, srt_path: str,

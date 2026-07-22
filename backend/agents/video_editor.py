@@ -176,12 +176,18 @@ class VideoEditorAgent(BaseAgent):
         has_audio = self._build_audio(narration, music, plan, video_len, work, audio_final)
 
         # 4) Mux.
+        # +faststart moves the moov atom to the front of the file — without it
+        # ffmpeg defaults to writing it at the end, which some platforms'
+        # ingest pipelines handle worse than others. Cheap, riskless change
+        # applied to the exact file we upload (identified as a real risk
+        # factor, though unconfirmed as THE cause, in the investigation into
+        # videos stuck permanently "processing" on YouTube).
         cmd = ["ffmpeg", "-y", "-i", silent.name]
         if has_audio:
             cmd += ["-i", audio_final.name, "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
-                    "-map", "0:v:0", "-map", "1:a:0", "-shortest"]
+                    "-map", "0:v:0", "-map", "1:a:0", "-shortest", "-movflags", "+faststart"]
         else:
-            cmd += ["-c:v", "copy"]
+            cmd += ["-c:v", "copy", "-movflags", "+faststart"]
         cmd.append(str(final_path))
         _run(cmd, cwd=str(work))
         return video_len

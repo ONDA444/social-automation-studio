@@ -110,11 +110,18 @@ def start_scheduler() -> None:
     # enqueue 1–2 approval-gated videos. Every 3h (low/non-spammy); first run ~2min after boot.
     sched.add_job(_job_ride_trends, "interval", hours=3, id="ride_trends", replace_existing=True,
                   next_run_time=datetime.now(timezone.utc) + timedelta(minutes=2))
+    # Catches the one failure mode upload_video() itself can never see: the
+    # YouTube API accepted the upload (job marked PUBLISHED) but the video
+    # never finishes server-side processing, staying "Pendente" in Studio
+    # forever. Hourly is plenty — this is a many-hours-scale failure mode.
+    sched.add_job(_job_check_stuck_youtube_processing, "interval", hours=1,
+                  id="check_stuck_youtube_processing", replace_existing=True)
     sched.start()
     _scheduler = sched
     logger.info(
         "Scheduler started (trending, quota reset, heartbeat, analytics, "
-        "consume_themes, publish_due, retry_errored, recover_stuck_publishing)."
+        "consume_themes, publish_due, retry_errored, recover_stuck_publishing, "
+        "check_stuck_youtube_processing)."
     )
 
 
@@ -219,6 +226,13 @@ _NO_AUTO_RETRY_MARKERS = (
     "invalid_grant",
     "expired or revoked",
     "credenciais conectadas",
+    # A from_ready_video job that exhausted its Drive-download retry budget
+    # (see _finalize_ready_video_job) already released its ready_video back to
+    # the reservation pool for a FRESH job/attempt — resurrecting this exact
+    # exhausted job too would let two attempts race for the same underlying
+    # file again, the exact double-booking that produced duplicate
+    # publishes of the same source video in production.
+    "desistindo apos",
 )
 
 def _job_retry_errored() -> None:
@@ -583,6 +597,93 @@ def _create_trending_job(db, acct, moment) -> int:
     return job.id
 
 
+# How long a video may sit accepted-but-not-yet-processed on YouTube's side
+# before we treat it as permanently stuck rather than "still transcoding".
+# Real transcodes finish in minutes to a couple hours even for long videos;
+# this is deliberately generous to never flag a merely-slow one.
+_STUCK_PROCESSING_HOURS = 24
+
+
+def _job_check_stuck_youtube_processing() -> None:
+    """Catches the one failure mode upload_video() itself can never see: the
+    YouTube API accepted the upload (an insert() response with a video_id,
+    so the job was marked PUBLISHED) but the video never finishes YouTube's
+    own server-side transcode pipeline — it sits as "Pendente" in Studio
+    forever. Because nothing about the upload call itself failed, this is
+    completely invisible to every status our own pipeline tracks; confirmed
+    in production as ~170 videos silently accumulated this way across 2
+    channels with zero errors ever appearing in the Fila.
+
+    Checks each recently-published YouTube video's real processing status
+    exactly once (`processing_checked` flag, so this never re-checks a video
+    it already resolved) and records the result on the job's publish_status.
+    A job flagged `stuck_processing` still shows as PUBLISHED (the upload
+    genuinely happened — flipping it to ERROR here could trigger the retry
+    machinery into re-rendering and re-uploading ANOTHER copy, the exact bug
+    this sweep exists to catch) but the flag itself is what a human — or a
+    future UI surface — uses to know it needs a manual look.
+    """
+    from sqlalchemy import select
+
+    from backend.agents.account_profile import AccountProfileService
+    from backend.models import JobStatus, VideoJob
+    from backend.uploaders.youtube import get_video_processing_status
+
+    now = datetime.utcnow()
+    # Only look at a bounded recent window: skip videos so old that YouTube
+    # processing failing/succeeding either way no longer matters operationally,
+    # and skip videos published so recently that "still processing" is normal.
+    window_start = now - timedelta(hours=_STUCK_PROCESSING_HOURS * 4)
+    window_end = now - timedelta(hours=_STUCK_PROCESSING_HOURS)
+
+    db = SessionLocal()
+    try:
+        candidates = db.execute(
+            select(VideoJob).where(
+                VideoJob.status == JobStatus.PUBLISHED,
+                VideoJob.account_id.is_not(None),
+                VideoJob.updated_at >= window_start,
+                VideoJob.updated_at <= window_end,
+            )
+        ).scalars().all()
+        svc = AccountProfileService(db)
+        checked = 0
+        stuck = 0
+        for job in candidates:
+            pub = job.publish_status or {}
+            yt = pub.get("youtube") or {}
+            video_id = yt.get("video_id")
+            if not video_id or yt.get("processing_checked"):
+                continue
+            creds = svc.get_credentials(job.account_id)
+            if not creds:
+                continue
+            info = get_video_processing_status(video_id, creds)
+            if info.get("found") is not True:
+                continue  # API error or video not found — try again next hour
+            checked += 1
+            new_pub = dict(pub)
+            new_yt = dict(yt)
+            new_yt["processing_checked"] = True
+            new_yt["upload_status_seen"] = info.get("upload_status")
+            if info.get("upload_status") != "processed":
+                new_yt["stuck_processing"] = True
+                stuck += 1
+            new_pub["youtube"] = new_yt
+            job.publish_status = new_pub
+            db.commit()
+        if checked:
+            logger.info(
+                "Verificação de processamento no YouTube: %d checado(s), %d ainda travado(s) após %dh.",
+                checked, stuck, _STUCK_PROCESSING_HOURS,
+            )
+    except Exception as exc:  # noqa: BLE001 — never let the scheduler die
+        db.rollback()
+        logger.warning("check_stuck_youtube_processing falhou: %s", exc)
+    finally:
+        db.close()
+
+
 def _job_ride_trends() -> None:
     """'Momento em alta': for each opted-in active channel, find the hottest niche
     moments now and enqueue up to `trends_per_cycle` (max 2) approval-gated videos.
@@ -849,6 +950,12 @@ def _try_create_ready_video_job(
     return job.id
 
 
+# A ready_video is released back to the shared reservation pool only after
+# this many failed attempts on the SAME job (see the except-block below) —
+# not on every failure. See that block's comment for why this matters.
+_READY_VIDEO_MAX_ATTEMPTS = 2
+
+
 def _finalize_ready_video_job(
     db, drive, job, ready, acct, *, title_seed: str, video_format: str, theme=None
 ) -> None:
@@ -925,14 +1032,30 @@ def _finalize_ready_video_job(
 
             dispatch_publish(job.id)
     except Exception as exc:  # noqa: BLE001
-        # Reset to "available" (not "error") and clear the reservation so this
-        # otherwise-good Drive file re-enters reserve_next()'s pool on the next
-        # run instead of being permanently sidelined until a full reindex.
-        ready.status = "available"
-        ready.reserved_job_id = None
-        ready.reserved_at = None
         job.status = JobStatus.ERROR
-        job.error_message = f"Falha ao baixar video do Drive: {exc}"[:500]
+        job.retry_count = (job.retry_count or 0) + 1
+        # Confirmed in production: releasing the ready_video back to
+        # "available" on EVERY failure let a totally different theme/job grab
+        # the SAME Drive file minutes later via _try_create_ready_video_job,
+        # while THIS failed job also stayed eligible for its own retry
+        # (retry_ready_video_job) — two independent attempts at the same
+        # source file, sometimes both eventually succeeding and publishing
+        # the same video twice under different generated titles. Cap the
+        # retries on THIS job first (mirrors _ORPHAN_RESUME_MAX's "try once
+        # more, then stop" elsewhere in this codebase); only release the file
+        # for a fresh attempt once this job has genuinely given up, and mark
+        # it with a phrase in _NO_AUTO_RETRY_MARKERS so this exhausted job is
+        # never ALSO auto-resurrected alongside that fresh attempt.
+        if job.retry_count >= _READY_VIDEO_MAX_ATTEMPTS:
+            ready.status = "available"
+            ready.reserved_job_id = None
+            ready.reserved_at = None
+            job.error_message = (
+                f"Falha ao baixar video do Drive, desistindo apos {job.retry_count} "
+                f"tentativas: {exc}"
+            )[:500]
+        else:
+            job.error_message = f"Falha ao baixar video do Drive: {exc}"[:500]
         db.commit()
         logger.warning("ready video job failed for account %s: %s", getattr(acct, "id", None), exc)
 

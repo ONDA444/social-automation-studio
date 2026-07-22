@@ -44,6 +44,14 @@ function Row({ job, accounts, selected, onToggleSelect, onChannelChange, onRetry
         </div>
 
         <StatusBadge status={job.status} />
+        {job.publish_status?.youtube?.stuck_processing && (
+          <span
+            className="badge text-[10px]"
+            style={{ background: 'rgba(255,182,39,0.16)', color: 'var(--warning)', border: '1px solid rgba(255,182,39,0.3)' }}
+            title="O YouTube aceitou o upload, mas o vídeo segue 'Pendente'/processando há mais de 24h — provavelmente nunca vai ficar público. Verifique no YouTube Studio; pode ser necessário excluir e reenviar.">
+            ⚠ Travado no YouTube
+          </span>
+        )}
 
         <select
           className="input text-xs py-1.5 px-2 w-full sm:w-36 shrink-0 order-last sm:order-none"
