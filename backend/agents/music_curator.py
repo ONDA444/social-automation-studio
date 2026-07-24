@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import re
 from pathlib import Path
 
@@ -21,6 +22,15 @@ logger = logging.getLogger(__name__)
 
 MUSIC_DIR = settings.abs_path(settings.assets_dir) / "music"
 CATALOG = MUSIC_DIR / "music_catalog.json"
+
+# Catalog tracks have wildly different native loudness (measured up to ~13dB
+# apart between tracks). editing_director.py then applies a FIXED volume_db
+# offset per template on top of this un-normalised level, so the music ends up
+# inconsistent between videos on the same channel depending only on which
+# track got picked — sometimes near-inaudible, sometimes loud enough to
+# compete with the narration. Normalise every processed bed to the same
+# loudness so the fixed per-template offsets behave predictably.
+_TARGET_DBFS = -20.0
 
 # Map editing-plan / LLM moods to catalog moods (catalog tags: action, ambient,
 # calm, dramatic, energetic, epic, lofi, melancholic, suspense, tense, upbeat,
@@ -138,7 +148,10 @@ class MusicCuratorAgent(BaseAgent):
             for _ in range(loops):
                 out = out.append(seg, crossfade=min(3000, len(seg) // 2))
             seg = out
-        seg = seg[:need_ms].fade_in(1500).fade_out(2500)
+        seg = seg[:need_ms]
+        if math.isfinite(seg.dBFS):  # dBFS is -inf for a fully-silent segment
+            seg = seg.apply_gain(_TARGET_DBFS - seg.dBFS)
+        seg = seg.fade_in(1500).fade_out(2500)
         # Normalise rate/channels so the downstream mux mixes at a single rate
         # (avoids implicit mid-graph resampling artifacts).
         seg = seg.set_frame_rate(44100).set_channels(2)

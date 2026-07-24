@@ -8,9 +8,12 @@ ShortsFactoryAgent — derive vertical Shorts (1080x1920) from the main video.
   4. Long (60s)       - top-scored 60s
   5. Mini-episode (90s) - most complete narrative window
 
-Landscape -> portrait via centered 9:16 crop; a "Siga para mais" banner is
-overlaid at the top (rendered as a PNG to avoid ffmpeg font-path escaping pain).
-The main video's burned captions survive the centered crop.
+Landscape -> portrait via blurred-background pad (full frame scaled to fit the
+9:16 width, centered over a blurred/cropped copy of itself filling the rest) —
+NOT a destructive center crop, so burned captions (which span nearly the full
+original width, see caption_agent.py) and off-center subjects/framing are never
+cut off. A "Siga para mais" banner is overlaid at the top (rendered as a PNG to
+avoid ffmpeg font-path escaping pain).
 """
 from __future__ import annotations
 
@@ -81,24 +84,44 @@ class ShortsFactoryAgent(BaseAgent):
 
     @staticmethod
     def _best_window(markers: list[float], length: float, total: float) -> float:
-        """Slide a window of `length`; pick the start with the most markers."""
+        """Slide a window of `length`; pick the start with the most markers.
+
+        Candidate starts are the markers' OWN timestamps — each one is already
+        the exact start of a highlighted scene's first spoken word (see
+        narrator.py's _derive_markers, timestamp = words[cursor]["start"]) —
+        instead of arbitrary equally-spaced steps. A step-based start almost
+        never lines up with where a scene/phrase actually begins, so the short
+        used to open mid-word/mid-sentence in its first 1-3 seconds, exactly
+        the window that decides whether a viewer keeps watching.
+        """
         if total <= length or not markers:
             return 0.0
-        best_start, best_score = 0.0, -1
-        step = max(1.0, length / 6)
-        t = 0.0
-        while t <= total - length:
+        candidates = sorted({m for m in markers if 0 <= m <= total - length})
+        if not candidates:
+            return 0.0
+        best_start, best_score = candidates[0], -1
+        for t in candidates:
             score = sum(1 for m in markers if t <= m < t + length)
             if score > best_score:
                 best_score, best_start = score, t
-            t += step
         return best_start
 
     def _cut_vertical(self, src: str, dst: Path, start: float, length: float, banner: Path) -> None:
-        # crop centered 9:16, scale to 1080x1920, overlay banner at top.
+        # Blurred-background pad instead of a destructive center crop: a plain
+        # crop=ih*9/16:ih keeps only the middle ~31.6% of the original 16:9
+        # width, permanently cutting burned-in captions (which span nearly the
+        # full frame, see caption_agent.py's PlayResX/MarginL/MarginR) and any
+        # subject/framing that isn't dead-center — plus, at the default 720p
+        # render, that narrow strip gets upscaled ~2.7x and looks visibly soft.
+        # Splitting into a blurred full-bleed background + the untouched full
+        # width scaled to fit keeps 100% of the frame's content and looks sharp.
         filt = (
-            "[0:v]crop=ih*9/16:ih,scale=1080:1920,setsar=1[v];"
-            "[v][1:v]overlay=(W-w)/2:70[vout]"
+            "[0:v]split=2[bg][fg];"
+            "[bg]scale=1080:1920:force_original_aspect_ratio=increase,"
+            "crop=1080:1920,gblur=sigma=18[bgb];"
+            "[fg]scale=1080:-2,setsar=1[fgs];"
+            "[bgb][fgs]overlay=(W-w)/2:(H-h)/2[base];"
+            "[base][1:v]overlay=(W-w)/2:70[vout]"
         )
         cmd = [
             "ffmpeg", "-y", "-ss", f"{start:.3f}", "-t", f"{length:.3f}", "-i", src,

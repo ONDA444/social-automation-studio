@@ -10,6 +10,7 @@ Modes:  burn_in (default, via ass=) | srt | ass
 from __future__ import annotations
 
 import asyncio
+import re
 from pathlib import Path
 
 from backend.agents.base_agent import BaseAgent
@@ -65,14 +66,17 @@ class CaptionAgent(BaseAgent):
         ass_path = out_dir / "captions.ass"
 
         words = narration.get("words") or []
+        quote_text: str | None = None
+        quote_dur: float | None = None
         if words:
             blocks = self._group_words(words)
             body = self._dialogue_lines(blocks, style)
         else:
             # quote_viral: show on-screen text for the whole clip.
             texts = script.get("on_screen_text") or [script.get("title", "")]
-            dur = float(narration.get("total_duration") or script.get("estimated_duration") or 10)
-            body = self._quote_lines(texts[0], dur, style)
+            quote_dur = float(narration.get("total_duration") or script.get("estimated_duration") or 10)
+            quote_text = texts[0]
+            body = self._quote_lines(quote_text, quote_dur, style)
 
         ass = self._header(style) + body
         ass_path.write_text(ass, encoding="utf-8")
@@ -85,6 +89,19 @@ class CaptionAgent(BaseAgent):
         if words:
             srt_path = out_dir / "captions.srt"
             srt_path.write_text(self._srt(self._group_words(words)), encoding="utf-8")
+            result["srt_path"] = str(srt_path)
+        elif quote_text:
+            # quote_viral (and any other narrate=False remix) has no word timings,
+            # but the on-screen text and its duration ARE known. publisher.py only
+            # attaches a YouTube caption track when captions.srt exists on disk, so
+            # this branch used to always skip SRT generation — these videos shipped
+            # with zero CC/searchable transcript despite the text being available.
+            # A single-cue SRT covering the whole clip is coarse but real.
+            srt_path = out_dir / "captions.srt"
+            plain = re.sub(r"\s+", " ", quote_text).strip()
+            srt_path.write_text(
+                f"1\n{self._srt_ts(0)} --> {self._srt_ts(quote_dur)}\n{plain}\n", encoding="utf-8"
+            )
             result["srt_path"] = str(srt_path)
 
         self.ctx_set("captions", result)

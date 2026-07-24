@@ -399,9 +399,20 @@ class VisualsAgent(BaseAgent):
         top = (nh - h) // 2
         return img.crop((left, top, left + w, top + h))
 
+    # Bundled fallback (Bitstream Vera Bold, freely redistributable — see
+    # backend/assets/fonts/LICENSE-Bitstream-Vera.txt) so thumbnail text renders
+    # at the intended large size on Linux/Railway too. The old lookup-by-bare-name
+    # (arialbd.ttf/DejaVuSans-Bold.ttf/...) only resolves on Windows/Mac, where a
+    # system font of that name happens to exist; the production container has no
+    # fonts installed at all, so every attempt failed and silently fell back to
+    # Pillow's fixed ~10px bitmap default — the "big legible thumbnail text" the
+    # rest of this file computes a font size for was actually shipping tiny.
+    _BUNDLED_FONT = Path(__file__).resolve().parent.parent / "assets" / "fonts" / "VeraBd.ttf"
+
     @staticmethod
     def _font(size: int) -> ImageFont.FreeTypeFont:
-        for name in ("arialbd.ttf", "Arial_Bold.ttf", "DejaVuSans-Bold.ttf", "arial.ttf"):
+        for name in ("arialbd.ttf", "Arial_Bold.ttf", "DejaVuSans-Bold.ttf", "arial.ttf",
+                     str(VisualsAgent._BUNDLED_FONT)):
             try:
                 return ImageFont.truetype(name, size)
             except Exception:

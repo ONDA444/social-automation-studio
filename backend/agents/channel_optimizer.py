@@ -81,39 +81,45 @@ def _keywords_str(keywords: list[str], limit: int = 480) -> str:
     return " ".join(out)
 
 
-def _checklist(account) -> list[dict]:
+def _checklist(account, channel_id: str | None = None) -> list[dict]:
     """Studio-only items (no free API) as a 1-click checklist with deep links."""
     name = (account.display_name or "").strip()
     blocked = _BLOCKED_WORDS_BASE + ([name.lower()] if name and len(name) > 2 else [])
+    # "UC" was a literal placeholder, not a real channel ID — every "Abrir no
+    # Studio" link 404ed/landed on the wrong channel. Fall back to the account's
+    # own stored channel_id when the caller has no fresher one from analyze()'s
+    # branding read.
+    cid = channel_id or getattr(account, "channel_id", None) or "UC"
+    base = f"https://studio.youtube.com/channel/{cid}/editing"
     return [
         {"id": "name", "label": "Nome e @handle do canal",
          "why": "A API não pode mudar o nome (channelTitleUpdateForbidden). Deixe profissional e fácil de buscar.",
-         "studio_url": "https://studio.youtube.com/channel/UC/editing/details"},
+         "studio_url": f"{base}/details"},
         {"id": "branding_images", "label": "Foto, banner e imagem do canal",
          "why": "Imagens do canal são só no Studio. Banner com o nicho + horário de postagem passa profissionalismo.",
-         "studio_url": "https://studio.youtube.com/channel/UC/editing/images"},
+         "studio_url": f"{base}/images"},
         {"id": "trailer", "label": "Trailer para quem não é inscrito",
          "why": "O item de MAIOR conversão de inscrito — a API não toca. Coloque um vídeo de 30-90s que vende o canal.",
-         "studio_url": "https://studio.youtube.com/channel/UC/editing/sections"},
+         "studio_url": f"{base}/sections"},
         {"id": "watermark", "label": "Marca d'água (botão de inscrever-se)",
          "why": "Suba seu logo como marca d'água e defina 'vídeo inteiro' — o botão de inscrever fica sempre na tela.",
-         "studio_url": "https://studio.youtube.com/channel/UC/editing/branding"},
+         "studio_url": f"{base}/branding"},
         {"id": "moderation", "label": "Moderação: reter comentários para revisão",
          "why": "Mate spam de bot/golpe. A API antiga foi desativada — defina no Studio: 'Reter comentários potencialmente inadequados' (ou Rígido).",
-         "studio_url": "https://studio.youtube.com/channel/UC/editing/community"},
+         "studio_url": f"{base}/community"},
         {"id": "blocked_words", "label": "Palavras bloqueadas (anti-spam)",
          "why": "Cole esta lista nas palavras bloqueadas — qualquer comentário com elas é retido automaticamente.",
-         "studio_url": "https://studio.youtube.com/channel/UC/editing/community",
+         "studio_url": f"{base}/community",
          "copy_text": ", ".join(blocked)},
         {"id": "block_links", "label": "Reter comentários com links",
          "why": "Bloqueia links de golpe/phishing nos comentários. Só no Studio.",
-         "studio_url": "https://studio.youtube.com/channel/UC/editing/community"},
+         "studio_url": f"{base}/community"},
         {"id": "made_for_kids_channel", "label": "Público padrão do canal (não é para crianças)",
          "why": "Já carimbamos isso em cada vídeo; confirme o padrão do canal para casar.",
-         "studio_url": "https://studio.youtube.com/channel/UC/editing/advanced"},
+         "studio_url": f"{base}/advanced"},
         {"id": "feature_eligibility", "label": "Elegibilidade de recursos (verificar telefone)",
          "why": "Verifique o telefone no Studio para liberar thumbnails personalizadas e uploads longos. Sem API.",
-         "studio_url": "https://studio.youtube.com/channel/UC/editing/features"},
+         "studio_url": f"{base}/features"},
     ]
 
 
@@ -205,7 +211,7 @@ async def analyze(account, creds: dict, client_targets: dict | None = None) -> d
                       f"{_niche.title()}: do básico ao avançado"],
         "category_id": _category_for(account.niche),
         "source": source,
-        "checklist": _checklist(account),
+        "checklist": _checklist(account, branding.get("channel_id")),
     }
 
 

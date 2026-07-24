@@ -171,7 +171,21 @@ def _generate_thumbnail(job_id: int, context: dict, analysis: dict) -> str | Non
         return None
     if provider == "placeholder":
         return None
-    return str(dst)
+
+    # Compose the same big-text/scrim overlay every AI-generation thumbnail gets
+    # (VisualsAgent._compose_thumb) on top of the raw generated image. Without
+    # this, Drive-sourced videos — the bulk of the catalog — published with a
+    # bare AI image and zero text overlay, skipping one of the strongest known
+    # CTR levers. Falls back to the un-composed image if this best-effort step
+    # fails for any reason.
+    final = dst.with_name(f"job_{job_id}_thumb.jpg")
+    try:
+        cfg = {"pos": "bottom", "fill": (255, 221, 0), "stroke": (200, 0, 0)}
+        agent._compose_thumb(dst, final, _thumbnail_text(title), 1280, 720, cfg)
+        return str(final)
+    except Exception as exc:  # noqa: BLE001
+        logger.info("Thumbnail composition failed for job %s: %s", job_id, exc)
+        return str(dst)
 
 
 def analyze_ready_video(job_id: int, local_path: str, context: dict) -> dict:
@@ -815,6 +829,22 @@ def _tags(primary: str, topic: str, entities: list[str], topics: list[str], nich
         "reaction_commentary": (
             ["reacao", "comentario", "cultura pop"],
             ["reagindo", "comentando", "cena marcante"],
+        ),
+        # film_recap_ai_images is content_types.py's default and the biggest
+        # single volume in the system (scheduler.py's fallback for from-Drive
+        # jobs) — it used to fall through to the generic default_variants below
+        # even though title/hook already have dedicated, specific entries.
+        "film_recap_ai_images": (
+            ["recap de filme", "resumo do filme", "cenas marcantes"],
+            ["recap dublado", "melhor cena", "resumo completo"],
+        ),
+        "quote_viral": (
+            ["frase motivacional", "citacao", "reflexao do dia"],
+            ["frases de impacto", "pensamento profundo", "citacao viral"],
+        ),
+        "top_list_ranking": (
+            ["top 5", "ranking", "os melhores"],
+            ["lista definitiva", "classificacao", "os piores"],
         ),
     }
     default_variants = (

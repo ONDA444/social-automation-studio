@@ -38,15 +38,25 @@ class ResearchAgent(BaseAgent):
         # Grounding the REAL headline is what keeps the script on the actual event
         # instead of a vague, off-topic expansion of a generic title.
         theme = (trend_evidence or topic or title or "").strip()
+        # Copyright-risk brake: nothing else in the pipeline checks the incoming
+        # theme/title against a per-channel risk list BEFORE generating — a
+        # channel that already took a Content ID strike on a given franchise/
+        # team/anime had no automatic guard stopping it from generating another
+        # video on that exact same source next time around. Reuses the same
+        # avoid_topics infra orchestrator.py already feeds into channel_config
+        # for the scriptwriter's guardrails — no new account field required.
+        risk_flag = self._risk_flag(theme, title, topic)
+
         if not theme or content_type in SKIP_TYPES or not settings.research_enabled:
             payload = {"facts": "", "sources": [], "grounded": False,
-                       "unavailable": False, "skipped": True}
+                       "unavailable": False, "skipped": True, "risk_flag": risk_flag}
             self.ctx_set("research", payload)
             return payload
 
         self.emit("progress", "Pesquisando fatos reais (fontes verificadas)", progress=12)
         res = await llm.research(theme)
         res["skipped"] = False
+        res["risk_flag"] = risk_flag
         self.ctx_set("research", res)
 
         if res.get("grounded"):
@@ -59,6 +69,19 @@ class ResearchAgent(BaseAgent):
             self.emit("progress",
                       "Sem grounding — roteiro em modo cauteloso (não afirma resultados)", progress=18)
         return res
+
+    def _risk_flag(self, theme: str, title: str, topic: str | None) -> bool:
+        """True when the incoming theme/title/topic mentions one of this
+        channel's avoid_topics — orchestrator.py routes a flagged job to human
+        Approval instead of auto-publish, the same way it already does for a
+        stale trending job, so nobody has to remember by hand not to keep
+        generating on the exact source that already earned a strike."""
+        guardrails = (self.ctx_get("channel_config") or {}).get("guardrails") or {}
+        avoid = [t for t in (guardrails.get("forbidden_topics") or []) if t and str(t).strip()]
+        if not avoid:
+            return False
+        haystack = " ".join(str(x) for x in (theme, title, topic or "") if x).lower()
+        return any(str(term).strip().lower() in haystack for term in avoid)
 
 
 # --- standalone test: python -m backend.agents.research "Brasil x Marrocos ontem" ---

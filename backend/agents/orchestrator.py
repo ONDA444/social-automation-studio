@@ -149,6 +149,12 @@ async def run_pipeline(job_id: int) -> dict:
                 # event, not the LLM's vague 1-line angle.
                 trend_evidence=ctx.get("trend_evidence", ""),
             )
+            if research.get("risk_flag") and not require_approval:
+                # Theme matches this channel's avoid_topics (e.g. the exact
+                # franchise/team that already earned a Content ID strike) —
+                # don't auto-publish blind, same treatment as a stale trending job.
+                require_approval = True
+                logger.info("Job %s theme matches avoid_topics -> approval, not auto-publish.", job_id)
             # Learning loop: distill what's actually worked on THIS channel from
             # real analytics and feed it to the scriptwriter + SEO, so each new
             # video leans toward what performs. Pure Python aggregation — no extra
@@ -252,9 +258,16 @@ async def run_pipeline(job_id: int) -> dict:
                 _emit_job(job_id, status="error", compliance=comp)
                 return {"status": "error", "compliance": comp}
 
-            # thumbnail (variant A landscape) for the approval card
+            # Thumbnail A/B: alternate deterministically by job id so the two
+            # variants VisualsAgent already renders (and analytics.py already
+            # groups CTR by, reading the A/B back from this exact path's
+            # filename — see AnalyticsAgent._thumbnail_variant) actually both
+            # ship. Always picking "A" meant the "A/B test" never had any B
+            # data to compare against.
             thumbs = ctx.get("visuals", {}).get("thumbnails", {})
-            job.thumbnail_path = thumbs.get("A", {}).get("landscape")
+            variant = "B" if job_id % 2 else "A"
+            job.thumbnail_path = (thumbs.get(variant, {}).get("landscape")
+                                   or thumbs.get("A", {}).get("landscape"))
 
             # Voice integrity is now best-effort at SYNTHESIS time (narrator tries same-
             # gender edge voices before any gTTS fallback). We do NOT force a fallback

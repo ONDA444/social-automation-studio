@@ -71,6 +71,11 @@ class HookOptimizerAgent(BaseAgent):
 
     async def _via_llm(self, script, original, facts) -> dict:
         fact_note = f"\nFATOS REAIS (não contradiga, não invente):\n{facts[:800]}" if facts else ""
+        # Live learning signal — which hook mechanism already worked on THIS
+        # channel (real views/CTR/retention), same source scriptwriter.py:625
+        # already reads. Without this every hook choice was a blind LLM guess
+        # even after the channel had 20+ published videos proving what works.
+        perf_block = self.ctx_get("performance_insights") or ""
         video_format = script.get("format", "long")
         word_limit = "até 8 palavras" if video_format == "short" else "8-14 palavras"
         prompt = f"""Você é um editor viral especialista em gancho de abertura.
@@ -85,7 +90,7 @@ REGRAS (não viole — são duras):
 - Use UM mecanismo (curiosity_gap|bold_claim|high_stakes|negation|numbered|in_medias_res).
 - O overlay NUNCA repete a fala; é 2-5 PALAVRAS MAIÚSCULAS com dado/curiosidade.
 - PROIBIDO: 'olá pessoal', 'você não vai acreditar', 'prepare-se', 'segura essa',
-  'presta atenção', 'hoje eu vou te mostrar', 'você já parou para pensar'.{fact_note}
+  'presta atenção', 'hoje eu vou te mostrar', 'você já parou para pensar'.{fact_note}{perf_block}
 
 Responda SÓ JSON: {{"hook": "<narração nova da 1ª cena>", "overlay": "<2-5 PALAVRAS MAIÚSCULAS>"}}"""
         # Context-dependent rewrite (needs the channel's facts/identity) — use the
@@ -128,12 +133,13 @@ class RetentionEngineerAgent(BaseAgent):
         return script
 
     async def _via_llm(self, script) -> dict:
+        perf_block = self.ctx_get("performance_insights") or ""
         prompt = f"""Vídeo "{script.get('title')}" ({script.get('content_type')}), {len(script.get('scenes', []))} cenas.
 Para MAXIMIZAR RETENÇÃO e watch time:
 1) "rehook": uma frase curta de RE-GANCHO (open loop) p/ injetar no meio do vídeo,
    prometendo algo que vem a seguir ("mas o que vem agora muda tudo...").
 2) "cta": a fala FINAL — chamada à ação forte + gancho de loop (faz querer rever/seguir),
-   em português, 1 frase.
+   em português, 1 frase.{perf_block}
 Responda SÓ JSON: {{"rehook": "...", "cta": "..."}}"""
         return await llm.complete_json(prompt, system=with_style("Responda só com JSON válido."), max_tokens=300)
 
@@ -175,6 +181,7 @@ class PackagingStrategistAgent(BaseAgent):
 
     async def _via_llm(self, script, platforms, facts) -> dict:
         fact_note = f"\nFATOS REAIS (base p/ títulos verdadeiros — não contradiga):\n{facts[:600]}" if facts else ""
+        perf_block = self.ctx_get("performance_insights") or ""
         hook_spoken = ""
         scenes = script.get("scenes", [])
         if scenes:
@@ -182,7 +189,7 @@ class PackagingStrategistAgent(BaseAgent):
         prompt = f"""Você é o PACKAGING STRATEGIST — fonte única de verdade do título e thumbnail.
 Crie o pacote de alto CTR para "{script.get('title')}" ({script.get('content_type')}),
 plataformas: {platforms}.
-Gancho falado (scenes[0]): "{hook_spoken}"{fact_note}
+Gancho falado (scenes[0]): "{hook_spoken}"{fact_note}{perf_block}
 
 7 FÓRMULAS (use fórmulas DIFERENTES nos 3 títulos):
 F1 curiosity_gap : nomeia resultado, esconde causa. ("O detalhe que mudou tudo em X")
@@ -283,8 +290,9 @@ class ShortsHookAgent(BaseAgent):
         return {"shorts": shorts}
 
     async def _via_llm(self, script) -> dict:
+        perf_block = self.ctx_get("performance_insights") or ""
         prompt = f"""Vídeo vertical (Short/TikTok/Reels) sobre "{script.get('title')}".
-Os 3 primeiros segundos definem se a pessoa para de rolar.
+Os 3 primeiros segundos definem se a pessoa para de rolar.{perf_block}
 Responda SÓ JSON:
 {{"overlay": "<2-5 PALAVRAS gigantes p/ o 1o frame, em MAIÚSCULAS>",
   "best_format": "<hook|standard|medium|long|mini — o tamanho que mais viraliza p/ este tema>"}}"""
@@ -317,9 +325,10 @@ class ShortsStrategistAgent(BaseAgent):
         return {"shorts_strategy": strat}
 
     async def _via_llm(self, script, platforms) -> dict:
+        perf_block = self.ctx_get("performance_insights") or ""
         prompt = f"""Estrategista de Shorts virais. Crie o pacote de publicação para um
 Short vertical sobre "{script.get('title')}" ({script.get('content_type')}),
-plataformas: {platforms}.
+plataformas: {platforms}.{perf_block}
 JSON EXATO:
 {{
   "captions": {{

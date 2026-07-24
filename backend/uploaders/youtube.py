@@ -25,6 +25,31 @@ SCOPES = [
 ]
 
 
+# YouTube's snippet.tags has a hard ~500-char limit across ALL tags combined
+# (serialized length, not a per-tag limit). Every tag source in this pipeline
+# (SEOAgent, ready_video_seo's Drive path) used to cap only by COUNT ([:30]),
+# so a few long tags (a full title used as a tag, long-tail trend phrases)
+# could push the total past 500 chars — the API then rejects/drops the whole
+# tags field, publishing the video with ZERO tags. Budget by characters
+# instead, keeping the already-priority-ordered head and dropping only the
+# tail that would overflow.
+_TAG_CHAR_BUDGET = 460  # margin below YouTube's ~500-char hard limit
+
+
+def cap_tags_to_budget(tags: list[str], max_chars: int = _TAG_CHAR_BUDGET) -> list[str]:
+    kept: list[str] = []
+    total = 0
+    for tag in tags[:30]:
+        if not isinstance(tag, str) or not tag.strip():
+            continue
+        added = len(tag) + (1 if kept else 0)  # +1 for the joining comma
+        if total + added > max_chars:
+            break
+        kept.append(tag)
+        total += added
+    return kept
+
+
 def _missing_libs() -> str | None:
     try:
         import google_auth_oauthlib  # noqa: F401
@@ -482,7 +507,7 @@ def upload_video(
         status["embeddable"] = bool(embeddable)
         status["publicStatsViewable"] = bool(public_stats)
         snippet = {"title": title[:100], "description": description,
-                   "tags": tags[:30], "categoryId": category_id}
+                   "tags": cap_tags_to_budget(tags), "categoryId": category_id}
         # Declaring the metadata + spoken-audio language stops YouTube from
         # mis-detecting a synthetic (TTS) voice's language and burying the video's
         # regional reach — the single cheapest reach win for a faceless channel.

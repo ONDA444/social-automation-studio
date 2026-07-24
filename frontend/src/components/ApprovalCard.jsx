@@ -46,6 +46,17 @@ export default function ApprovalCard({ job, onDone }) {
   }
 
   const yt = seo.youtube || {}
+  const tk = seo.tiktok || {}
+  const ig = seo.instagram || {}
+  // cross_platform_linker.py forces every TikTok/Instagram mirror into
+  // AWAITING_APPROVAL specifically so a human reviews it before it goes out —
+  // but this card used to only ever show/edit the YouTube block, so the
+  // reviewer approved mirrors blind to the actual caption/hashtags that would
+  // be published on the OTHER platform. Also preview these in the real 9:16
+  // aspect instead of a 16:9 box that misrepresents the vertical crop.
+  const targets = job.target_platforms || []
+  const isOtherPlatformMirror = !!job.is_mirror || targets.includes('tiktok') || targets.includes('instagram')
+  const previewAspect = isOtherPlatformMirror ? 'aspect-[9/16] max-w-[220px] mx-auto' : 'aspect-video'
 
   return (
     <div className="relative">
@@ -54,9 +65,9 @@ export default function ApprovalCard({ job, onDone }) {
         <div className="flex flex-col sm:flex-row gap-4">
           <div className="w-full sm:w-64 shrink-0">
             {showPlayer ? (
-              <video src={mediaUrl(job.main_video_path)} controls className="w-full rounded-btn bg-black aspect-video" />
+              <video src={mediaUrl(job.main_video_path)} controls className={`w-full rounded-btn bg-black ${previewAspect}`} />
             ) : (
-              <button onClick={() => setShowPlayer(true)} className="relative w-full aspect-video rounded-btn overflow-hidden bg-elevated group">
+              <button onClick={() => setShowPlayer(true)} className={`relative w-full rounded-btn overflow-hidden bg-elevated group ${previewAspect}`}>
                 {job.thumbnail_path
                   ? <img src={mediaUrl(job.thumbnail_path)} className="w-full h-full object-cover" alt="" />
                   : <span className="absolute inset-0 grid place-items-center text-3xl opacity-40">🎬</span>}
@@ -100,12 +111,29 @@ export default function ApprovalCard({ job, onDone }) {
                 <input className="input" value={yt.title || ''} onChange={(e) => setSeo({ ...seo, youtube: { ...yt, title: e.target.value } })} placeholder="Título YouTube" />
                 <textarea className="input h-20 resize-none" value={yt.description || ''} onChange={(e) => setSeo({ ...seo, youtube: { ...yt, description: e.target.value } })} placeholder="Descrição" />
                 <input className="input" value={(yt.tags || []).join(', ')} onChange={(e) => setSeo({ ...seo, youtube: { ...yt, tags: e.target.value.split(',').map((t) => t.trim()).filter(Boolean) } })} placeholder="Tags (vírgula)" />
+                {targets.includes('tiktok') && (
+                  <textarea className="input h-16 resize-none" value={tk.caption || ''} onChange={(e) => setSeo({ ...seo, tiktok: { ...tk, caption: e.target.value } })} placeholder="Legenda TikTok" />
+                )}
+                {targets.includes('instagram') && (
+                  <>
+                    <textarea className="input h-16 resize-none" value={ig.caption || ''} onChange={(e) => setSeo({ ...seo, instagram: { ...ig, caption: e.target.value } })} placeholder="Legenda Instagram" />
+                    <input className="input" value={(ig.hashtags || []).join(', ')} onChange={(e) => setSeo({ ...seo, instagram: { ...ig, hashtags: e.target.value.split(',').map((t) => t.trim()).filter(Boolean) } })} placeholder="Hashtags Instagram (vírgula)" />
+                  </>
+                )}
                 <div className="flex gap-2"><button className="btn-primary text-xs" onClick={saveSeo}>Salvar SEO</button><button className="btn-ghost text-xs" onClick={() => setEditing(false)}>Cancelar</button></div>
               </div>
             ) : (
               <div className="text-sm text-text-muted space-y-1">
                 <p><span className="text-text-primary font-medium">{yt.title || job.title}</span></p>
                 <p className="line-clamp-2 text-[12px]">{yt.description}</p>
+                {targets.includes('tiktok') && tk.caption && (
+                  <p className="line-clamp-2 text-[12px]"><span className="text-text-primary">TikTok:</span> {tk.caption}</p>
+                )}
+                {targets.includes('instagram') && (ig.caption || ig.hashtags?.length > 0) && (
+                  <p className="line-clamp-2 text-[12px]">
+                    <span className="text-text-primary">Instagram:</span> {ig.caption} {(ig.hashtags || []).map((h) => `#${h}`).join(' ')}
+                  </p>
+                )}
               </div>
             )}
 

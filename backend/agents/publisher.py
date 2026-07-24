@@ -579,6 +579,14 @@ def _pick_short(shorts: list[str], prefer: int) -> str | None:
     for s in shorts:
         if f"_short_{prefer}." in s:
             return s
+    # A job whose SOURCE was already a native Short (video_format=="short")
+    # stores its single main render as shorts_paths=[video_<id>_main.mp4] —
+    # that filename never carries a "_short_<n>." suffix, so the loop above
+    # never matches even though it's the only (and correct) vertical file
+    # available. Without this, self_publish_tiktok/instagram always returned
+    # "no_short" for every native-Short mirror despite a ready 9:16 file existing.
+    if len(shorts) == 1:
+        return shorts[0]
     return None
 
 

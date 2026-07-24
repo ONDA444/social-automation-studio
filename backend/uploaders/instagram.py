@@ -180,9 +180,15 @@ def upload_reel(video_path: str, caption: str, credentials: dict, public_url: st
                 "error": "Não foi possível expor o vídeo em URL pública (transfer.sh)."}
     try:
         # 1) create container
+        # thumb_offset picks the cover frame Meta shows in Explore/grid/search
+        # BEFORE autoplay — without it Meta defaults to frame 0, which for these
+        # recaps is routinely a fade-in/black opening frame. A fixed offset a
+        # bit past the open is a safe engineering default (not an editorial
+        # choice), and costs nothing since it's just another form field.
         c = httpx.post(f"{GRAPH}/{ig_user}/media", params={
             "media_type": "REELS", "video_url": video_url,
             "caption": caption[:2200], "access_token": token,
+            "thumb_offset": 1200,
         }, timeout=60)
         c.raise_for_status()
         container_id = c.json()["id"]

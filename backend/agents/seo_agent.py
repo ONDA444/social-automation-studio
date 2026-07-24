@@ -15,6 +15,7 @@ from backend.agents.keyword_research import region_for_language, related_search_
 from backend.config import settings
 from backend import llm
 from backend import runtime_settings
+from backend.uploaders.youtube import cap_tags_to_budget
 
 logger = logging.getLogger("studio.seo")
 
@@ -128,8 +129,16 @@ class SEOAgent(BaseAgent):
         # (empty list on any failure); off the event loop since pytrends is a
         # blocking network call.
         lang_code = language or "pt-BR"
+        # Google Trends' related_queries() only returns data when the seed itself
+        # has measurable search volume. A full LLM-generated clickbait title (8-10
+        # words, very specific) almost never has that volume, so passing the title
+        # made this grounding silently return empty nearly every time. A short seed
+        # keyword (same shape ready_video_seo.py already uses as "primary") has a
+        # real chance of matching an actual search term.
+        seed_keywords = script.get("seo_keywords") or []
+        trends_seed = seed_keywords[0] if seed_keywords else script.get("title", "")
         real_queries = await asyncio.to_thread(
-            related_search_queries, script.get("title", ""), lang_code, region_for_language(lang_code)
+            related_search_queries, trends_seed, lang_code, region_for_language(lang_code)
         )
 
         self.emit("progress", "Gerando SEO por plataforma", progress=84)
@@ -440,7 +449,7 @@ JSON EXATO (preencha todos os campos, não omita plataformas):
     def _clamp(seo: dict) -> dict:
         yt = seo.setdefault("youtube", {})
         yt["title"] = (yt.get("title") or "Vídeo")[:100]
-        yt["tags"] = (yt.get("tags") or [])[:30]
+        yt["tags"] = cap_tags_to_budget(yt.get("tags") or [])
         tk = seo.setdefault("tiktok", {})
         tk["caption"] = (tk.get("caption") or "")[:150]
         ig = seo.setdefault("instagram", {})

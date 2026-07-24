@@ -91,13 +91,25 @@ class ContentCalendarAgent:
         if mode in ("smart", "trending_aware"):
             tz = _resolve_tz(cfg.timezone if cfg else None)
             learned = self._smart_times(account_id, tz)
-            # Always hand back a per_day-sized spread: learned good hours first, then
-            # fill from the general best-times so videos_per_day is ALWAYS honored even
-            # when analytics are sparse (e.g. learned=['06:00'] alone would post once,
-            # at a noise hour). dict.fromkeys dedups while preserving the learned-first
-            # priority.
-            spread = list(dict.fromkeys(learned + BEST_TIMES_RANKED))
-            return self._spread_times(spread, per_day)
+            # Proven hours (from _SMART_MIN_MEASURED+ real measured videos) bypass
+            # the anti-cluster gap filter entirely — they're already validated by
+            # real data, not a guess _spread_times needs to protect against
+            # clustering. BR prime time is typically a contiguous block (e.g.
+            # 20:00 and 21:00, 1h apart): running the gap filter over learned+
+            # BEST_TIMES_RANKED together used to drop the 2nd learned hour just
+            # for being <2h from the 1st, replacing a proven hour with a generic
+            # one that never had a single measured view on this account. Only
+            # run the gap filter on the BEST_TIMES_RANKED filler needed to reach
+            # per_day, never on the learned hours themselves.
+            learned_ranked = learned[:per_day]
+            extra_needed = per_day - len(learned_ranked)
+            filler = (
+                self._spread_times(
+                    [t for t in BEST_TIMES_RANKED if t not in learned_ranked], extra_needed
+                )
+                if extra_needed > 0 else []
+            )
+            return sorted(learned_ranked + filler)[:per_day]
         return configured or self.best_times(per_day)
 
     @staticmethod
@@ -144,14 +156,17 @@ class ContentCalendarAgent:
 
         tz = _resolve_tz(cfg.timezone if cfg else None)
         hhmm = self.resolve_post_times(account_id, cfg, max(1, per_day))
+        # Same fix as _fixed_slots: slice to per_day BEFORE sorting, so a
+        # per_day cut keeps the configured/priority-ordered hours instead of
+        # always keeping whichever hours happen to be chronologically first.
         times = []
-        for s in hhmm:
+        for s in hhmm[: max(1, per_day)]:
             try:
                 h, m = str(s).split(":")
                 times.append(_time(int(h), int(m)))
             except Exception:  # noqa: BLE001
                 continue
-        times = sorted(times)[: max(1, per_day)]
+        times = sorted(times)
         day = now_utc.astimezone(tz).date()
         out: list[datetime] = []
         for d in range(days + 1):
@@ -172,7 +187,13 @@ class ContentCalendarAgent:
         scheduled_at is the correct UTC instant (22:00Z in BRT), fixing the old
         3h drift where naive HH:MM was treated as if it were already UTC.
         """
-        times = sorted(self._parse(t) for t in post_times)[: max(1, per_day)]
+        # Slice to per_day BEFORE sorting by clock time. Sorting first and then
+        # slicing silently keeps only the chronologically-earliest slots — if an
+        # admin configured post_times=['08:00','12:00','19:00','21:00'] but
+        # videos_per_day is 2, that used to always post at 08:00/12:00 and
+        # permanently drop the configured prime-time hours (19h/21h), with no
+        # log or warning that the peak times stopped being used.
+        times = sorted(self._parse(t) for t in post_times[: max(1, per_day)])
         now = _utcnow()
         slots: list[datetime] = []
         day = now.astimezone(tz).date()  # 'today' as seen in the account's timezone
