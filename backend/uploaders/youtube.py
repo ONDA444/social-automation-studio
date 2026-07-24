@@ -164,7 +164,24 @@ def _service(creds: dict):
     # exact 18-21min dead-token cascade the deadline was meant to prevent. 30s
     # is still generous for a real chunk/refresh round-trip and guarantees the
     # 240s loop deadline gets checked often enough to actually hold.
-    http = google_auth_httplib2.AuthorizedHttp(_credentials(creds), http=httplib2.Http(timeout=30))
+    raw_http = httplib2.Http(timeout=30)
+    # YouTube's (and Drive's) resumable-upload protocol repurposes HTTP 308 as
+    # "Resume Incomplete" — a normal mid-upload chunk-progress signal, NOT a
+    # redirect. httplib2's default redirect_codes still includes 308, so
+    # without this it sometimes treats a 308 chunk response as a redirect
+    # lacking a Location: header and raises RedirectMissingLocation — which
+    # our code (over-broadly) classified as a generic retryable error. Confirmed
+    # in production: that raise happens AFTER YouTube already accepted the
+    # bytes, so publisher.py's blind up-to-3x retry re-uploaded the same file
+    # from scratch, producing 2-3 duplicate real (if stuck-"Pendente") videos
+    # from ONE job. googleapiclient.http.build_http() strips 308 for exactly
+    # this reason; we build our own Http() for the custom 30s timeout (see
+    # comment above), so replicate that same fix here instead of using build_http().
+    try:
+        raw_http.redirect_codes = raw_http.redirect_codes - {308}
+    except AttributeError:  # older httplib2 without redirect_codes
+        pass
+    http = google_auth_httplib2.AuthorizedHttp(_credentials(creds), http=raw_http)
     return build("youtube", "v3", http=http, cache_discovery=False)
 
 

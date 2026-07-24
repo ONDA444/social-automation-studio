@@ -99,5 +99,29 @@ class YoutubeUploadStallDetectionTests(unittest.TestCase):
         self.assertIn("travado", result.get("error", "").lower())
 
 
+class YoutubeServiceRedirectCodesTests(unittest.TestCase):
+    """Regression test for the duplicate-upload bug confirmed live in
+    production: YouTube's resumable-upload protocol repurposes HTTP 308 as
+    "Resume Incomplete" (a normal mid-upload progress signal), but httplib2's
+    default redirect_codes still includes 308 — without stripping it, a 308
+    chunk response can raise httplib2.RedirectMissingLocation AFTER YouTube
+    already accepted the bytes, and publisher.py's blind retry then
+    re-uploaded the same file from scratch, producing 2-3 duplicate real
+    videos from a single VideoJob. googleapiclient.http.build_http() strips
+    308 for exactly this documented reason; _service() must replicate it
+    since it builds its own httplib2.Http() for a custom timeout instead of
+    using build_http()."""
+
+    def test_service_strips_308_from_redirect_codes(self) -> None:
+        creds = {"token": "x", "refresh_token": "y", "client_id": "a", "client_secret": "b"}
+        svc = youtube._service(creds)
+        redirect_codes = svc._http.http.redirect_codes
+        self.assertNotIn(308, redirect_codes)
+        # Real redirects must still be handled normally — this isn't a blanket
+        # "ignore all redirects" hack, just the one code YouTube/Drive repurpose.
+        self.assertIn(301, redirect_codes)
+        self.assertIn(302, redirect_codes)
+
+
 if __name__ == "__main__":
     unittest.main()
