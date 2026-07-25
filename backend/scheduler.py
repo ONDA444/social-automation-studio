@@ -966,12 +966,20 @@ def _finalize_ready_video_job(
     `retry_ready_video_job` (the only safe retry path for a `from_ready_video`
     job — see dispatch.py's `_is_ready_video_job` guard) so the two paths
     can't silently drift apart."""
-    from backend.agents.ready_video_seo import build_ready_video_package
+    from backend.agents.ready_video_seo import build_ready_video_package, is_audio_ready, render_audio_track_as_video
     from backend.config import settings
     from backend.models import JobStatus
 
     try:
         local_path = drive.download_for_job(ready, job.id)
+        if is_audio_ready(ready.name, ready.mime_type):
+            # A music-only Drive niche has no video to publish — wrap the
+            # track into a real MP4 (static cover + audio) so it can go out
+            # like any other ready_video. See ready_video_seo.py for why.
+            local_path = render_audio_track_as_video(
+                job.id, local_path, title_seed, ready.niche or acct.drive_niche or acct.niche or "",
+                video_format,
+            )
         job.main_video_path = local_path
         if video_format == "short":
             job.shorts_paths = [local_path]

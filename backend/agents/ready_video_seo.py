@@ -188,6 +188,67 @@ def _generate_thumbnail(job_id: int, context: dict, analysis: dict) -> str | Non
         return str(dst)
 
 
+def is_audio_ready(name: str | None, mime_type: str | None) -> bool:
+    """Same check drive_library.py uses to spot music-only Drive folders."""
+    from backend.agents.drive_library import is_audio_file
+
+    return is_audio_file(name or "", mime_type)
+
+
+def render_audio_track_as_video(
+    job_id: int, audio_path: str, title_seed: str, niche: str, video_format: str
+) -> str:
+    """Wrap a music track (a bare Drive audio niche has nothing else to
+    publish — see drive_library.py's is_audio_file scan) into a real MP4:
+    a generated still cover image held for the whole track length, muxed
+    with the original audio. YouTube has no "audio-only upload"; every
+    publish needs a video stream, so this is the minimum viable one —
+    matches the "static cover" music-channel format the user asked for.
+    Raises on failure (unlike the best-effort thumbnail helpers above) —
+    without a video there is nothing to publish, so the caller must see it."""
+    import asyncio
+
+    from backend.agents.visuals import VisualsAgent
+
+    out_dir = Path(settings.abs_path(settings.temp_dir)) / "ready_videos" / f"job_{job_id}"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    cover_raw = out_dir / "cover_raw.jpg"
+    cover_final = out_dir / "cover.jpg"
+    video_out = out_dir / "audio_as_video.mp4"
+
+    is_short = video_format == "short"
+    h = max(360, min(1080, settings.video_resolution))
+    w = (round(h * 16 / 9)) & ~1
+    if is_short:
+        w, h = h, (round(h * 16 / 9)) & ~1  # portrait: swap so height is the long side
+
+    title = (title_seed or Path(audio_path).stem or "Musica").strip()
+    prompt = (
+        f"capa de album para a musica '{title}', estilo {niche or 'ambiente'}, "
+        "arte abstrata, cores suaves, alto contraste, sem texto, sem rosto"
+    )
+    agent = VisualsAgent(job_id=job_id, emit=False)
+    asyncio.run(agent._generate_image(prompt, cover_raw, w, h))
+    try:
+        cfg = {"pos": "bottom", "fill": (255, 255, 255), "stroke": (10, 10, 10)}
+        agent._compose_thumb(cover_raw, cover_final, _thumbnail_text(title), w, h, cfg)
+    except Exception as exc:  # noqa: BLE001
+        logger.info("Music cover composition failed for job %s, using raw image: %s", job_id, exc)
+        cover_final = cover_raw
+
+    cmd = [
+        "ffmpeg", "-y", "-loop", "1", "-i", str(cover_final), "-i", audio_path,
+        "-c:v", "libx264", "-tune", "stillimage", "-pix_fmt", "yuv420p",
+        "-vf", f"scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h}",
+        "-c:a", "aac", "-b:a", "192k", "-shortest", str(video_out),
+    ]
+    proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
+                           errors="replace", timeout=600)
+    if proc.returncode != 0 or not video_out.exists() or video_out.stat().st_size == 0:
+        raise RuntimeError(f"ffmpeg falhou ao gerar video a partir do audio: {(proc.stderr or '')[-800:]}")
+    return str(video_out)
+
+
 def analyze_ready_video(job_id: int, local_path: str, context: dict) -> dict:
     probe = _probe(local_path)
     analysis: dict = {

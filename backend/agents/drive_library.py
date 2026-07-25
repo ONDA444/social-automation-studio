@@ -338,10 +338,16 @@ class DriveLibraryService:
             files_seen += 1
             item_name = item.get("name") or "video"
             item_mime = item.get("mimeType")
-            if is_audio_file(item_name, item_mime):
-                ignored_audio += 1
-                continue
-            if not is_video_file(item_name, item_mime):
+            is_audio = is_audio_file(item_name, item_mime)
+            if is_audio:
+                # Music-only folders (e.g. "royalty-free music" niches) used to
+                # be entirely skipped here — every file ignored, so the channel
+                # never had anything to publish. Audio tracks ARE valid source
+                # material: scheduler.py's _finalize_ready_video_job renders a
+                # still-cover-image video around the track before publishing,
+                # the same way a Drive video clip gets picked up and published.
+                ignored_audio += 1  # kept for the "X eram audio" sync summary
+            elif not is_video_file(item_name, item_mime):
                 ignored_non_video += 1
                 continue
             seen.add(item["id"])
