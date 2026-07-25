@@ -26,7 +26,8 @@ class YoutubeUploadChunkingTests(unittest.TestCase):
         fake_yt.videos.return_value.insert.return_value = fake_request
 
         with patch.object(youtube, "_missing_libs", return_value=None), \
-             patch.object(youtube, "_service", return_value=fake_yt), \
+             patch.object(youtube, "_service_with_creds",
+                           return_value=(fake_yt, SimpleNamespace(refresh_token=None))), \
              patch("googleapiclient.http.MediaFileUpload", _FakeMediaFileUpload):
             result = youtube.upload_video(
                 video_path="fake.mp4",
@@ -60,7 +61,8 @@ class YoutubeUploadStallDetectionTests(unittest.TestCase):
         fake_yt.videos.return_value.insert.return_value = fake_request
 
         with patch.object(youtube, "_missing_libs", return_value=None), \
-             patch.object(youtube, "_service", return_value=fake_yt), \
+             patch.object(youtube, "_service_with_creds",
+                           return_value=(fake_yt, SimpleNamespace(refresh_token=None))), \
              patch("googleapiclient.http.MediaFileUpload"), \
              patch("time.monotonic", side_effect=monotonic_values):
             return youtube.upload_video(
@@ -121,6 +123,70 @@ class YoutubeServiceRedirectCodesTests(unittest.TestCase):
         # "ignore all redirects" hack, just the one code YouTube/Drive repurpose.
         self.assertIn(301, redirect_codes)
         self.assertIn(302, redirect_codes)
+
+
+class RotatedRefreshTokenPersistenceTests(unittest.TestCase):
+    """Regression test for a real gap found while investigating why connected
+    Google accounts were expiring far faster than before: google-auth
+    refreshes (and, on rotation, replaces) the refresh_token INSIDE the
+    in-memory Credentials object during a call, but nothing read that back —
+    so a rotated refresh_token was silently discarded, and the next call
+    would present the now-invalidated OLD token to Google and fail with
+    invalid_grant even though the account was never disconnected."""
+
+    def test_unchanged_refresh_token_returns_none(self) -> None:
+        creds = {"refresh_token": "same-token"}
+        creds_obj = SimpleNamespace(refresh_token="same-token")
+        self.assertIsNone(youtube._rotated_credentials(creds, creds_obj))
+
+    def test_rotated_refresh_token_returns_updated_dict(self) -> None:
+        creds = {"refresh_token": "old-token", "client_id": "a"}
+        creds_obj = SimpleNamespace(refresh_token="new-token")
+        rotated = youtube._rotated_credentials(creds, creds_obj)
+        self.assertIsNotNone(rotated)
+        self.assertEqual(rotated["refresh_token"], "new-token")
+        self.assertEqual(rotated["client_id"], "a")  # other fields preserved
+
+    def test_missing_new_token_is_not_treated_as_rotation(self) -> None:
+        creds = {"refresh_token": "old-token"}
+        creds_obj = SimpleNamespace(refresh_token=None)
+        self.assertIsNone(youtube._rotated_credentials(creds, creds_obj))
+
+    def test_upload_video_success_includes_rotated_credentials_when_google_rotates_it(self) -> None:
+        fake_request = MagicMock()
+        fake_request.next_chunk.return_value = (None, {"id": "vid123"})
+        fake_yt = MagicMock()
+        fake_yt.videos.return_value.insert.return_value = fake_request
+        rotated_creds_obj = SimpleNamespace(refresh_token="brand-new-token")
+
+        with patch.object(youtube, "_missing_libs", return_value=None), \
+             patch.object(youtube, "_service_with_creds", return_value=(fake_yt, rotated_creds_obj)), \
+             patch("googleapiclient.http.MediaFileUpload"):
+            result = youtube.upload_video(
+                video_path="fake.mp4", title="t", description="d", tags=[],
+                credentials={"refresh_token": "old-token"},
+            )
+
+        self.assertTrue(result.get("ok"))
+        self.assertEqual(result.get("rotated_credentials", {}).get("refresh_token"), "brand-new-token")
+
+    def test_upload_video_success_omits_key_when_token_did_not_rotate(self) -> None:
+        fake_request = MagicMock()
+        fake_request.next_chunk.return_value = (None, {"id": "vid123"})
+        fake_yt = MagicMock()
+        fake_yt.videos.return_value.insert.return_value = fake_request
+        same_creds_obj = SimpleNamespace(refresh_token="old-token")
+
+        with patch.object(youtube, "_missing_libs", return_value=None), \
+             patch.object(youtube, "_service_with_creds", return_value=(fake_yt, same_creds_obj)), \
+             patch("googleapiclient.http.MediaFileUpload"):
+            result = youtube.upload_video(
+                video_path="fake.mp4", title="t", description="d", tags=[],
+                credentials={"refresh_token": "old-token"},
+            )
+
+        self.assertTrue(result.get("ok"))
+        self.assertNotIn("rotated_credentials", result)
 
 
 if __name__ == "__main__":

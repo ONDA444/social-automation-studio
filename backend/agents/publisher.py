@@ -289,6 +289,17 @@ async def run_publish(job_id: int, platforms: list | None = None) -> dict:
                     results["youtube"] = await publish_youtube(
                         job, seo, creds, publish_at, shorts, privacy,
                         content_language=getattr(acct, "content_language", None) or "pt-BR")
+                    # google-auth-httplib2 refreshes tokens transparently inside
+                    # upload_video()'s in-memory Credentials object; if Google ever
+                    # rotates the refresh_token during that refresh, it used to be
+                    # silently dropped when the call returned — the next publish
+                    # would present the now-invalidated OLD token and fail with
+                    # invalid_grant, even though the account was never actually
+                    # disconnected. Persist it the moment we see one.
+                    rotated = results["youtube"].get("rotated_credentials")
+                    if rotated:
+                        svc.set_credentials(acct.id, rotated)
+                        logger.info("YouTube refresh_token rotated by Google for account %s — persisted.", acct.id)
                 elif platform == "tiktok":
                     # Same durable "uploading" marker as YouTube above — without it,
                     # orphan recovery (main._apply_orphan_transition) has no way to

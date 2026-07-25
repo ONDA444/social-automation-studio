@@ -143,7 +143,16 @@ def _credentials(creds: dict):
     )
 
 
-def _service(creds: dict):
+def _service_with_creds(creds: dict):
+    """Like _service(), but also returns the underlying Credentials object so
+    the caller can detect (and persist) a refresh_token Google rotates during
+    an internal refresh. google-auth-httplib2's AuthorizedHttp transparently
+    refreshes the access token (and, on rotation, the refresh_token) INSIDE
+    this Credentials instance on every call — but nothing used to read that
+    back, so a rotated refresh_token was silently lost the moment this
+    function returned. The NEXT call would then present the now-invalidated
+    OLD refresh_token to Google and fail with invalid_grant, even though the
+    account was never actually disconnected by the user."""
     import google_auth_httplib2
     import httplib2
     from googleapiclient.discovery import build
@@ -181,8 +190,31 @@ def _service(creds: dict):
         raw_http.redirect_codes = raw_http.redirect_codes - {308}
     except AttributeError:  # older httplib2 without redirect_codes
         pass
-    http = google_auth_httplib2.AuthorizedHttp(_credentials(creds), http=raw_http)
-    return build("youtube", "v3", http=http, cache_discovery=False)
+    creds_obj = _credentials(creds)
+    http = google_auth_httplib2.AuthorizedHttp(creds_obj, http=raw_http)
+    return build("youtube", "v3", http=http, cache_discovery=False), creds_obj
+
+
+def _service(creds: dict):
+    service, _ = _service_with_creds(creds)
+    return service
+
+
+def _rotated_credentials(creds: dict, creds_obj) -> dict | None:
+    """None if the refresh_token google-auth is still holding matches what we
+    started the call with; otherwise the full credentials dict with the new
+    refresh_token, for the caller (publisher.py, which owns the DB session)
+    to persist via AccountProfileService.set_credentials."""
+    new_rt = getattr(creds_obj, "refresh_token", None)
+    old_rt = creds.get("refresh_token")
+    if new_rt and old_rt and new_rt != old_rt:
+        logger.warning(
+            "YouTube refresh_token rotated by Google mid-call (prefix %s... -> %s...) "
+            "— caller must persist or the OLD token will fail with invalid_grant next time.",
+            old_rt[:8], new_rt[:8],
+        )
+        return {**creds, "refresh_token": new_rt}
+    return None
 
 
 def _fetch_channel(creds: dict) -> dict:
@@ -506,7 +538,7 @@ def upload_video(
     try:
         from googleapiclient.http import MediaFileUpload
 
-        yt = _service(credentials)
+        yt, creds_obj = _service_with_creds(credentials)
         # Safe default: private. STUDIO_TEST_MODE forces private so test runs
         # never publish a real public video by accident.
         import os
@@ -592,8 +624,12 @@ def upload_video(
             except Exception as exc:  # noqa: BLE001
                 logger.warning("thumbnail set failed: %s", exc)
 
-        return {"ok": True, "platform": "youtube", "video_id": video_id,
-                "url": f"https://youtu.be/{video_id}", "status": "published"}
+        result = {"ok": True, "platform": "youtube", "video_id": video_id,
+                  "url": f"https://youtu.be/{video_id}", "status": "published"}
+        rotated = _rotated_credentials(credentials, creds_obj)
+        if rotated:
+            result["rotated_credentials"] = rotated
+        return result
     except Exception as exc:  # noqa: BLE001
         msg = str(exc)
         if "quota" in msg.lower():
@@ -614,7 +650,15 @@ def upload_video(
             status = "auth_error"
         else:
             status = "error"
-        return {"ok": False, "platform": "youtube", "error": msg, "status": status}
+        result = {"ok": False, "platform": "youtube", "error": msg, "status": status}
+        # Even a failed upload may have refreshed (and rotated) the token before
+        # the eventual error — persist it so the retry doesn't inherit a dead one.
+        creds_obj = locals().get("creds_obj")
+        if creds_obj is not None:
+            rotated = _rotated_credentials(credentials, creds_obj)
+            if rotated:
+                result["rotated_credentials"] = rotated
+        return result
 
 
 def get_video_processing_status(video_id: str, credentials: dict) -> dict:
