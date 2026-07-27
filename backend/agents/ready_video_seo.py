@@ -236,16 +236,36 @@ def render_audio_track_as_video(
         logger.info("Music cover composition failed for job %s, using raw image: %s", job_id, exc)
         cover_final = cover_raw
 
+    # -threads is NOT optional here: left to auto, x264 spawns one thread per
+    # HOST core (60+ on Railway) and the per-thread buffers blow the container
+    # memory limit -> SIGKILL (rc=-9) a few seconds into the encode, with no
+    # error text in stderr at all. video_editor.py's VENC learned this the hard
+    # way; the first version of this function didn't reuse that cap and died in
+    # production for exactly that reason. -r 10 also matters: at the default
+    # 25/30fps a 6-minute track is 9-10k frames of an unchanging image, which
+    # is pure wasted encode time (and the 600s timeout below would trip on
+    # longer tracks). A still cover at 10fps is well within what YouTube accepts.
     cmd = [
         "ffmpeg", "-y", "-loop", "1", "-i", str(cover_final), "-i", audio_path,
-        "-c:v", "libx264", "-tune", "stillimage", "-pix_fmt", "yuv420p",
+        "-c:v", "libx264", "-tune", "stillimage", "-preset", "veryfast",
+        "-pix_fmt", "yuv420p", "-r", "10",
+        "-threads", str(max(1, settings.ffmpeg_threads)),
         "-vf", f"scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h}",
         "-c:a", "aac", "-b:a", "192k", "-shortest", str(video_out),
     ]
     proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
-                           errors="replace", timeout=600)
+                           errors="replace", timeout=900)
     if proc.returncode != 0 or not video_out.exists() or video_out.stat().st_size == 0:
-        raise RuntimeError(f"ffmpeg falhou ao gerar video a partir do audio: {(proc.stderr or '')[-800:]}")
+        # Keep BOTH ends of stderr: ffmpeg's real error is on the LAST line, but
+        # callers truncate the composed message to 500 chars, which used to cut
+        # exactly that line off and leave only useless progress spam. Also
+        # surface returncode — a negative value (e.g. -9 = SIGKILL) is the only
+        # way to tell an OOM kill apart from a genuine ffmpeg error.
+        err = (proc.stderr or "").strip()
+        tail = err[-260:] if len(err) > 260 else err
+        raise RuntimeError(
+            f"ffmpeg falhou (rc={proc.returncode}) ao gerar video a partir do audio: ...{tail}"
+        )
     return str(video_out)
 
 

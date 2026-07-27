@@ -36,6 +36,11 @@ _RULES: tuple[tuple[tuple[str, ...], str], ...] = (
         "O sistema tenta de novo automaticamente.",
     ),
     (
+        ("Falha ao gerar video a partir do audio",),
+        "A música baixou certo, mas a montagem do vídeo (capa + áudio) falhou "
+        "no servidor. O sistema tenta de novo automaticamente.",
+    ),
+    (
         ("scriptwriter esgotou", "LLM indisponível", "esgotou (LLM"),
         "A cota gratuita de IA para roteiro esgotou por hoje. Tenta de novo "
         "automaticamente mais tarde.",

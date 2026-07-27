@@ -168,5 +168,190 @@ class IsAudioReadyTests(unittest.TestCase):
         self.assertFalse(rvs.is_audio_ready("clip.mp4", "video/mp4"))
 
 
+class FfmpegResourceCapsTests(unittest.TestCase):
+    """Regression test for a REAL production failure: the first version of
+    render_audio_track_as_video() built its own ffmpeg command without the
+    -threads cap that video_editor.py's VENC already uses. On Railway, x264
+    then spawned one thread per HOST core (60+), blew the container memory
+    limit, and was SIGKILLed ~7s in — every music job failed with rc=-9 and
+    an empty stderr. The cap is load-bearing, not cosmetic."""
+
+    def _captured_cmd(self, video_format="long"):
+        captured = {}
+
+        class _FakeProc:
+            returncode = 0
+            stderr = ""
+
+        def fake_run(cmd, **kwargs):
+            captured["cmd"] = cmd
+            captured["timeout"] = kwargs.get("timeout")
+            # Create the expected output file so the size check passes.
+            Path(cmd[-1]).parent.mkdir(parents=True, exist_ok=True)
+            Path(cmd[-1]).write_bytes(b"fake-mp4-bytes")
+            return _FakeProc()
+
+        async def fake_generate_image(self, prompt, dst, w, h, label=""):
+            from PIL import Image
+            Image.new("RGB", (w, h), (0, 0, 0)).save(dst, "JPEG")
+            return "fake"
+
+        with patch.object(VisualsAgent, "_generate_image", fake_generate_image), \
+             patch.object(rvs.subprocess, "run", fake_run):
+            rvs.render_audio_track_as_video(
+                808080, "in.mp3", "Titulo", "ambiente", video_format,
+            )
+        import shutil
+        shutil.rmtree(
+            Path(settings.abs_path(settings.temp_dir)) / "ready_videos" / "job_808080",
+            ignore_errors=True,
+        )
+        return captured
+
+    def test_ffmpeg_command_caps_thread_count(self) -> None:
+        cmd = self._captured_cmd()["cmd"]
+        self.assertIn("-threads", cmd)
+        threads = int(cmd[cmd.index("-threads") + 1])
+        self.assertGreaterEqual(threads, 1)
+        # Must be the configured cap, never left to ffmpeg's host-core default.
+        self.assertEqual(threads, max(1, settings.ffmpeg_threads))
+
+    def test_ffmpeg_command_lowers_framerate_for_a_still_image(self) -> None:
+        # A still cover at 25/30fps is ~10k identical frames for a 6-min track:
+        # pure wasted encode time that also risks tripping the subprocess timeout.
+        cmd = self._captured_cmd()["cmd"]
+        self.assertIn("-r", cmd)
+        self.assertLessEqual(int(cmd[cmd.index("-r") + 1]), 15)
+
+    def test_timeout_is_generous_enough_for_a_full_length_track(self) -> None:
+        self.assertGreaterEqual(self._captured_cmd()["timeout"], 900)
+
+
+class FfmpegFailureDiagnosticsTests(unittest.TestCase):
+    """The original error text was `stderr[-800:]`, but the caller truncates
+    the whole composed message to 500 chars — so ffmpeg's actual error (always
+    the LAST line) got cut off and only useless progress spam survived into
+    the DB. The returncode also has to be visible: only a negative value
+    (-9 = SIGKILL) distinguishes an OOM kill from a real ffmpeg error."""
+
+    def test_error_message_includes_returncode_and_survives_500_char_truncation(self) -> None:
+        class _FakeProc:
+            returncode = -9
+            # Realistic shape: lots of progress spam, real error only at the end.
+            stderr = ("frame=  21 fps=5.2 q=28.0 size=0KiB speed=0.19x    \n" * 40
+                       + "Conversion failed! out of memory")
+
+        def fake_run(cmd, **kwargs):
+            return _FakeProc()
+
+        async def fake_generate_image(self, prompt, dst, w, h, label=""):
+            from PIL import Image
+            Image.new("RGB", (w, h), (0, 0, 0)).save(dst, "JPEG")
+            return "fake"
+
+        with patch.object(VisualsAgent, "_generate_image", fake_generate_image), \
+             patch.object(rvs.subprocess, "run", fake_run):
+            with self.assertRaises(RuntimeError) as ctx:
+                rvs.render_audio_track_as_video(
+                    707070, "in.mp3", "Titulo", "ambiente", "long",
+                )
+
+        msg = str(ctx.exception)
+        self.assertIn("rc=-9", msg)
+        # The part that matters must survive the caller's [:500] clamp.
+        self.assertIn("out of memory", msg[:500])
+
+        import shutil
+        shutil.rmtree(
+            Path(settings.abs_path(settings.temp_dir)) / "ready_videos" / "job_707070",
+            ignore_errors=True,
+        )
+
+
+class FailingStageIsNamedAccuratelyTests(unittest.TestCase):
+    """An ffmpeg failure while wrapping a music track used to be recorded as
+    "Falha ao baixar video do Drive" (download and render share one try block),
+    and error_messages.py then told the user it was a network/permission
+    problem with Drive. That mislabel sent a real debugging session chasing
+    Drive permissions while the actual fault was an OOM-killed encode."""
+
+    def _setup(self, ready_name: str, ready_mime: str):
+        from backend.models import PlatformAccount, VideoJob, JobStatus
+
+        engine = create_engine("sqlite:///:memory:", future=True)
+        Base.metadata.create_all(bind=engine)
+        Session = sessionmaker(bind=engine, future=True)
+        db = Session()
+        account = PlatformAccount(platform="youtube", display_name="Canal", niche="musicas")
+        db.add(account)
+        db.flush()
+        ready = ReadyVideo(
+            drive_file_id="track-abc", name=ready_name, mime_type=ready_mime,
+            content_type="film_recap_ai_images", video_format="long",
+            account_id=account.id, status="reserved",
+        )
+        db.add(ready)
+        db.flush()
+        job = VideoJob(
+            title="Musica", mode="from_ready_video",
+            content_type="film_recap_ai_images", video_format="long",
+            account_id=account.id, status=JobStatus.PROCESSING,
+            video_context={"source": "drive_ready_video", "ready_video_id": ready.id},
+        )
+        db.add(job)
+        db.flush()
+        ready.reserved_job_id = job.id
+        db.commit()
+        return db, account, ready, job
+
+    def test_audio_render_failure_is_not_labelled_a_drive_download_failure(self) -> None:
+        from backend import scheduler
+        from backend.agents.drive_library import DriveLibraryService
+
+        db, account, ready, job = self._setup("track.mp3", "audio/mpeg")
+        drive = DriveLibraryService(db)
+
+        with patch.object(DriveLibraryService, "download_for_job", return_value="/tmp/track.mp3"), \
+             patch.object(scheduler, "_READY_VIDEO_MAX_ATTEMPTS", 99), \
+             patch("backend.agents.ready_video_seo.render_audio_track_as_video",
+                   side_effect=RuntimeError("ffmpeg falhou (rc=-9) ...")):
+            scheduler._finalize_ready_video_job(
+                db, drive, job, ready, account, title_seed="Musica", video_format="long",
+            )
+
+        db.refresh(job)
+        self.assertIn("gerar video a partir do audio", job.error_message)
+        self.assertNotIn("baixar video do Drive", job.error_message)
+
+    def test_real_drive_download_failure_still_says_download(self) -> None:
+        from backend import scheduler
+        from backend.agents.drive_library import DriveLibraryService
+
+        db, account, ready, job = self._setup("clip.mp4", "video/mp4")
+        drive = DriveLibraryService(db)
+
+        with patch.object(DriveLibraryService, "download_for_job",
+                          side_effect=RuntimeError("403 forbidden")), \
+             patch.object(scheduler, "_READY_VIDEO_MAX_ATTEMPTS", 99):
+            scheduler._finalize_ready_video_job(
+                db, drive, job, ready, account, title_seed="Video", video_format="long",
+            )
+
+        db.refresh(job)
+        # error_messages.py keys its friendly Drive text off this exact phrase.
+        self.assertIn("baixar video do Drive", job.error_message)
+
+
+class FriendlyErrorForAudioRenderTests(unittest.TestCase):
+    def test_audio_render_failure_gets_its_own_plain_portuguese_message(self) -> None:
+        from backend.error_messages import friendly_error
+
+        msg = friendly_error("Falha ao gerar video a partir do audio: ffmpeg falhou (rc=-9)")
+        self.assertIsNotNone(msg)
+        self.assertIn("música", msg.lower())
+        # Must NOT reuse the misleading Drive network/permission wording.
+        self.assertNotIn("permissão", msg.lower())
+
+
 if __name__ == "__main__":
     unittest.main()

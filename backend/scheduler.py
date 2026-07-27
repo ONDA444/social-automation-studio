@@ -970,16 +970,25 @@ def _finalize_ready_video_job(
     from backend.config import settings
     from backend.models import JobStatus
 
+    # Which step we're on, so the except-block below can name the REAL failing
+    # stage. Before this, an ffmpeg failure while wrapping a music track was
+    # reported to the user as "Falha ao baixar video do Drive" (and
+    # error_messages.py then told them it was a network/permission problem) —
+    # actively misleading, and it sent a whole debugging session down the
+    # wrong path chasing Drive permissions.
+    stage = "baixar video do Drive"
     try:
         local_path = drive.download_for_job(ready, job.id)
         if is_audio_ready(ready.name, ready.mime_type):
             # A music-only Drive niche has no video to publish — wrap the
             # track into a real MP4 (static cover + audio) so it can go out
             # like any other ready_video. See ready_video_seo.py for why.
+            stage = "gerar video a partir do audio"
             local_path = render_audio_track_as_video(
                 job.id, local_path, title_seed, ready.niche or acct.drive_niche or acct.niche or "",
                 video_format,
             )
+        stage = "preparar o video do Drive"
         job.main_video_path = local_path
         if video_format == "short":
             job.shorts_paths = [local_path]
@@ -1059,11 +1068,11 @@ def _finalize_ready_video_job(
             ready.reserved_job_id = None
             ready.reserved_at = None
             job.error_message = (
-                f"Falha ao baixar video do Drive, desistindo apos {job.retry_count} "
+                f"Falha ao {stage}, desistindo apos {job.retry_count} "
                 f"tentativas: {exc}"
             )[:500]
         else:
-            job.error_message = f"Falha ao baixar video do Drive: {exc}"[:500]
+            job.error_message = f"Falha ao {stage}: {exc}"[:500]
         db.commit()
         logger.warning("ready video job failed for account %s: %s", getattr(acct, "id", None), exc)
 
