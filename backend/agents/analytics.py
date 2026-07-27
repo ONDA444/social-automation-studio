@@ -32,7 +32,7 @@ class AnalyticsAgent:
         for platform, res in (job.publish_status or {}).items():
             if not res.get("ok") or not res.get("video_id"):
                 continue
-            acct = svc.get_active_account(platform)
+            acct = self._account_for(svc, job, platform)
             creds = svc.get_credentials(acct.id) if acct else {}
             # Pull watch-time on the fixed 2h/24h/7d collect (YT Analytics latency is
             # 1-3 days, so it's worthless at 2h but populated by 24h/7d).
@@ -78,12 +78,22 @@ class AnalyticsAgent:
             return []
         svc = AccountProfileService(self.db)
         out: list[dict] = []
+        # YT Analytics latency is 1-3 days — querying it on a video <24h old just
+        # burns quota for guaranteed-empty rows. This is also the ONLY snapshot
+        # the growth loop reads (PerformanceInsights picks the latest collected_at
+        # per platform, and this row's collected_at is bumped every cycle below),
+        # so without with_analytics here, CTR/retention/watch-time stayed zeroed
+        # forever even once the Analytics API itself was reachable.
+        job_age_h = (
+            (datetime.utcnow() - job.updated_at).total_seconds() / 3600
+            if job.updated_at else 999
+        )
         for platform, res in (job.publish_status or {}).items():
             if not res.get("ok") or not res.get("video_id"):
                 continue
-            acct = svc.get_active_account(platform)
+            acct = self._account_for(svc, job, platform)
             creds = svc.get_credentials(acct.id) if acct else {}
-            metrics = self._fetch(platform, res["video_id"], creds)
+            metrics = self._fetch(platform, res["video_id"], creds, with_analytics=job_age_h >= 24)
             if metrics is None:
                 continue
             row = self.db.execute(
@@ -107,6 +117,25 @@ class AnalyticsAgent:
             out.append({"platform": platform, **metrics})
         self.db.commit()
         return out
+
+    @staticmethod
+    def _account_for(svc: AccountProfileService, job: VideoJob, platform: str) -> PlatformAccount | None:
+        """The credentials for the channel that ACTUALLY OWNS this video, not
+        whichever account happens to have the most quota left. Both collectors
+        used to call get_active_account(platform) — with 6 YouTube accounts
+        connected, that resolves to whichever has the most quota remaining
+        (account_profile.py), which in production was one of the 2 channels
+        with ZERO published videos. Since the Analytics/Data API call is
+        "channel==MINE" scoped to the token's own channel, querying with the
+        WRONG channel's credentials for a video that channel doesn't own always
+        returns 0 rows — silently, no error, just permanently empty metrics.
+        Falls back to get_active_account only for a cross-platform mirror job
+        whose own account isn't on this platform (e.g. a YouTube job mirrored
+        to TikTok)."""
+        acct = svc.get(job.account_id) if job.account_id else None
+        if acct is not None and acct.platform == platform:
+            return acct
+        return svc.get_active_account(platform)
 
     @staticmethod
     def _thumbnail_variant(thumbnail_path: str | None) -> str:
@@ -144,20 +173,31 @@ class AnalyticsAgent:
                 "raw": stats,
             }
             if with_analytics:
-                wt = self._youtube_watchtime(video_id, creds)
+                wt, wt_error = self._youtube_watchtime(video_id, creds)
                 if wt:
                     out.update(wt)
+                if wt_error:
+                    # This is the ONLY place a YT Analytics failure (e.g. the
+                    # API being disabled in the Cloud project -> 403
+                    # SERVICE_DISABLED) becomes visible anywhere. It used to be
+                    # logger.debug'd and silently discarded, which is exactly
+                    # what let CTR/retention/watch-time sit at 0 across every
+                    # row for weeks with nothing in any log anyone was
+                    # watching pointing at why.
+                    out["raw"] = {**stats, "analytics_error": wt_error}
             return out
         except Exception as exc:  # noqa: BLE001
             logger.debug("YT analytics failed: %s", exc)
             return None
 
     @staticmethod
-    def _youtube_watchtime(video_id: str, creds: dict) -> dict | None:
+    def _youtube_watchtime(video_id: str, creds: dict) -> tuple[dict | None, str | None]:
         """Watch-time via the YouTube Analytics API (scope yt-analytics.readonly, already
         granted on youtube.py:22 but never used). This is the metric the learning loop
-        actually needs (the 4000h YPP threshold is watch-HOURS, not views). Best-effort;
-        returns None so the caller still keeps the basic stats."""
+        actually needs (the 4000h YPP threshold is watch-HOURS, not views). Best-effort —
+        the caller still keeps the basic view/like/comment stats on failure — but the
+        error string (2nd tuple element) is always returned so it can be surfaced instead
+        of vanishing into a debug log nobody reads."""
         try:
             from datetime import timedelta
 
@@ -177,7 +217,7 @@ class AnalyticsAgent:
             ).execute()
             rows = resp.get("rows") or []
             if not rows:
-                return None
+                return None, None
             cols = [h.get("name") for h in resp.get("columnHeaders", [])]
             vals = dict(zip(cols, rows[0]))
             pct = float(vals.get("averageViewPercentage", 0) or 0)
@@ -203,11 +243,11 @@ class AnalyticsAgent:
                     out["impressions"] = int(ctr_vals.get("impressions", 0) or 0)
                     out["ctr"] = float(ctr_vals.get("impressionsClickThroughRate", 0) or 0)
             except Exception as exc:  # noqa: BLE001
-                logger.debug("YT CTR fetch failed: %s", exc)
-            return out
+                logger.warning("YT CTR fetch failed for video %s: %s", video_id, exc)
+            return out, None
         except Exception as exc:  # noqa: BLE001
-            logger.debug("YT watch-time failed: %s", exc)
-            return None
+            logger.warning("YT watch-time failed for video %s: %s", video_id, exc)
+            return None, str(exc)
 
     def _instagram(self, media_id: str, creds: dict) -> dict | None:
         token = creds.get("access_token")

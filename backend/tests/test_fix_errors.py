@@ -141,6 +141,68 @@ class FixErrorsTests(unittest.TestCase):
         self.assertEqual(result, {"fixed": [], "fixed_count": 0, "skipped": [], "skipped_count": 0})
         mock_dispatch.assert_not_called()
 
+    def test_render_needed_jobs_beyond_batch_limit_stay_in_error(self) -> None:
+        """Regression test: a single fix-errors call used to flip EVERY error
+        job needing a fresh render to QUEUED at once — confirmed in production,
+        this overflowed the 1-2-slot in-process render pool and stranded the
+        overflow in QUEUED for days with nothing ever revisiting it. Only
+        _FIX_ERRORS_BATCH_LIMIT render-needing jobs may be dispatched per call;
+        the rest stay ERROR (visible, not silently dropped) for the next call
+        or the periodic stuck-QUEUED sweep."""
+        db = _make_session()
+        account = PlatformAccount(platform="youtube", display_name="Canal Teste", niche="geral")
+        db.add(account)
+        db.flush()
+        total = jobs_router._FIX_ERRORS_BATCH_LIMIT + 3
+        for i in range(total):
+            db.add(VideoJob(
+                title=f"Erro {i}", mode="from_title", content_type="film_recap_ai_images",
+                video_format="long", account_id=account.id, status=JobStatus.ERROR,
+                error_message="algum erro generico de render",
+            ))
+        db.commit()
+
+        with patch("backend.routers.jobs.dispatch_job", return_value="celery") as mock_dispatch:
+            result = jobs_router.fix_errors(db=db)
+
+        self.assertEqual(result["fixed_count"], jobs_router._FIX_ERRORS_BATCH_LIMIT)
+        self.assertEqual(mock_dispatch.call_count, jobs_router._FIX_ERRORS_BATCH_LIMIT)
+        self.assertEqual(result["skipped_count"], 3)
+        # The overflow jobs are left visibly in ERROR, not silently dropped.
+        remaining_errors = db.query(VideoJob).filter(VideoJob.status == JobStatus.ERROR).count()
+        self.assertEqual(remaining_errors, 3)
+
+    def test_already_rendered_jobs_never_count_against_the_render_batch_limit(self) -> None:
+        """Republish-only jobs (main_video_path already exists) skip the
+        render pool entirely via dispatch_publish, so they must not be capped
+        by _FIX_ERRORS_BATCH_LIMIT the way render-needing jobs are."""
+        db = _make_session()
+        account = PlatformAccount(platform="youtube", display_name="Canal Teste", niche="geral")
+        db.add(account)
+        db.flush()
+        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
+            tmp.write(b"fake video bytes")
+            video_path = tmp.name
+        self.addCleanup(lambda: Path(video_path).unlink(missing_ok=True))
+
+        total = jobs_router._FIX_ERRORS_BATCH_LIMIT + 3
+        for i in range(total):
+            db.add(VideoJob(
+                title=f"Ja renderizado {i}", mode="from_title", content_type="film_recap_ai_images",
+                video_format="long", account_id=account.id, status=JobStatus.ERROR,
+                error_message="algum erro generico de publish", main_video_path=video_path,
+            ))
+        db.commit()
+
+        with patch("backend.routers.jobs.dispatch_publish", return_value="celery") as mock_publish, \
+             patch("backend.routers.jobs.dispatch_job") as mock_dispatch_job:
+            result = jobs_router.fix_errors(db=db)
+
+        self.assertEqual(result["fixed_count"], total)
+        self.assertEqual(mock_publish.call_count, total)
+        mock_dispatch_job.assert_not_called()
+        self.assertEqual(result["skipped_count"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()

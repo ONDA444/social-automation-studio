@@ -37,9 +37,10 @@ class TestYoutubeCtrCollection(unittest.TestCase):
 
         with patch("googleapiclient.discovery.build", return_value=fake_ya), \
              patch("backend.uploaders.youtube._credentials", return_value=object()):
-            result = AnalyticsAgent._youtube_watchtime("vid123", {"token": "x"})
+            result, error = AnalyticsAgent._youtube_watchtime("vid123", {"token": "x"})
 
         self.assertIsNotNone(result)
+        self.assertIsNone(error)
         self.assertEqual(result["impressions"], 1000)
         self.assertEqual(result["ctr"], 4.5)
         self.assertEqual(result["watch_minutes"], 120)

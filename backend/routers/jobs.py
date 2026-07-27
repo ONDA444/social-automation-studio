@@ -513,9 +513,18 @@ def patch_job(job_id: int, payload: JobPatch, db: Session = Depends(get_db)):
         return {"job": job.to_dict()}
 
 
+#  A burst of many jobs flipped to QUEUED in one call all land in the SAME
+# in-process render pool, which has only 1-2 slots (pipeline/dispatch.py's
+# _MAX_RENDER) — the overflow just sits in QUEUED with nothing that ever
+# revisits it (see scheduler._job_recover_stuck_queued's docstring for the
+# full chain). Confirmed in production: a single fix-errors call flipped 10
+# jobs to QUEUED at once; most of them were still stuck 10 days later.
+_FIX_ERRORS_BATCH_LIMIT = 5
+
+
 @router.post("/fix-errors")
 def fix_errors(db: Session = Depends(get_db)):
-    """One-click recovery: requeues and re-dispatches every ERROR job right now,
+    """One-click recovery: requeues and re-dispatches ERROR jobs right now,
     instead of waiting for the scheduler's own backoff sweep — meant for the
     Config page's 'Corrigir erros' button (also called by /system/fix-all).
     Skips only jobs where a forced retry could duplicate an upload or repeat a
@@ -527,28 +536,44 @@ def fix_errors(db: Session = Depends(get_db)):
     it — routing everything through dispatch_job would otherwise burn a full
     AI re-render (script/TTS/images) on a job that failed at the PUBLISH step,
     not the render step (e.g. a token that died after rendering finished).
+
+    Only up to _FIX_ERRORS_BATCH_LIMIT jobs that need a fresh RENDER (QUEUED +
+    dispatch_job — the ones contending for the render pool) are dispatched per
+    call; the rest are left in ERROR (not silently dropped) for the next click
+    or for scheduler._job_recover_stuck_queued to pick up once they've been
+    requeued. Jobs that only need re-publishing (already rendered) skip the
+    render pool entirely and are never capped.
     """
-    rows = db.execute(select(VideoJob).where(VideoJob.status == JobStatus.ERROR)).scalars().all()
+    rows = db.execute(
+        select(VideoJob).where(VideoJob.status == JobStatus.ERROR).order_by(VideoJob.scheduled_at.asc())
+    ).scalars().all()
     fixed: list[int] = []
     skipped: list[dict] = []
+    render_dispatched = 0
     for job in rows:
         msg = job.error_message or ""
         if any(marker in msg for marker in _DUPLICATE_RISK_MARKERS):
             skipped.append({"id": job.id, "title": job.title, "reason": friendly_error(msg)})
             continue
+        needs_render = not (job.main_video_path and Path(job.main_video_path).exists())
+        if needs_render and render_dispatched >= _FIX_ERRORS_BATCH_LIMIT:
+            skipped.append({"id": job.id, "title": job.title,
+                            "reason": "Lote cheio nesta chamada — tenta de novo em instantes."})
+            continue
         job.error_message = None
         job.progress = 0
         job.retry_count = (job.retry_count or 0) + 1
-        if job.main_video_path and Path(job.main_video_path).exists():
-            job.status = JobStatus.APPROVED
-            job.approval_status = "approved"
-            db.commit()
-            dispatch_publish(job.id)
-        else:
+        if needs_render:
             job.status = JobStatus.QUEUED
             job.current_agent = None
             db.commit()
             dispatch_job(job.id)
+            render_dispatched += 1
+        else:
+            job.status = JobStatus.APPROVED
+            job.approval_status = "approved"
+            db.commit()
+            dispatch_publish(job.id)
         fixed.append(job.id)
     return {"fixed": fixed, "fixed_count": len(fixed), "skipped": skipped, "skipped_count": len(skipped)}
 

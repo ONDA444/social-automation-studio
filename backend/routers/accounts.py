@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import HTMLResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
 from backend.database import get_db
@@ -31,6 +31,16 @@ class AccountCreate(BaseModel):
     content_language: str = "pt-BR"
     preferred_templates: list[str] = Field(default_factory=list)
 
+    # A leading/trailing space (e.g. pasted from elsewhere) is invisible once
+    # rendered in the UI's <h3> (HTML collapses it) but NOT invisible to the
+    # database — " Beic Conste" and "Beic Conste" are different rows.
+    # Confirmed in production: exactly this created an indistinguishable
+    # duplicate account that looked identical to the real one on screen.
+    @field_validator("display_name")
+    @classmethod
+    def _strip_display_name(cls, v: str) -> str:
+        return v.strip()
+
 
 class AccountUpdate(BaseModel):
     display_name: str | None = None
@@ -50,6 +60,11 @@ class AccountUpdate(BaseModel):
     preferred_templates: list[str] | None = None
     avoid_topics: list[str] | None = None
     schedule: dict | None = None
+
+    @field_validator("display_name")
+    @classmethod
+    def _strip_display_name(cls, v: str | None) -> str | None:
+        return v.strip() if v is not None else v
 
 
 class LinkRequest(BaseModel):

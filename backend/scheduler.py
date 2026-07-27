@@ -106,6 +106,12 @@ def start_scheduler() -> None:
     # This periodic sweep re-runs the SAME safe transition rules every 10 min.
     sched.add_job(_job_recover_stuck_publishing, "interval", minutes=10,
                   id="recover_stuck_publishing", replace_existing=True)
+    # QUEUED is otherwise a state nothing periodic ever re-claims — see the
+    # function's own docstring for the full chain of why. Confirmed in
+    # production: 33 jobs stuck in QUEUED for up to 10 days with zero mechanism
+    # that would ever touch them again.
+    sched.add_job(_job_recover_stuck_queued, "interval", minutes=10,
+                  id="recover_stuck_queued", replace_existing=True)
     # "Momento em alta": for opted-in channels, catch what's hot in the niche now and
     # enqueue 1–2 approval-gated videos. Every 3h (low/non-spammy); first run ~2min after boot.
     sched.add_job(_job_ride_trends, "interval", hours=3, id="ride_trends", replace_existing=True,
@@ -121,7 +127,7 @@ def start_scheduler() -> None:
     logger.info(
         "Scheduler started (trending, quota reset, heartbeat, analytics, "
         "consume_themes, publish_due, retry_errored, recover_stuck_publishing, "
-        "check_stuck_youtube_processing)."
+        "recover_stuck_queued, check_stuck_youtube_processing)."
     )
 
 
@@ -454,6 +460,121 @@ def _job_recover_stuck_publishing() -> None:
             dispatch_job(job_id)
         except Exception as exc:  # noqa: BLE001 — isolate per job
             logger.warning("recover_stuck_publishing: re-dispatch (render) failed for job %s: %s", job_id, exc)
+
+
+# QUEUED jobs found stale enough to redispatch (avoids racing a job that was
+# JUST enqueued and hasn't been picked up by a worker loop yet).
+_STUCK_QUEUED_MINUTES = 15
+# Small on purpose: the in-process render pool has only 1-2 slots (see
+# pipeline/dispatch.py's _MAX_RENDER). A batch of "everything at once" is
+# exactly the overload from /jobs/fix-errors that stranded these jobs in the
+# first place — sweeping the same way would just recreate it every 10 min.
+_STUCK_QUEUED_BATCH_LIMIT = 3
+# A job whose slot is older than this is deliberately NOT silently
+# republished — see the docstring below.
+_STUCK_QUEUED_MAX_AGE_HOURS = 24
+
+
+def _job_recover_stuck_queued() -> None:
+    """Runtime safety net for a QUEUED job nobody is ever going to pick up.
+
+    Confirmed in production: 33 jobs sitting in QUEUED for up to 10 days, with
+    zero mechanism that would ever touch them again. The reason: QUEUED is not
+    actually owned by any periodic job. _job_publish_due only selects APPROVED
+    (scheduler.py); _job_retry_errored only selects ERROR; the sweep right
+    above this one (_job_recover_stuck_publishing) only selects PUBLISHING/
+    PROCESSING. The one routine that DOES scan QUEUED —
+    backend.main._redispatch_queued_jobs — only ever runs once, at process
+    boot, and even then no-ops whenever USE_CELERY is true (which it always is
+    in production). Meanwhile dispatch_job() for `from_ready_video` and
+    `from_manual_upload` jobs ALWAYS runs in-process, never through Celery
+    (pipeline/dispatch.py) — so those jobs are nobody's responsibility the
+    moment the original in-memory dispatch is lost (a redeploy wipes the
+    in-process queue; a burst from POST /jobs/fix-errors — which can flip many
+    ERROR jobs to QUEUED in one call with no batch limit — overflows the
+    single-slot render pool and strands the overflow in QUEUED forever).
+
+    Every 10 min, this claims and redispatches a SMALL batch of QUEUED jobs
+    whose updated_at is stale and that aren't already inflight
+    (dispatch.is_inflight — cross-replica safe the same way
+    _job_recover_stuck_publishing's is, since updated_at is the real signal,
+    not the in-memory set alone). A job whose scheduled_at slot is more than
+    _STUCK_QUEUED_MAX_AGE_HOURS in the past is deliberately NOT redispatched:
+    silently catching up days of missed slots would publish a burst of stale
+    content to the channel all at once. It's marked ERROR instead (releasing
+    its reserved Drive file, if any, back to the pool) so a human decides
+    whether to reschedule or delete it.
+    """
+    from sqlalchemy import select, update
+
+    from backend.models import JobStatus, ReadyVideo, VideoJob
+    from backend.pipeline.dispatch import dispatch_job, is_inflight
+
+    cutoff = datetime.utcnow() - timedelta(minutes=_STUCK_QUEUED_MINUTES)
+    max_age_cutoff = datetime.utcnow() - timedelta(hours=_STUCK_QUEUED_MAX_AGE_HOURS)
+    db = SessionLocal()
+    to_dispatch: list[int] = []
+    expired = 0
+    try:
+        # Over-fetch a bit: some candidates will turn out inflight or expired,
+        # neither of which counts toward the dispatch batch limit.
+        candidates = db.execute(
+            select(VideoJob)
+            .where(VideoJob.status == JobStatus.QUEUED, VideoJob.updated_at < cutoff)
+            .order_by(VideoJob.updated_at.asc())
+            .limit(_STUCK_QUEUED_BATCH_LIMIT * 4)
+        ).scalars().all()
+        for job in candidates:
+            if is_inflight(job.id):
+                continue
+            if job.scheduled_at and job.scheduled_at < max_age_cutoff:
+                ctx = job.video_context or {}
+                ready_id = ctx.get("ready_video_id")
+                if ready_id:
+                    ready = db.get(ReadyVideo, ready_id)
+                    if ready and ready.reserved_job_id == job.id:
+                        ready.status = "available"
+                        ready.reserved_job_id = None
+                        ready.reserved_at = None
+                job.status = JobStatus.ERROR
+                job.error_message = (
+                    "Slot agendado venceu há mais de 24h sem ser processado — não "
+                    "republicado automaticamente para não postar conteúdo atrasado "
+                    "em lote. Reagende ou exclua."
+                )[:500]
+                expired += 1
+                continue
+            if len(to_dispatch) >= _STUCK_QUEUED_BATCH_LIMIT:
+                continue
+            # Atomic claim: bump updated_at NOW so a slower-ticking sibling
+            # replica (or next tick, if dispatch_job below is itself slow)
+            # can't also pick this job up before the dispatch below lands.
+            claimed = db.execute(
+                update(VideoJob)
+                .where(VideoJob.id == job.id, VideoJob.status == JobStatus.QUEUED)
+                .values(updated_at=datetime.utcnow())
+                .execution_options(synchronize_session=False)
+            ).rowcount
+            if claimed:
+                to_dispatch.append(job.id)
+        db.commit()
+        if expired or to_dispatch:
+            logger.info(
+                "Varredura de QUEUED presos: %d expirado(s) (slot > %dh vencido, "
+                "marcado ERROR), %d redespachado(s).",
+                expired, _STUCK_QUEUED_MAX_AGE_HOURS, len(to_dispatch),
+            )
+    except Exception as exc:  # noqa: BLE001 — never let the scheduler die
+        db.rollback()
+        logger.warning("recover_stuck_queued job failed: %s", exc)
+        return
+    finally:
+        db.close()
+    for job_id in to_dispatch:
+        try:
+            dispatch_job(job_id)
+        except Exception as exc:  # noqa: BLE001 — isolate per job
+            logger.warning("recover_stuck_queued: re-dispatch failed for job %s: %s", job_id, exc)
 
 
 def _job_trending() -> None:

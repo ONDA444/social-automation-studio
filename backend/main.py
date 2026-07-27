@@ -196,9 +196,18 @@ def _apply_orphan_transition(job, safe: bool) -> None:
             job.status = JobStatus.PUBLISHED  # already live — never resend
         elif uploading_platform:
             job.status = JobStatus.ERROR
+            # MUST contain the exact phrases scheduler.py's _NO_AUTO_RETRY_MARKERS,
+            # routers/jobs.py's own no-auto-retry list, and error_messages.py's
+            # friendly-text matcher all key on ("PODE já estar no canal" /
+            # "Verifique o YouTube") — this used to say "PODE já estar em
+            # {platform}. Verifique antes de usar Retry", which matches NONE of
+            # them, so an upload interrupted mid-flight (video possibly already
+            # live) was silently auto-resurrected and re-sent, risking a real
+            # duplicate publish (confirmed in production: job 78 has
+            # publish_status.youtube.status == "uploading" from exactly this path).
             job.error_message = (
-                f"Publicação interrompida por reinício — o vídeo PODE já estar em "
-                f"{uploading_platform}. Verifique antes de usar Retry (evita duplicar)."
+                f"Publicação interrompida por reinício — o vídeo PODE já estar no canal "
+                f"({uploading_platform}). Verifique o YouTube antes de usar Retry (evita duplicar)."
             )
         else:
             job.status = JobStatus.APPROVED  # upload never started — safe
@@ -241,15 +250,22 @@ def _recover_orphan_jobs() -> None:
 
 def _redispatch_queued_jobs() -> None:
     """
-    In-process mode only: re-dispatch jobs left in QUEUED.
+    Re-dispatch jobs left in QUEUED at boot.
 
     A QUEUED job that isn't running means its dispatch never completed (e.g. it was
     enqueued to a Celery queue with no worker before USE_CELERY was disabled, or the
-    process restarted before pickup). Celery mode is skipped — a real worker owns the
-    queue there. Bounded to avoid a thundering herd on boot.
+    process restarted before pickup).
+
+    In Celery mode, jobs whose `mode` is generic (AI generation) ARE skipped
+    here — a real Celery worker owns that queue and will pick them up.
+    BUT `from_ready_video` and `from_manual_upload` jobs are always
+    redispatched regardless of USE_CELERY: dispatch_job() (pipeline/dispatch.py)
+    routes both of those modes straight to in-process execution unconditionally
+    — no Celery task is ever defined for them — so in Celery mode they were
+    being silently skipped here with NOTHING else ever picking them up.
+    Confirmed in production: this was one of the causes behind 33 jobs stuck
+    in QUEUED for up to 10 days. Bounded to avoid a thundering herd on boot.
     """
-    if settings.use_celery:
-        return
     if _safe_boot():
         logger.warning("SAFE_BOOT ativo — re-dispatch de jobs QUEUED ignorado no boot.")
         return
@@ -260,20 +276,20 @@ def _redispatch_queued_jobs() -> None:
 
         db = SessionLocal()
         try:
-            stuck = (
-                db.query(VideoJob)
-                .filter(VideoJob.status == JobStatus.QUEUED)
-                .order_by(VideoJob.created_at.asc())
-                .limit(200)
-                .all()
-            )
+            query = db.query(VideoJob).filter(VideoJob.status == JobStatus.QUEUED)
+            if settings.use_celery:
+                # Celery doesn't own these two modes no matter the setting —
+                # see the docstring above. Everything else is left for the
+                # real Celery worker.
+                query = query.filter(VideoJob.mode.in_(["from_ready_video", "from_manual_upload"]))
+            stuck = query.order_by(VideoJob.created_at.asc()).limit(200).all()
             ids = [j.id for j in stuck]
         finally:
             db.close()
         for jid in ids:
             dispatch_job(jid)
         if ids:
-            logger.info("Re-disparados %d job(s) presos em QUEUED (modo in-process).", len(ids))
+            logger.info("Re-disparados %d job(s) presos em QUEUED.", len(ids))
     except Exception as exc:  # noqa: BLE001
         logger.warning("Re-dispatch de QUEUED falhou (ignorado): %s", exc)
 

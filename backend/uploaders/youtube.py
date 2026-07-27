@@ -632,7 +632,17 @@ def upload_video(
         return result
     except Exception as exc:  # noqa: BLE001
         msg = str(exc)
-        if "quota" in msg.lower():
+        # "The user has exceeded the number of videos they may upload"
+        # (reason: uploadLimitExceeded) is YouTube's daily-upload-cap error for
+        # unverified channels — the SAME class of "wait for reset" failure as a
+        # quota error, but its text never contains the word "quota". Confirmed
+        # in production: this fell through to the generic "error" bucket, which
+        # keeps burning retry_count (observed up to 16-18) until the job dies
+        # in ERROR permanently, instead of parking as quota_exceeded so
+        # _job_quota_reset (scheduler.py) can resume it automatically after
+        # midnight — error_messages.py already has the correct friendly text
+        # for "exceeded the number of videos", just nothing upstream routed here.
+        if any(k in msg.lower() for k in ("quota", "uploadlimitexceeded", "exceeded the number of videos")):
             status = "quota_exceeded"
         elif any(k in msg.lower() for k in (
             "refresherror", "invalid_grant", "token has been expired", "token_revoked",
