@@ -38,6 +38,7 @@ YT_CATEGORY = {
     "reaction_commentary": "24",    # Entertainment
     "reddit_story": "24",           # Entertainment
     "motivational_speech": "22",    # People & Blogs
+    "music": "10",                  # Music (internal-only marker, see scheduler.py)
 }
 
 

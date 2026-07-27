@@ -465,7 +465,13 @@ async def publish_youtube(job, seo, creds, publish_at, shorts, privacy="private"
     # #Shorts (seo_agent adds it for short format). Derived shorts handled below.
     main_title = y.get("title", job.title)
     if getattr(job, "video_format", "long") == "short" and "#short" not in (main_title or "").lower():
-        main_title = (main_title + " #Shorts")[:100]
+        # Reserve room for the suffix BEFORE truncating: seo_agent's _clamp()
+        # already caps title at 100 chars with no margin, so appending
+        # " #Shorts" and THEN slicing to 100 silently drops the suffix
+        # entirely (title already =100) or cuts it mid-word (title >92) —
+        # exactly the signal this comment says the Shorts classifier needs.
+        suffix = " #Shorts"
+        main_title = (main_title or "")[: 100 - len(suffix)].rstrip() + suffix
     main = await _with_retry(
         yt.upload_video, job.main_video_path, main_title,
         y.get("description", ""), y.get("tags", []), creds,
@@ -519,8 +525,12 @@ async def publish_youtube(job, seo, creds, publish_at, shorts, privacy="private"
         for sp in shorts:
             if sp == job.main_video_path:
                 continue
+            short_title = y.get("title", job.title) or ""
+            if "#short" not in short_title.lower():
+                suffix = " #Shorts"
+                short_title = short_title[: 100 - len(suffix)].rstrip() + suffix
             short_results.append(await _with_retry(
-                yt.upload_video, sp, (y.get("title", job.title) + " #Shorts")[:100],
+                yt.upload_video, sp, short_title[:100],
                 short_desc, y.get("tags", []), creds,
                 category_id=y.get("category_id", "22"), privacy=privacy,
                 default_language=_lang, default_audio_language=_lang, label="yt-short",

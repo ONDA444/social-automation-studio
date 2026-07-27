@@ -1109,6 +1109,17 @@ def _finalize_ready_video_job(
                 job.id, local_path, title_seed, ready.niche or acct.drive_niche or acct.niche or "",
                 video_format,
             )
+            # The job's content_type was set at creation time from the
+            # requested theme (e.g. "film_recap_ai_images") before we knew
+            # the reserved Drive file was audio-only. Left uncorrected, the
+            # video published on YouTube Category 24 "Entertainment" instead
+            # of 10 "Music", and inherited "recap de filme" titles/tags for
+            # what is actually a song — confirmed in production. "music" is
+            # an internal-only marker (not in CONTENT_TYPE_KEYS): it only
+            # drives category/title/tag template lookups below, it never
+            # goes through the AI script-generation pipeline that requires
+            # TEMPLATE_GUIDE/HEURISTICS entries.
+            job.content_type = "music"
         stage = "preparar o video do Drive"
         job.main_video_path = local_path
         if video_format == "short":
@@ -1239,7 +1250,17 @@ def _clean_ready_title(name: str | None) -> str:
 
     value = re.sub(r"\.[A-Za-z0-9]{2,5}$", "", name or "").strip()
     value = re.sub(r"[_-]+", " ", value)
-    value = re.sub(r"\s+", " ", value)
+    # Strip a bare sequence number in parens (e.g. "Academia (35)") — this is
+    # how the same Drive folder disambiguates same-named files, but this
+    # value becomes the public YouTube title verbatim (title_seed wins
+    # ready_video_seo.py::_best_topic's priority order), so an un-stripped
+    # "(35)" was visibly exposing "episode N of a mass-produced series" to
+    # viewers on every video from these folders — confirmed in production as
+    # correlated with the worst-performing channels. ready_video_seo.py's own
+    # _clean_filename already strips this for its (lower-priority) fallback
+    # path; this brings the higher-priority title_seed path in line with it.
+    value = re.sub(r"\(\s*\d+\s*\)", " ", value)
+    value = re.sub(r"\s+", " ", value).strip()
     return value[:100]
 
 

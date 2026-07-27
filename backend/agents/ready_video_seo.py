@@ -702,6 +702,17 @@ def _title_from_analysis(topic: str, analysis: dict, content_type: str, video_fo
             f"{base}: veja o que rolou",
             f"{base}: o corte que resume tudo",
         ),
+        # "music" is the internal marker scheduler.py sets on jobs whose
+        # reserved Drive file is audio-only (see _finalize_ready_video_job) —
+        # without a dedicated entry here, music tracks inherited
+        # "recap de filme" wording and got published under category 24
+        # (Entertainment) instead of 10 (Music); confirmed in production.
+        "music": (
+            base,
+            f"{base} (audio)",
+            f"{base} | trilha sonora",
+            f"{base} - musica completa",
+        ),
         "quote_viral": (base,),
         "top_list_ranking": (
             f"{base}: o numero 1 vai te surpreender",
@@ -825,6 +836,12 @@ def _apply_viral_shorts_title(title: str, topic: str, analysis: dict, content_ty
             f"{base}: o que rolou na hora",
             f"{base}: o detalhe da cena",
         ),
+        "music": (
+            f"{base}: ouca agora",
+            f"{base}: essa e boa",
+            f"{base} pra hoje",
+            f"{base}: bate essa",
+        ),
     }
     default_variants = (
         f"{base}: o momento principal",
@@ -918,6 +935,10 @@ def _tags(primary: str, topic: str, entities: list[str], topics: list[str], nich
         "film_recap_ai_images": (
             ["recap de filme", "resumo do filme", "cenas marcantes"],
             ["recap dublado", "melhor cena", "resumo completo"],
+        ),
+        "music": (
+            ["musica", "playlist", "sem direitos autorais"],
+            ["trilha sonora", "musica relaxante", "audio"],
         ),
         "quote_viral": (
             ["frase motivacional", "citacao", "reflexao do dia"],
@@ -1184,6 +1205,12 @@ def _hook(topic: str, content_type: str) -> str:
             f"{base}: veja o que rolou em poucos segundos.",
             f"{base}: o corte que resume a cena.",
             f"{base}: direto ao ponto sobre o que aconteceu.",
+        ),
+        "music": (
+            f"{base}: pra ouvir sem parar.",
+            f"{base}: separei essa pra voce.",
+            f"{base}: bora ouvir.",
+            f"{base}: essa entra no repeat.",
         ),
         "quote_viral": (base,),
         "top_list_ranking": (

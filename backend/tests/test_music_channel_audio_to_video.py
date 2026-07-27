@@ -342,6 +342,120 @@ class FailingStageIsNamedAccuratelyTests(unittest.TestCase):
         self.assertIn("baixar video do Drive", job.error_message)
 
 
+class MusicContentTypeOverrideTests(unittest.TestCase):
+    """Regression test for a production bug found by a 5-agent low-views
+    investigation: a job's content_type is decided at creation time from the
+    requested theme (default "film_recap_ai_images") BEFORE it's known that
+    the reserved Drive file is audio-only. Left uncorrected, music tracks
+    were published on YouTube category 24 "Entertainment" instead of 10
+    "Music", and inherited film-recap titles/tags/hooks for a song."""
+
+    def _setup(self, ready_name: str, ready_mime: str):
+        from backend.models import PlatformAccount, VideoJob, JobStatus
+
+        engine = create_engine("sqlite:///:memory:", future=True)
+        Base.metadata.create_all(bind=engine)
+        Session = sessionmaker(bind=engine, future=True)
+        db = Session()
+        account = PlatformAccount(platform="youtube", display_name="Canal", niche="musicas")
+        db.add(account)
+        db.flush()
+        ready = ReadyVideo(
+            drive_file_id="track-abc", name=ready_name, mime_type=ready_mime,
+            content_type="film_recap_ai_images", video_format="long",
+            account_id=account.id, status="reserved",
+        )
+        db.add(ready)
+        db.flush()
+        job = VideoJob(
+            title="Musica", mode="from_ready_video",
+            content_type="film_recap_ai_images", video_format="long",
+            account_id=account.id, status=JobStatus.PROCESSING,
+            video_context={"source": "drive_ready_video", "ready_video_id": ready.id},
+        )
+        db.add(job)
+        db.flush()
+        ready.reserved_job_id = job.id
+        db.commit()
+        return db, account, ready, job
+
+    def test_audio_job_content_type_is_overridden_to_music(self) -> None:
+        from backend import scheduler
+        from backend.agents.drive_library import DriveLibraryService
+
+        db, account, ready, job = self._setup("track.mp3", "audio/mpeg")
+        drive = DriveLibraryService(db)
+        fake_seo = {"youtube": {"title": "Musica: ouca agora", "description": "d", "tags": [],
+                                 "category_id": "10"}, "tiktok": {}, "instagram": {}}
+
+        with patch.object(DriveLibraryService, "download_for_job", return_value="/tmp/track.mp3"), \
+             patch("backend.agents.ready_video_seo.render_audio_track_as_video",
+                   return_value="/tmp/track_as_video.mp4"), \
+             patch("backend.agents.ready_video_seo.build_ready_video_package",
+                   return_value=({}, fake_seo, None)):
+            scheduler._finalize_ready_video_job(
+                db, drive, job, ready, account, title_seed="Minha Musica", video_format="long",
+            )
+
+        db.refresh(job)
+        self.assertEqual(job.content_type, "music")
+
+    def test_non_audio_job_content_type_is_left_untouched(self) -> None:
+        from backend import scheduler
+        from backend.agents.drive_library import DriveLibraryService
+
+        db, account, ready, job = self._setup("clip.mp4", "video/mp4")
+        drive = DriveLibraryService(db)
+        fake_seo = {"youtube": {"title": "Clipe", "description": "d", "tags": [],
+                                 "category_id": "24"}, "tiktok": {}, "instagram": {}}
+
+        with patch.object(DriveLibraryService, "download_for_job", return_value="/tmp/clip.mp4"), \
+             patch("backend.agents.ready_video_seo.build_ready_video_package",
+                   return_value=({}, fake_seo, None)):
+            scheduler._finalize_ready_video_job(
+                db, drive, job, ready, account, title_seed="Clipe", video_format="long",
+            )
+
+        db.refresh(job)
+        self.assertEqual(job.content_type, "film_recap_ai_images")
+
+    def test_music_content_type_maps_to_youtube_music_category(self) -> None:
+        from backend.agents.seo_agent import YT_CATEGORY
+        self.assertEqual(YT_CATEGORY.get("music"), "10")
+
+    def test_build_drive_seo_uses_music_templates_not_film_recap_wording(self) -> None:
+        seo = rvs.build_drive_seo(context={
+            "title_seed": "Minha Musica Instrumental", "drive_name": "Minha Musica Instrumental.mp3",
+            "folder_path": "", "niche": "musicas", "account_niche": "musicas", "display_name": "Canal",
+            "target_audience": "", "tone": "", "language": "pt-BR",
+            "content_type": "music", "video_format": "long",
+        }, analysis={})
+        self.assertEqual(seo["youtube"]["category_id"], "10")
+        joined = " ".join(seo["youtube"]["tags"]).lower()
+        self.assertNotIn("recap de filme", joined)
+        self.assertNotIn("resumo do filme", joined)
+
+
+class ReadyTitleCounterStrippedTests(unittest.TestCase):
+    """Regression test: Drive files disambiguated with a trailing sequence
+    number (e.g. "Academia (35).mp4") leaked that raw "(N)" straight into the
+    public YouTube title (title_seed outranks the already-cleaned drive_name
+    in _best_topic's priority order) — visibly branding every video as
+    "episode N of a mass-produced series". The two worst-performing channels
+    in production both used this naming pattern."""
+
+    def test_parenthetical_sequence_number_is_stripped(self) -> None:
+        from backend.scheduler import _clean_ready_title
+
+        self.assertEqual(_clean_ready_title("Academia (35).mp4"), "Academia")
+        self.assertEqual(_clean_ready_title("Mister Cuts Fut (32).mp4"), "Mister Cuts Fut")
+
+    def test_titles_without_a_counter_are_unaffected(self) -> None:
+        from backend.scheduler import _clean_ready_title
+
+        self.assertEqual(_clean_ready_title("Pica Pau tenta um bloco.mp4"), "Pica Pau tenta um bloco")
+
+
 class FriendlyErrorForAudioRenderTests(unittest.TestCase):
     def test_audio_render_failure_gets_its_own_plain_portuguese_message(self) -> None:
         from backend.error_messages import friendly_error
