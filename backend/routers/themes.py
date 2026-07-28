@@ -3,7 +3,6 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
-from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from backend.content_types import CONTENT_TYPE_KEYS
@@ -50,13 +49,21 @@ def create_themes(payload: ThemeCreate, db: Session = Depends(get_db)):
         return {"created": 0, "ids": []}
 
     # Continue FIFO ordering after the current max position. with_for_update()
-    # takes a row lock on the max-position row (Postgres) so a concurrent
-    # POST /themes blocks until this transaction commits, instead of both
-    # requests reading the same base and producing colliding positions.
-    max_position = (
-        db.query(func.max(ThemeQueue.position)).with_for_update().scalar()
+    # takes a row lock on the actual max-position row (Postgres) so a
+    # concurrent POST /themes blocks until this transaction commits, instead
+    # of both requests reading the same base and producing colliding
+    # positions. NOTE: can't lock an aggregate directly — Postgres rejects
+    # "SELECT max(x) ... FOR UPDATE" with FeatureNotSupported (confirmed in
+    # production: this 500'd on every single call, i.e. the whole "Adicionar
+    # a fila" button was broken) — lock the real row instead and read its
+    # column.
+    max_row = (
+        db.query(ThemeQueue)
+        .order_by(ThemeQueue.position.desc())
+        .with_for_update()
+        .first()
     )
-    base = 0 if max_position is None else max_position + 1
+    base = 0 if max_row is None else max_row.position + 1
 
     rows: list[ThemeQueue] = []
     for offset, theme in enumerate(cleaned):
