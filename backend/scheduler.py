@@ -637,18 +637,41 @@ def _job_collect_analytics() -> None:
         db.close()
 
 
+# Every published job used to be refreshed EVERY tick (8 min), unbounded — fine
+# with a handful of videos, but with hundreds of published jobs each iteration
+# builds fresh Google API client objects (cache_discovery=False -> no reuse) and
+# fires 2+ HTTP calls (a near-guaranteed 401-then-refresh, then the real request,
+# doubled again when with_analytics kicks in for videos >=24h old). Confirmed in
+# production: this scaled into a burst of 1000+ HTTP calls/objects in a single
+# synchronous tick as the catalog grew, and the web service was OOM-killed by the
+# platform mid-burst (clean "Stopping Container" with zero app-level exception —
+# the signature of an external SIGKILL, not a crash). Cap the batch and rotate by
+# least-recently-refreshed so every video still gets covered over time, just
+# spread across ticks instead of one unbounded burst.
+_REFRESH_LIVE_BATCH_LIMIT = 40
+
+
 def _job_refresh_live() -> None:
     """Overwrite each published video's 'live' snapshot with current platform numbers
     so the Analytics page reflects near-real-time views, not a frozen snapshot."""
-    from sqlalchemy import select
+    from sqlalchemy import and_, select
+    from sqlalchemy.orm import aliased
 
     from backend.agents.analytics import AnalyticsAgent
-    from backend.models import JobStatus, VideoJob
+    from backend.models import JobStatus, VideoAnalytics, VideoJob
 
     db = SessionLocal()
     try:
+        live_snap = aliased(VideoAnalytics)
         published = db.execute(
-            select(VideoJob).where(VideoJob.status == JobStatus.PUBLISHED)
+            select(VideoJob)
+            .outerjoin(
+                live_snap,
+                and_(live_snap.job_id == VideoJob.id, live_snap.snapshot_type == "live"),
+            )
+            .where(VideoJob.status == JobStatus.PUBLISHED)
+            .order_by(live_snap.collected_at.asc().nullsfirst())
+            .limit(_REFRESH_LIVE_BATCH_LIMIT)
         ).scalars().all()
         agent = AnalyticsAgent(db)
         refreshed = 0
