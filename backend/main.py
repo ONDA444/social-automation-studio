@@ -87,6 +87,7 @@ _ROUTER_MODULES = [
     "backend.routers.jobs",
     "backend.routers.remix",
     "backend.routers.accounts",
+    "backend.routers.channels",
     "backend.routers.workspaces",
     "backend.routers.schedule",
     "backend.routers.dashboard",

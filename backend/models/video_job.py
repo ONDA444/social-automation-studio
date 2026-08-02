@@ -45,6 +45,13 @@ class VideoJob(Base):
     account_id: Mapped[int | None] = mapped_column(
         ForeignKey("platform_accounts.id", ondelete="SET NULL"), default=None
     )
+    # Which day's PublishSession this job belongs to (see publish_session.py).
+    # Purely a reference for the agenda/session-tracking layer -- nothing in
+    # the actual dispatch/publish pipeline reads or requires this column, so a
+    # job created before Channel/PublishSession existed simply has it NULL.
+    publish_session_id: Mapped[int | None] = mapped_column(
+        ForeignKey("publish_sessions.id", ondelete="SET NULL"), default=None, index=True
+    )
 
     # --- Pipeline state ---
     status: Mapped[JobStatus] = mapped_column(

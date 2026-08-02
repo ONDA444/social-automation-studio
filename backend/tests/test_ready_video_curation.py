@@ -232,5 +232,137 @@ class RealFfmpegCurationTests(unittest.TestCase):
         self.assertTrue(result["has_video"])
 
 
+class VisualThemeWiringTests(unittest.TestCase):
+    """Fase 5: every channel used to render the exact same hardcoded
+    yellow-on-black overlay/intro regardless of niche. visual_theme now
+    threads through to the actual pixels -- verified here at the PNG level
+    (fast, exact) rather than round-tripping through ffmpeg."""
+
+    def test_hex_to_rgb_parses_and_falls_back_on_garbage(self) -> None:
+        self.assertEqual(curation._hex_to_rgb("#00FFAA", (1, 2, 3)), (0, 255, 170))
+        self.assertEqual(curation._hex_to_rgb("00FFAA", (1, 2, 3)), (0, 255, 170))
+        self.assertEqual(curation._hex_to_rgb("not-a-color", (1, 2, 3)), (1, 2, 3))
+        self.assertEqual(curation._hex_to_rgb(None, (1, 2, 3)), (1, 2, 3))
+
+    def test_caption_png_uses_the_channels_accent_color_not_the_hardcoded_yellow(self) -> None:
+        from PIL import Image
+
+        work = Path(settings.abs_path(settings.temp_dir)) / "test_visual_theme_wiring"
+        work.mkdir(parents=True, exist_ok=True)
+        try:
+            default_png = work / "default.png"
+            themed_png = work / "themed.png"
+            curation._render_caption_png("TEXTO DE TESTE", 640, 360, default_png, None)
+            curation._render_caption_png(
+                "TEXTO DE TESTE", 640, 360, themed_png, {"accent_color": "#00AAFF"},
+            )
+
+            default_colors = set(Image.open(default_png).convert("RGBA").getdata())
+            themed_colors = set(Image.open(themed_png).convert("RGBA").getdata())
+
+            # The default render must contain the old hardcoded yellow somewhere
+            # (proves the baseline is what we think it is)...
+            self.assertIn((255, 221, 0, 255), default_colors)
+            # ...and the themed render must NOT -- it used the accent color instead.
+            self.assertNotIn((255, 221, 0, 255), themed_colors)
+            self.assertIn((0, 170, 255, 255), themed_colors)
+        finally:
+            import shutil
+            shutil.rmtree(work, ignore_errors=True)
+
+    @unittest.skipUnless(_ffmpeg_available(), "ffmpeg/ffprobe not installed")
+    def test_long_format_intro_uses_the_channels_tts_voice(self) -> None:
+        work = Path(settings.abs_path(settings.temp_dir)) / "test_visual_theme_voice"
+        work.mkdir(parents=True, exist_ok=True)
+        src = work / "src.mp4"
+        subprocess.run(
+            ["ffmpeg", "-y", "-f", "lavfi", "-i", "testsrc2=size=640x360:rate=24:duration=4",
+             "-f", "lavfi", "-i", "sine=frequency=440:duration=4",
+             "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", str(src)],
+            capture_output=True, timeout=60,
+        )
+        analysis = {"width": 640, "height": 360, "duration": 4.0, "has_audio": True}
+        seen_voice = {}
+
+        async def fake_synthesize(text, voice, dst):
+            seen_voice["voice"] = voice
+            subprocess.run(
+                ["ffmpeg", "-y", "-f", "lavfi", "-i", "sine=frequency=300:duration=2", str(dst)],
+                capture_output=True, timeout=30,
+            )
+
+        try:
+            spoken = "esse momento mostra um contraste que poucos videos do genero capturam"
+            with patch.object(curation.llm, "available", return_value=True), \
+                 patch.object(curation.llm, "complete_json",
+                               AsyncMock(return_value={"line": "contraste raro", "spoken": spoken})), \
+                 patch.object(curation, "_synthesize", fake_synthesize):
+                curation.apply_curation_layer(
+                    job_id=9101, local_path=str(src), analysis=analysis,
+                    context={"niche": "teste"}, video_format="long",
+                    voice="pt-BR-FabioNeural",
+                )
+            self.assertEqual(seen_voice.get("voice"), "pt-BR-FabioNeural")
+        finally:
+            import shutil
+            shutil.rmtree(work, ignore_errors=True)
+            shutil.rmtree(
+                Path(settings.abs_path(settings.temp_dir)) / "ready_video_curation" / "job_9101",
+                ignore_errors=True,
+            )
+
+
+class RenderPreviewTests(unittest.TestCase):
+    """Fase 5 point 3: preview a channel's design without a full ffmpeg
+    render -- just the PNG/JPG a real curation pass would produce."""
+
+    def _cleanup(self, job_id) -> None:
+        import shutil
+        shutil.rmtree(
+            Path(settings.abs_path(settings.temp_dir)) / "ready_video_curation" / f"job_{job_id}",
+            ignore_errors=True,
+        )
+
+    def test_short_preview_needs_no_source_video(self) -> None:
+        try:
+            out = curation.render_preview(
+                20001, "short", "isso prova reflexo, nao sorte",
+                visual_theme={"accent_color": "#00AAFF"},
+            )
+            self.assertIsNotNone(out)
+            self.assertTrue(Path(out).exists())
+            self.assertTrue(out.endswith(".png"))
+        finally:
+            self._cleanup(20001)
+
+    def test_long_preview_without_a_source_falls_back_to_a_solid_background(self) -> None:
+        try:
+            out = curation.render_preview(
+                20002, "long", "um contraste raro", visual_theme=None,
+            )
+            self.assertIsNotNone(out)
+            self.assertTrue(Path(out).exists())
+            self.assertTrue(out.endswith(".jpg"))
+        finally:
+            self._cleanup(20002)
+
+    def test_empty_line_returns_none(self) -> None:
+        try:
+            out = curation.render_preview(20003, "short", "   ")
+            self.assertIsNone(out)
+        finally:
+            self._cleanup(20003)
+
+    def test_preview_never_calls_ffmpeg_video_encode(self) -> None:
+        """No -c:v libx264 subprocess call anywhere in the preview path --
+        the whole point is skipping the real video render."""
+        with patch.object(curation.subprocess, "run") as fake_run:
+            try:
+                curation.render_preview(20004, "short", "linha de teste")
+            finally:
+                self._cleanup(20004)
+        fake_run.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

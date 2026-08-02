@@ -40,9 +40,14 @@ _TAKE_SYSTEM = (
 
 def apply_curation_layer(
     *, job_id: int, local_path: str, analysis: dict, context: dict, video_format: str,
+    visual_theme: dict | None = None, voice: str | None = None,
 ) -> str:
     """Best-effort. Returns `local_path` unchanged on ANY failure -- curation
-    is a value-add, never a publish blocker."""
+    is a value-add, never a publish blocker.
+
+    `visual_theme`/`voice` are optional -- callers with no Channel (see
+    backend/models/channel.py) simply omit them and get the previous fixed
+    yellow-on-black look + the global default TTS voice, unchanged."""
     if not settings.ready_video_curation_enabled:
         return local_path
     try:
@@ -54,9 +59,9 @@ def apply_curation_layer(
         return local_path
     try:
         if video_format == "short":
-            out = _apply_short_overlay(job_id, local_path, take, analysis or {})
+            out = _apply_short_overlay(job_id, local_path, take, analysis or {}, visual_theme)
         else:
-            out = _apply_long_intro(job_id, local_path, take, analysis or {})
+            out = _apply_long_intro(job_id, local_path, take, analysis or {}, visual_theme, voice)
     except Exception as exc:  # noqa: BLE001
         logger.info("curation render failed for job %s (%s): %s", job_id, video_format, exc)
         return local_path
@@ -132,7 +137,9 @@ def _clean(text: str) -> str:
 
 # ---- Shorts: burned-in commentary line over the first ~3s -------------------
 
-def _apply_short_overlay(job_id: int, local_path: str, take: dict, analysis: dict) -> str | None:
+def _apply_short_overlay(
+    job_id: int, local_path: str, take: dict, analysis: dict, visual_theme: dict | None,
+) -> str | None:
     line = take.get("line")
     if not line:
         return None
@@ -144,7 +151,7 @@ def _apply_short_overlay(job_id: int, local_path: str, take: dict, analysis: dic
 
     work = _work_dir(job_id)
     overlay_png = work / "overlay.png"
-    _render_caption_png(line, w, h, overlay_png)
+    _render_caption_png(line, w, h, overlay_png, visual_theme)
 
     dst = work / f"curated_{src.name}"
     cmd = [
@@ -162,10 +169,13 @@ def _apply_short_overlay(job_id: int, local_path: str, take: dict, analysis: dic
     return str(dst)
 
 
-def _render_caption_png(text: str, w: int, h: int, dst: Path) -> None:
+def _render_caption_png(text: str, w: int, h: int, dst: Path, visual_theme: dict | None = None) -> None:
     from PIL import Image, ImageDraw
 
     from backend.agents.visuals import VisualsAgent
+
+    fill = _theme_rgba(visual_theme, "accent_color", (255, 221, 0))
+    stroke = _theme_rgba(visual_theme, "stroke_color", (0, 0, 0))
 
     img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
@@ -179,15 +189,37 @@ def _render_caption_png(text: str, w: int, h: int, dst: Path) -> None:
     for ln in lines:
         tw = draw.textlength(ln, font=font)
         x = (w - tw) / 2
-        draw.text((x, y), ln, font=font, fill=(255, 221, 0, 255),
-                   stroke_width=max(2, w // 340), stroke_fill=(0, 0, 0, 255))
+        draw.text((x, y), ln, font=font, fill=fill,
+                   stroke_width=max(2, w // 340), stroke_fill=stroke)
         y += line_h
     img.save(dst, "PNG")
 
 
+def _hex_to_rgb(value: str, default: tuple[int, int, int]) -> tuple[int, int, int]:
+    try:
+        v = (value or "").lstrip("#")
+        if len(v) != 6:
+            return default
+        return (int(v[0:2], 16), int(v[2:4], 16), int(v[4:6], 16))
+    except Exception:
+        return default
+
+
+def _theme_rgba(visual_theme: dict | None, key: str, default_rgb: tuple[int, int, int]) -> tuple[int, int, int, int]:
+    r, g, b = _hex_to_rgb((visual_theme or {}).get(key), default_rgb)
+    return (r, g, b, 255)
+
+
+def _theme_rgb(visual_theme: dict | None, key: str, default_rgb: tuple[int, int, int]) -> tuple[int, int, int]:
+    return _hex_to_rgb((visual_theme or {}).get(key), default_rgb)
+
+
 # ---- Long-form: narrated commentary intro prepended to the clip -------------
 
-def _apply_long_intro(job_id: int, local_path: str, take: dict, analysis: dict) -> str | None:
+def _apply_long_intro(
+    job_id: int, local_path: str, take: dict, analysis: dict,
+    visual_theme: dict | None = None, voice: str | None = None,
+) -> str | None:
     spoken = take.get("spoken")
     if not spoken:
         return None
@@ -199,8 +231,8 @@ def _apply_long_intro(job_id: int, local_path: str, take: dict, analysis: dict) 
     work = _work_dir(job_id)
 
     narration_path = work / "intro_narration.mp3"
-    voice = settings.default_tts_voice or "pt-BR-AntonioNeural"
-    asyncio.run(_synthesize(spoken, voice, narration_path))
+    resolved_voice = voice or settings.default_tts_voice or "pt-BR-AntonioNeural"
+    asyncio.run(_synthesize(spoken, resolved_voice, narration_path))
     if not narration_path.exists() or narration_path.stat().st_size < 1024:
         return None
     narr_seconds = _probe_duration(narration_path)
@@ -208,7 +240,7 @@ def _apply_long_intro(job_id: int, local_path: str, take: dict, analysis: dict) 
         return None
 
     card = work / "intro_card.jpg"
-    _render_intro_card(job_id, src, take.get("line") or spoken, w, h, card)
+    _render_intro_card(job_id, src, take.get("line") or spoken, w, h, card, visual_theme)
 
     intro_clip = work / "intro_clip.mp4"
     _render_intro_clip(card, narration_path, narr_seconds, w, h, intro_clip)
@@ -244,7 +276,10 @@ async def _synthesize(text: str, voice: str, dst: Path) -> None:
     await asyncio.to_thread(_write)
 
 
-def _render_intro_card(job_id: int, src_video: Path, text: str, w: int, h: int, dst: Path) -> None:
+def _render_intro_card(
+    job_id: int, src_video: Path, text: str, w: int, h: int, dst: Path,
+    visual_theme: dict | None = None,
+) -> None:
     from PIL import Image
 
     from backend.agents.visuals import VisualsAgent
@@ -260,7 +295,11 @@ def _render_intro_card(job_id: int, src_video: Path, text: str, w: int, h: int, 
         Image.new("RGB", (w, h), (15, 15, 22)).save(frame, "JPEG")
 
     agent = VisualsAgent(job_id=job_id, emit=False)
-    cfg = {"pos": "bottom", "fill": (255, 255, 255), "stroke": (10, 10, 10)}
+    cfg = {
+        "pos": "bottom",
+        "fill": _theme_rgb(visual_theme, "text_color", (255, 255, 255)),
+        "stroke": _theme_rgb(visual_theme, "stroke_color", (10, 10, 10)),
+    }
     agent._compose_thumb(frame, dst, text, w, h, cfg)
 
 
@@ -316,6 +355,58 @@ def _concat(intro: Path, original: Path, orig_duration: float, has_audio: bool,
            "-movflags", "+faststart", str(dst)]
     _run(cmd)
     return dst.exists() and dst.stat().st_size > 0
+
+
+# ---- design preview (no ffmpeg video render) ---------------------------------
+
+def render_preview(
+    job_id: int, video_format: str, line: str, *, visual_theme: dict | None = None,
+    source_path: str | None = None, analysis: dict | None = None,
+) -> str | None:
+    """Renders ONLY the overlay.png (short) or intro_card.jpg (long) a real
+    curation pass would produce -- no video encode, no TTS, no concat. Lets an
+    operator check a channel's visual_theme fast before spending real render
+    time. `source_path`/`analysis` are optional: without them the long-form
+    card falls back to a solid background instead of a frame from the clip."""
+    line = _clean(line or "")
+    if not line:
+        return None
+    analysis = analysis or {}
+    dims = None
+    if source_path:
+        dims = _dims(Path(source_path), analysis)
+    if not dims:
+        w, h = int(analysis.get("width") or 0), int(analysis.get("height") or 0)
+        dims = (w, h) if w > 0 and h > 0 else (1280, 720)
+    w, h = dims
+
+    work = _work_dir(job_id)
+    try:
+        if video_format == "short":
+            out = work / "preview_overlay.png"
+            _render_caption_png(line, w, h, out, visual_theme)
+        else:
+            out = work / "preview_intro_card.jpg"
+            if source_path:
+                _render_intro_card(job_id, Path(source_path), line, w, h, out, visual_theme)
+            else:
+                from PIL import Image
+
+                from backend.agents.visuals import VisualsAgent
+
+                blank = work / "preview_blank.jpg"
+                Image.new("RGB", (w, h), (15, 15, 22)).save(blank, "JPEG")
+                agent = VisualsAgent(job_id=job_id, emit=False)
+                cfg = {
+                    "pos": "bottom",
+                    "fill": _theme_rgb(visual_theme, "text_color", (255, 255, 255)),
+                    "stroke": _theme_rgb(visual_theme, "stroke_color", (10, 10, 10)),
+                }
+                agent._compose_thumb(blank, out, line, w, h, cfg)
+    except Exception as exc:  # noqa: BLE001
+        logger.info("preview render failed for job %s: %s", job_id, exc)
+        return None
+    return str(out) if out.exists() and out.stat().st_size > 0 else None
 
 
 # ---- shared helpers -----------------------------------------------------------

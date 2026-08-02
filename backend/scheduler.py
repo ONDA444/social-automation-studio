@@ -1189,6 +1189,15 @@ def _finalize_ready_video_job(
         if job.content_type != "music":
             stage = "aplicar camada de curadoria"
             curation_format = job.video_format or video_format
+            # A Channel row is optional (see models/channel.py) -- when the
+            # account has one, its visual_theme/tts_voice give this publish
+            # the channel's own identity instead of the fixed yellow-on-black
+            # default every channel used to share.
+            from backend.models import Channel as _Channel
+
+            channel = (
+                db.query(_Channel).filter_by(account_id=acct.id).first() if acct else None
+            )
             curated_path = apply_curation_layer(
                 job_id=job.id,
                 local_path=local_path,
@@ -1199,6 +1208,8 @@ def _finalize_ready_video_job(
                     "account_niche": getattr(acct, "niche", "") or "",
                 },
                 video_format=curation_format,
+                visual_theme=channel.resolved_visual_theme() if channel else None,
+                voice=channel.tts_voice if channel else None,
             )
             if curated_path != local_path:
                 local_path = curated_path
