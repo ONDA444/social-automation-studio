@@ -148,6 +148,15 @@ class Settings(BaseSettings):
     # default: hard cuts look clean and stream one clip at a time. Enable only on a
     # box with comfortable RAM.
     video_transitions: bool = False
+    # Editorial curation layer for Drive-sourced ("ready video") publishes: an
+    # original spoken take (long) or on-screen commentary line (short) added before
+    # publish. YouTube desmonetizes reused footage with no added human value/analysis
+    # (confirmed against ONDA444's own "conteudo reutilizado" rejection); this is what
+    # turns a straight Drive re-upload into an edited product. Best-effort — any
+    # failure in ready_video_curation.py falls back to the untouched clip, so this
+    # never blocks a publish. On by default; set READY_VIDEO_CURATION_ENABLED=0 to
+    # roll back instantly without a code revert.
+    ready_video_curation_enabled: bool = True
     # Visibility for auto-published videos when the job itself doesn't specify one.
     # "private" is the safe default; set DEFAULT_PRIVACY=public to post publicly so
     # the videos actually reach the audience. (public|unlisted|private)

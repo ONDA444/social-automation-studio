@@ -1110,6 +1110,7 @@ def _finalize_ready_video_job(
     `retry_ready_video_job` (the only safe retry path for a `from_ready_video`
     job — see dispatch.py's `_is_ready_video_job` guard) so the two paths
     can't silently drift apart."""
+    from backend.agents.ready_video_curation import apply_curation_layer
     from backend.agents.ready_video_seo import build_ready_video_package, is_audio_ready, render_audio_track_as_video
     from backend.config import settings
     from backend.models import JobStatus
@@ -1177,6 +1178,34 @@ def _finalize_ready_video_job(
             ready.video_format = "long"
             job.video_format = "long"
             job.shorts_paths = None
+
+        # Editorial curation layer (see ready_video_curation.py for the full why):
+        # adds an original spoken take (long) or on-screen commentary line (short)
+        # so every Drive publish carries real editorial value instead of a bare
+        # re-upload -- exactly what ONDA444's "conteudo reutilizado" rejection was
+        # missing. Skipped for wrapped music tracks (not the reused-footage risk
+        # this targets). Best-effort: apply_curation_layer never raises and falls
+        # back to the untouched clip on any failure, so it can never block a publish.
+        if job.content_type != "music":
+            stage = "aplicar camada de curadoria"
+            curation_format = job.video_format or video_format
+            curated_path = apply_curation_layer(
+                job_id=job.id,
+                local_path=local_path,
+                analysis=analysis,
+                context={
+                    "niche": getattr(ready, "niche", None) or getattr(acct, "drive_niche", None)
+                    or getattr(acct, "niche", None) or "",
+                    "account_niche": getattr(acct, "niche", "") or "",
+                },
+                video_format=curation_format,
+            )
+            if curated_path != local_path:
+                local_path = curated_path
+                job.main_video_path = local_path
+                if curation_format == "short":
+                    job.shorts_paths = [local_path]
+        stage = "preparar o video do Drive"
         meta = dict(ready.metadata_json or {})
         meta["analysis"] = {
             k: v
