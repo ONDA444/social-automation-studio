@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { api, mediaUrl } from '../api'
 import { PLATFORM_META, fmtDate } from '../lib'
+import { useToast, useConfirm } from './ui.jsx'
 
 export default function ApprovalCard({ job, onDone }) {
   const [showPlayer, setShowPlayer] = useState(false)
@@ -18,6 +19,8 @@ export default function ApprovalCard({ job, onDone }) {
   const ctx = job.video_context || {}
   const qc = ctx.qc || {}
   const compliance = ctx.compliance || {}
+  const toast = useToast()
+  const confirmDialog = useConfirm()
 
   const act = async (kind) => {
     setBusy(true)
@@ -26,23 +29,23 @@ export default function ApprovalCard({ job, onDone }) {
       const res = await api.post(`/jobs/${job.id}/${kind}`)
       // Ao aprovar, o backend pode devolver uma 'note' (ex.: publisher não
       // configurado). Mostra ao usuário para deixar claro que NÃO publicou.
-      if (kind === 'approve' && res && res.note) alert(res.note)
+      if (kind === 'approve' && res && res.note) toast.info(res.note)
       onDone?.()
-    } catch (e) { alert(e.message) } finally { setBusy(false) }
+    } catch (e) { toast.error(e.message) } finally { setBusy(false) }
   }
   const saveSeo = async () => {
     try {
       await api.patch(`/jobs/${job.id}/seo`, { seo_metadata: seo })
       setEditing(false)
-    } catch (e) { alert(e.message) }
+    } catch (e) { toast.error(e.message) }
   }
   const remove = async () => {
-    if (!confirm('Excluir este job e seus arquivos? Esta ação não pode ser desfeita.')) return
+    if (!await confirmDialog('Excluir este job e seus arquivos? Esta ação não pode ser desfeita.', { confirmLabel: 'Excluir', danger: true })) return
     setBusy(true)
     try {
       await api.del(`/jobs/${job.id}`)
       onDone?.()
-    } catch (e) { alert(e.message) } finally { setBusy(false) }
+    } catch (e) { toast.error(e.message) } finally { setBusy(false) }
   }
 
   const yt = seo.youtube || {}

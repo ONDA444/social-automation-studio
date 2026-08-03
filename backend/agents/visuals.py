@@ -286,11 +286,15 @@ class VisualsAgent(BaseAgent):
         return chosen.get(url_key)
 
     async def _download(self, client: httpx.AsyncClient, link: str, dst: Path) -> Path | None:
-        async with client.stream("GET", link) as resp:
-            resp.raise_for_status()
-            with open(dst, "wb") as f:
-                async for chunk in resp.aiter_bytes():
-                    f.write(chunk)
+        try:
+            async with client.stream("GET", link) as resp:
+                resp.raise_for_status()
+                with open(dst, "wb") as f:
+                    async for chunk in resp.aiter_bytes():
+                        f.write(chunk)
+        except Exception:
+            dst.unlink(missing_ok=True)                # don't leave a truncated file behind
+            raise
         return dst
 
     async def _pexels_video(self, query: str, assets_dir: Path, idx: int) -> Path | None:

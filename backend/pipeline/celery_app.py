@@ -24,6 +24,12 @@ app.conf.update(
     task_acks_late=True,
     worker_max_tasks_per_child=20,        # recycle workers (ffmpeg/memory hygiene)
     broker_connection_retry_on_startup=True,
+    # Aligned with scheduler._STUCK_JOB_MINUTES (15min): keeps Celery's own
+    # redelivery-after-worker-death window from disagreeing with the DB-based
+    # orphan sweep about when a job is "really dead" (task_acks_late=True
+    # otherwise redelivers after Redis's default 3600s visibility timeout,
+    # bypassing max_retries=0 / _ORPHAN_RESUME_MAX).
+    broker_transport_options={"visibility_timeout": 900},
 )
 
 # Periodic jobs (TrendingAgent etc.) are registered in Phase 6 via this schedule.

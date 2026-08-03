@@ -98,10 +98,27 @@ Scriptwriter → Narrator → Visuals → EditingDirector → MusicCurator
 Mais: **Analyzer** (Remix/StyleDNA), **AccountProfile**, **CrossPlatformLinker**,
 **Trending**, **ContentCalendar**, **Analytics**, **ErrorRecovery**, **Orchestrator**.
 
-Cada agente tem retry/backoff, emite eventos WebSocket (AgentLog ao vivo) e pode
-ser testado isolado: `python -m backend.agents.<nome> --test`.
+Cada agente baseado em `BaseAgent` tem retry/backoff e emite eventos WebSocket
+(AgentLog ao vivo). A maioria tem um demo standalone via
+`python -m backend.agents.<nome>` — olhe o bloco `if __name__ == "__main__":`
+de cada um antes de rodar: nem todos aceitam literalmente `--test` (alguns
+tomam argumento posicional, ex. `analyzer.py <url>`). Os módulos que são
+serviços sobre o banco (AccountProfile, Analytics, Drive Library, Performance)
+ou funções utilitárias sem estado de agente (Agenda, ChannelOptimizer,
+ChannelRefresh, CrossPlatformLinker, KeywordResearch, ManualUpload,
+QualityGate, ReadyVideoCuration, StyleGuide) não têm demo isolado — são
+cobertos pelos testes em `backend/tests/`.
 
 Efeitos FFmpeg testáveis: `python -m backend.effects.ffmpeg_effects --list`.
+
+CLI de operador (agenda/refresh de um canal direto do terminal, sem dashboard):
+
+```bash
+python -m backend.cli agenda --channel 3                    # ver a agenda do dia
+python -m backend.cli agenda --channel 3 --generate          # gerar jobs até fechar os limites diários
+python -m backend.cli refresh --channel 3                    # reprocessar curadoria/design do canal
+python -m backend.cli refresh --channel 3 --job 4821          # reprocessar só um job
+```
 
 ---
 
@@ -180,6 +197,13 @@ META_REDIRECT_URI=https://SEU-BACKEND.railway.app/auth/instagram/callback
 
 > Use a URL copiada no Passo 3.6, com `/api` no final.
 
+> ⚠️ **`VITE_API_URL` é obrigatório neste passo.** Se a variável ficar em
+> branco, `frontend/src/api.js` cai num fallback hardcoded (`RAILWAY_BACKEND`)
+> que aponta para o backend Railway do projeto original — **não** para o seu.
+> Ao criar um projeto Railway novo (outro slug/domínio), ou se o backend for
+> redeployado com outra URL, defina `VITE_API_URL` aqui; não dependa do
+> fallback.
+
 4. Clique em **Deploy**
 5. Copie a URL do Vercel (ex: `https://social-automation-studio.vercel.app`)
 6. Volte ao Railway → **Variables** → adicione `CORS_ORIGINS=https://social-automation-studio.vercel.app`
@@ -202,6 +226,26 @@ frontend/   React + Vite + Tailwind (8 páginas, AgentLog WebSocket)
 assets/     20 trilhas CC0 + catálogo
 cache/ output/ tmp/   artefatos gerados
 ```
+
+---
+
+## 📚 Docs de arquitetura
+
+Decisões de design (o "porquê" por trás do código) ficam em `docs/`:
+
+| Doc | Conteúdo |
+|---|---|
+| [`docs/superpowers/specs/2026-06-30-drive-ready-videos-design.md`](docs/superpowers/specs/2026-06-30-drive-ready-videos-design.md) | Segunda fonte de conteúdo (vídeos prontos do Google Drive) e os Channel Modes `ai`/`drive`/`mixed` |
+| [`docs/superpowers/specs/2026-06-30-drive-video-analysis-seo-design.md`](docs/superpowers/specs/2026-06-30-drive-video-analysis-seo-design.md) | Análise + geração de metadados/SEO reais para vídeos do Drive (em vez de título genérico) |
+| [`docs/superpowers/specs/2026-07-01-drive-monetization-smart-schedule-design.md`](docs/superpowers/specs/2026-07-01-drive-monetization-smart-schedule-design.md) | Monetização/localização nos vídeos do Drive e o agendamento inteligente (smart schedule) |
+| [`docs/superpowers/specs/2026-07-11-manual-video-upload-design.md`](docs/superpowers/specs/2026-07-11-manual-video-upload-design.md) | Upload manual de vídeo (arquivo do PC) como job avulso, fora da rotação do Drive |
+| [`docs/MANUAL_DE_QUALIDADE.md`](docs/MANUAL_DE_QUALIDADE.md) | Manual de roteiro/gancho/retenção/SEO usado por `backend/agents/style_guide.py` |
+| [`docs/SISTEMA_DE_PROMPTS_v2.md`](docs/SISTEMA_DE_PROMPTS_v2.md) | Mapa completo dos 14 estágios do pipeline e os prompts de cada agente |
+
+Bugs de produção já investigados (sintoma → causa raiz → fix), principalmente
+Drive sync e OAuth, ficam indexados em
+[`memory/README.md`](memory/README.md) — confira ali antes de investigar um
+sintoma parecido do zero.
 
 ---
 

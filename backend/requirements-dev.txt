@@ -1,0 +1,5 @@
+# Dev-only tooling — not installed in production (Railway/nixpacks build only
+# installs requirements.txt).
+-r requirements.txt
+
+ruff==0.6.9

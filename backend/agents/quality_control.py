@@ -21,11 +21,21 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
 import subprocess
 from pathlib import Path
 
 from backend.agents.base_agent import BaseAgent
+from backend.agents.video_editor import H as _LANDSCAPE_H, W as _LANDSCAPE_W
+
+logger = logging.getLogger("studio.quality_control")
+
+# ffprobe is a cheap metadata read; a hung/oversized ffmpeg analysis pass
+# (volumedetect/blackdetect decode the whole file) gets a longer but still
+# bounded budget so a malformed input can never stall the QC thread forever.
+_FFPROBE_TIMEOUT = 15
+_FFMPEG_ANALYSIS_TIMEOUT = 300
 
 
 class QualityControlAgent(BaseAgent):
@@ -45,15 +55,18 @@ class QualityControlAgent(BaseAgent):
         shorts = shorts if shorts is not None else (self.ctx_get("shorts") or [])
         script = script or self.ctx_get("script") or {}
         narration = narration or self.ctx_get("narration") or {}
+        video_format = self.ctx_get("format") or script.get("format") or "long"
 
         path = main_video.get("main_video_path")
-        report = await asyncio.to_thread(self._check, path, visuals, shorts, script, narration)
+        report = await asyncio.to_thread(
+            self._check, path, visuals, shorts, script, narration, video_format
+        )
         self.ctx_set("qc", report)
         status = report["status"]
         self.emit("progress", f"QC: {status}", progress=88, qc=report)
         return report
 
-    def _check(self, path, visuals, shorts, script, narration=None) -> dict:
+    def _check(self, path, visuals, shorts, script, narration=None, video_format="long") -> dict:
         warnings: list[str] = []
         narration = narration or {}
 
@@ -79,9 +92,14 @@ class QualityControlAgent(BaseAgent):
         # ---- QUALITY checks: accumulate as warnings, let the human decide. ----
         # Status becomes qc_warning (not qc_failed_*), so the orchestrator lets
         # the job continue to compliance -> AWAITING_APPROVAL.
+        # Compared against video_editor's actual render target (settings.video_resolution),
+        # not a fixed 1920x1080 — a native short swaps W/H just like the renderer does.
         w, h = meta["width"], meta["height"]
-        if not ((w >= 1920 and h >= 1080) or (w == 1080 and h == 1080)):
-            warnings.append(f"resolução fora do padrão ({w}x{h})")
+        expected_w, expected_h = (
+            (_LANDSCAPE_H, _LANDSCAPE_W) if video_format == "short" else (_LANDSCAPE_W, _LANDSCAPE_H)
+        )
+        if (w, h) != (expected_w, expected_h):
+            warnings.append(f"resolução fora do padrão ({w}x{h}, esperado {expected_w}x{expected_h})")
 
         # The video is built to the narration length, so that's the authoritative
         # "planned" baseline. Fall back to the script's estimate only if silent.
@@ -93,13 +111,16 @@ class QualityControlAgent(BaseAgent):
             elif not (0.8 <= ratio <= 1.2):
                 warnings.append(f"duração {dur:.1f}s fora de 80-120% do plano ({planned:.0f}s)")
 
-        mean_db = self._mean_volume(path)
+        mean_db, has_blackframes = self._analyze_audio_video(path)
         if mean_db is not None and mean_db < -30:
             warnings.append(f"áudio baixo ({mean_db:.1f} dB)")
 
         # Black frames are EXPECTED for dark content (quote_viral, dark
-        # intros/outros). Flag for review, never abort.
-        if self._has_long_blackframes(path):
+        # intros/outros). Flag for review, never abort. A failed probe (None)
+        # fails safe as a warning too, instead of silently reading as "clean".
+        if has_blackframes is None:
+            warnings.append("não foi possível verificar frames pretos (análise falhou)")
+        elif has_blackframes:
             warnings.append("frames pretos > 3s (pode ser intencional em conteúdo escuro)")
 
         if meta["bitrate"] and meta["bitrate"] < 3_000_000:
@@ -113,9 +134,16 @@ class QualityControlAgent(BaseAgent):
         elif self._is_blank(thumb_a):
             warnings.append("thumbnail com baixa variação visual")
 
-        # Shorts vertical resolution.
+        # Shorts vertical resolution — always 1080x1920, per shorts_factory.py's
+        # fixed output. A native short's "shorts" entry IS the main video file
+        # (see orchestrator.py), already checked above at its own render
+        # resolution; re-checking it here against the factory's spec would
+        # double-penalize the same file under conflicting expectations.
         for s in shorts or []:
-            sm = self._probe(s.get("path"))
+            s_path = s.get("path")
+            if path and s_path and str(s_path) == str(path):
+                continue
+            sm = self._probe(s_path)
             if sm is None:
                 warnings.append(f"short {s.get('num')} ausente ou corrompido")
             elif not (sm["width"] == 1080 and sm["height"] == 1920):
@@ -133,7 +161,7 @@ class QualityControlAgent(BaseAgent):
             out = subprocess.run(
                 ["ffprobe", "-v", "error", "-print_format", "json",
                  "-show_streams", "-show_format", str(path)],
-                capture_output=True, text=True,
+                capture_output=True, text=True, timeout=_FFPROBE_TIMEOUT,
             )
             data = json.loads(out.stdout)
             vstream = next((s for s in data["streams"] if s["codec_type"] == "video"), None)
@@ -149,32 +177,32 @@ class QualityControlAgent(BaseAgent):
                 "vcodec": vstream.get("codec_name"),
                 "has_audio": any(s["codec_type"] == "audio" for s in data["streams"]),
             }
-        except Exception:
+        except Exception as exc:
+            logger.warning("QC ffprobe failed for %s: %s", path, exc)
             return None
 
     @staticmethod
-    def _mean_volume(path) -> float | None:
-        try:
-            out = subprocess.run(
-                ["ffmpeg", "-i", str(path), "-af", "volumedetect", "-f", "null", "-"],
-                capture_output=True, text=True, encoding="utf-8", errors="replace",
-            )
-            m = re.search(r"mean_volume:\s*(-?\d+\.?\d*)\s*dB", out.stderr)
-            return float(m.group(1)) if m else None
-        except Exception:
-            return None
+    def _analyze_audio_video(path) -> tuple[float | None, bool | None]:
+        """Mean volume + black-frame detection in a single decode pass (one
+        ffmpeg call reading the file once, instead of two separate full decodes).
 
-    @staticmethod
-    def _has_long_blackframes(path) -> bool:
+        Returns (mean_db, has_blackframes). has_blackframes is None (not False)
+        when the analysis itself couldn't run, so a broken probe fails safe as
+        a warning instead of silently reading as "no black frames found".
+        """
         try:
             out = subprocess.run(
                 ["ffmpeg", "-i", str(path), "-vf", "blackdetect=d=3:pic_th=0.98",
-                 "-an", "-f", "null", "-"],
+                 "-af", "volumedetect", "-f", "null", "-"],
                 capture_output=True, text=True, encoding="utf-8", errors="replace",
+                timeout=_FFMPEG_ANALYSIS_TIMEOUT,
             )
-            return "black_start" in out.stderr
-        except Exception:
-            return False
+        except Exception as exc:
+            logger.warning("QC audio/black-frame analysis failed for %s: %s", path, exc)
+            return None, None
+        m = re.search(r"mean_volume:\s*(-?\d+\.?\d*)\s*dB", out.stderr)
+        mean_db = float(m.group(1)) if m else None
+        return mean_db, "black_start" in out.stderr
 
     @staticmethod
     def _is_blank(image_path) -> bool:
@@ -183,7 +211,8 @@ class QualityControlAgent(BaseAgent):
 
             stat = ImageStat.Stat(Image.open(image_path).convert("L"))
             return stat.stddev[0] < 8  # near-uniform image
-        except Exception:
+        except Exception as exc:
+            logger.warning("QC thumbnail blank-check failed for %s: %s", image_path, exc)
             return False
 
 

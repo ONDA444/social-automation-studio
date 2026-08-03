@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import tempfile
+import threading
 import unittest
 from datetime import datetime, timedelta
 from unittest.mock import patch
 
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy import create_engine, event
+from sqlalchemy.orm import Session as _Session, sessionmaker
 
 from backend import scheduler
 from backend.database import Base
@@ -52,7 +54,9 @@ class RecoverStuckQueuedTests(unittest.TestCase):
 
         mock_dispatch.assert_called_once_with(job_id)
         refreshed = Session().get(VideoJob, job_id)
-        self.assertEqual(refreshed.status, JobStatus.QUEUED)  # dispatch_job (mocked) owns the transition
+        # The atomic claim itself flips QUEUED -> PROCESSING (see scheduler.py);
+        # with dispatch_job mocked out, nothing moves it further from here.
+        self.assertEqual(refreshed.status, JobStatus.PROCESSING)
 
     def test_freshly_queued_job_is_left_alone(self) -> None:
         """A job queued moments ago hasn't had a chance to be picked up by a
@@ -155,6 +159,110 @@ class RecoverStuckQueuedTests(unittest.TestCase):
         # The Drive file it was holding must return to the pool for another job.
         self.assertEqual(refreshed_ready.status, "available")
         self.assertIsNone(refreshed_ready.reserved_job_id)
+
+
+class _BarrierSession(_Session):
+    """Session that pauses right after the candidate-selecting SELECT so two
+    "processes" can be made to race past that point before either claims,
+    reproducing two concurrent scheduler ticks/replicas racing the same
+    stuck-QUEUED candidate."""
+
+    _barrier: threading.Barrier | None = None
+
+    def execute(self, statement, *args, **kwargs):  # noqa: D401
+        result = super().execute(statement, *args, **kwargs)
+        sql = str(statement).lower()
+        if (
+            "select" in sql
+            and "video_jobs" in sql
+            and not getattr(self, "_synced", False)
+        ):
+            self._synced = True
+            if self._barrier is not None:
+                self._barrier.wait(timeout=5)
+        return result
+
+
+class RecoverStuckQueuedRaceConditionTests(unittest.TestCase):
+    def test_two_concurrent_ticks_do_not_double_dispatch_same_job(self) -> None:
+        """Reproduces two scheduler replicas both running _job_recover_stuck_queued
+        in the same window: both SELECT the same stale QUEUED job before either
+        claims it. The atomic claim must flip status away from QUEUED (not just
+        bump updated_at) so the loser's UPDATE ... WHERE status == QUEUED hits
+        rowcount == 0 and the job is only ever dispatched once."""
+        tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        tmp.close()
+        db_url = f"sqlite:///{tmp.name}"
+
+        engine = create_engine(db_url, connect_args={"timeout": 30})
+
+        @event.listens_for(engine, "connect")
+        def _set_busy_timeout(dbapi_conn, _):
+            dbapi_conn.execute("PRAGMA busy_timeout=30000")
+
+        Base.metadata.create_all(bind=engine)
+
+        setup_session = sessionmaker(bind=engine)()
+        account = PlatformAccount(platform="youtube", display_name="Canal Teste", niche="geral")
+        setup_session.add(account)
+        setup_session.flush()
+        job = VideoJob(
+            title="Preso", mode="from_ready_video", content_type="film_recap_ai_images",
+            video_format="long", account_id=account.id, status=JobStatus.QUEUED,
+            scheduled_at=datetime.utcnow() - timedelta(hours=2),
+            updated_at=datetime.utcnow() - timedelta(minutes=30),
+        )
+        setup_session.add(job)
+        setup_session.commit()
+        job_id = job.id
+        setup_session.close()
+
+        barrier = threading.Barrier(2, timeout=5)
+
+        def session_factory():
+            engine_thread = create_engine(db_url, connect_args={"timeout": 30})
+
+            @event.listens_for(engine_thread, "connect")
+            def _set_busy_timeout_thread(dbapi_conn, _):
+                dbapi_conn.execute("PRAGMA busy_timeout=30000")
+
+            Maker = sessionmaker(bind=engine_thread, class_=_BarrierSession)
+            s = Maker()
+            s._barrier = barrier
+            return s
+
+        dispatched: list[int] = []
+        dispatch_lock = threading.Lock()
+
+        def fake_dispatch_job(jid):
+            with dispatch_lock:
+                dispatched.append(jid)
+
+        errors: list[Exception] = []
+
+        def run():
+            try:
+                scheduler._job_recover_stuck_queued()
+            except Exception as exc:  # noqa: BLE001
+                errors.append(exc)
+
+        with patch.object(scheduler, "SessionLocal", session_factory), \
+             patch("backend.pipeline.dispatch.is_inflight", return_value=False), \
+             patch("backend.pipeline.dispatch.dispatch_job", side_effect=fake_dispatch_job):
+            t1 = threading.Thread(target=run)
+            t2 = threading.Thread(target=run)
+            t1.start()
+            t2.start()
+            t1.join(timeout=15)
+            t2.join(timeout=15)
+
+        self.assertEqual(errors, [])
+        self.assertEqual(dispatched.count(job_id), 1)
+
+        verify_session = sessionmaker(bind=engine)()
+        refreshed = verify_session.get(VideoJob, job_id)
+        self.assertEqual(refreshed.status, JobStatus.PROCESSING)
+        verify_session.close()
 
 
 class RedispatchQueuedJobsBootTests(unittest.TestCase):

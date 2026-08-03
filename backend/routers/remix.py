@@ -7,10 +7,13 @@ from sqlalchemy.orm import Session
 
 from backend.agents.analyzer import AnalyzerAgent
 from backend.database import get_db
-from backend.models import JobStatus, VideoJob
+from backend.models import JobStatus, PlatformAccount, VideoJob
 from backend.pipeline.dispatch import dispatch_job
 
 router = APIRouter(prefix="/remix", tags=["remix"])
+
+# Mirrors PLATFORMS in routers/accounts.py — the set of platforms the uploaders support.
+VALID_PLATFORMS = {"youtube", "tiktok", "instagram"}
 
 
 class AnalyzeRequest(BaseModel):
@@ -37,8 +40,17 @@ async def analyze(payload: AnalyzeRequest):
     return {"style_dna": dna}
 
 
+def _validate_remix_create(db: Session, payload: RemixCreate) -> None:
+    if payload.account_id is not None and db.get(PlatformAccount, payload.account_id) is None:
+        raise HTTPException(400, f"account_id inválido: {payload.account_id} não existe")
+    invalid = [p for p in payload.target_platforms if p not in VALID_PLATFORMS]
+    if invalid:
+        raise HTTPException(400, f"target_platforms inválido: {invalid}")
+
+
 @router.post("/create")
 async def create_remix(payload: RemixCreate, db: Session = Depends(get_db)):
+    _validate_remix_create(db, payload)
     dna = payload.style_dna
     if dna is None and payload.source:
         dna = await AnalyzerAgent(job_id=None, emit=False).execute(source=payload.source)

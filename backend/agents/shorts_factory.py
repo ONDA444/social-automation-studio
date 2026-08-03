@@ -21,10 +21,11 @@ import asyncio
 import subprocess
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw
 
 from backend.agents.base_agent import BaseAgent
 from backend.agents.video_editor import VENC, _run
+from backend.agents.visuals import VisualsAgent
 from backend.config import settings
 
 FORMATS = [
@@ -139,10 +140,7 @@ class ShortsFactoryAgent(BaseAgent):
         w, h = 720, 110
         img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
         d = ImageDraw.Draw(img)
-        try:
-            font = ImageFont.truetype("arialbd.ttf", 46)
-        except Exception:
-            font = ImageFont.load_default()
+        font = VisualsAgent._font(46)
         text = "↑ Siga para mais"
         tw = d.textlength(text, font=font)
         # rounded translucent pill

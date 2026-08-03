@@ -10,11 +10,14 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import logging
 from typing import Any
 
 from cryptography.fernet import Fernet, InvalidToken
 
 from backend.config import settings
+
+logger = logging.getLogger(__name__)
 
 
 def _fernet() -> Fernet:
@@ -31,5 +34,8 @@ def decrypt_credentials(token: str | None) -> dict[str, Any]:
         return {}
     try:
         return json.loads(_fernet().decrypt(token.encode()).decode())
-    except (InvalidToken, ValueError):
+    except (InvalidToken, ValueError) as exc:
+        logger.error(
+            "decrypt_credentials falhou (SECRET_KEY divergente/corrompido?): %s", exc
+        )
         return {}

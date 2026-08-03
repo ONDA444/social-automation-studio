@@ -1,35 +1,30 @@
 import { useEffect, useState } from 'react'
-import { createPortal } from 'react-dom'
 import { api } from '../api'
+import { useAccounts } from '../AccountsContext.jsx'
+import { Modal } from './ui.jsx'
+import { FALLBACK_CONTENT_TYPES } from '../lib'
 
-// Fallback usado quando GET /content-types falhar ou ainda não existir.
-const FALLBACK_CONTENT_TYPES = [
-  { value: 'auto', label: '✨ Automático (IA detecta)' },
-  { value: 'film_recap_ai_images', label: 'Recap (imagens IA)' },
-  { value: 'sports_highlights', label: 'Esportes (highlights)' },
-  { value: 'quote_viral', label: 'Frase viral' },
-]
 const PLATFORMS = ['youtube', 'tiktok', 'instagram']
 
 export default function AddJobModal({ open, onClose, onCreated }) {
   const [form, setForm] = useState({ title: '', content_type: 'auto', format: 'long', target_platforms: ['youtube'], account_id: '' })
-  const [accounts, setAccounts] = useState([])
+  const { accounts } = useAccounts()
   const [contentTypes, setContentTypes] = useState(FALLBACK_CONTENT_TYPES)
   const [busy, setBusy] = useState(false)
 
   useEffect(() => {
     if (!open) return
-    api.get('/accounts').then((d) => {
-      setAccounts(d.accounts || [])
-      // Pre-bind to the first channel so the video uses THAT channel's voice/language.
-      // Leaving it unset made narration fall back to the generic default voice.
-      setForm((f) => (f.account_id || !d.accounts?.length) ? f : { ...f, account_id: String(d.accounts[0].id) })
-    }).catch(() => {})
+    // Pre-bind to the first channel so the video uses THAT channel's voice/language.
+    // Leaving it unset made narration fall back to the generic default voice.
+    setForm((f) => (f.account_id || !accounts.length) ? f : { ...f, account_id: String(accounts[0].id) })
+  }, [open, accounts])
+
+  useEffect(() => {
+    if (!open) return
     api.get('/jobs/content-types')
       .then((d) => { const list = Array.isArray(d) ? d : d?.content_types; if (Array.isArray(list) && list.length) setContentTypes(list) })
       .catch(() => setContentTypes(FALLBACK_CONTENT_TYPES))
   }, [open])
-  if (!open) return null
 
   const toggle = (p) => setForm((f) => ({ ...f, target_platforms: f.target_platforms.includes(p) ? f.target_platforms.filter((x) => x !== p) : [...f.target_platforms, p] }))
 
@@ -53,25 +48,18 @@ export default function AddJobModal({ open, onClose, onCreated }) {
     } catch (e) { alert(e.message) } finally { setBusy(false) }
   }
 
-  // Portal to document.body: a page wrapper's `.fade-in` animation leaves a
-  // residual `transform` after finishing (animation-fill-mode: both), which
-  // breaks `fixed inset-0` positioning for any modal nested inside it (the
-  // ancestor's transform creates a new containing block, pinning `fixed` to
-  // that box instead of the viewport). See ManualUploadModal.jsx for the
-  // full writeup of this bug.
-  return createPortal(
-    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm grid place-items-center z-50 p-3 sm:p-4 fade-in overflow-y-auto" onClick={onClose}>
-      <div className="card p-4 sm:p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto shadow-[0_20px_60px_rgba(0,0,0,0.5)] animate-[fadeIn_.2s_ease-out] origin-center" onClick={(e) => e.stopPropagation()}>
-        <h3 className="heading text-lg font-semibold mb-4">Novo vídeo</h3>
+  return (
+    <Modal open={open} onClose={onClose} labelledBy="add-job-modal-title">
+        <h3 id="add-job-modal-title" className="heading text-lg font-semibold mb-4">Novo vídeo</h3>
         <div className="space-y-3">
           <div>
-            <label className="text-xs text-text-muted">Título / Temas</label>
-            <textarea className="input mt-1 min-h-[88px] resize-y" rows={4} value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="Um tema por linha (ou separados por vírgula). Ex: Copa 1958, Copa 1970, ..." autoFocus />
+            <label htmlFor="addjob-title" className="text-xs text-text-muted">Título / Temas</label>
+            <textarea id="addjob-title" className="input mt-1 min-h-[88px] resize-y" rows={4} value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="Um tema por linha (ou separados por vírgula). Ex: Copa 1958, Copa 1970, ..." autoFocus />
             <p className="text-[11px] text-text-muted mt-1">{themes.length} {themes.length === 1 ? 'tema detectado' : 'temas detectados'}</p>
           </div>
           <div>
-            <label className="text-xs text-text-muted">Tipo de conteúdo</label>
-            <select className="input mt-1" value={form.content_type} onChange={(e) => setForm({ ...form, content_type: e.target.value })}>
+            <label htmlFor="addjob-content-type" className="text-xs text-text-muted">Tipo de conteúdo</label>
+            <select id="addjob-content-type" className="input mt-1" value={form.content_type} onChange={(e) => setForm({ ...form, content_type: e.target.value })}>
               {contentTypes.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
             </select>
             {form.content_type === 'auto' && (
@@ -102,8 +90,8 @@ export default function AddJobModal({ open, onClose, onCreated }) {
             </div>
           </div>
           <div>
-            <label className="text-xs text-text-muted">Canal (define a voz e o idioma)</label>
-            <select className="input mt-1" value={form.account_id} onChange={(e) => setForm({ ...form, account_id: e.target.value })}>
+            <label htmlFor="addjob-account" className="text-xs text-text-muted">Canal (define a voz e o idioma)</label>
+            <select id="addjob-account" className="input mt-1" value={form.account_id} onChange={(e) => setForm({ ...form, account_id: e.target.value })}>
               <option value="">— nenhum (voz padrão) —</option>
               {accounts.map((a) => <option key={a.id} value={a.id}>{a.display_name} ({a.platform})</option>)}
             </select>
@@ -114,8 +102,6 @@ export default function AddJobModal({ open, onClose, onCreated }) {
           <button className="btn-ghost w-full sm:w-auto" onClick={onClose}>Cancelar</button>
           <button className="btn-primary w-full sm:w-auto" disabled={busy} onClick={submit}>{busy ? 'Criando...' : (themes.length > 1 ? `Criar ${themes.length} vídeos` : 'Criar e gerar')}</button>
         </div>
-      </div>
-    </div>,
-    document.body
+    </Modal>
   )
 }

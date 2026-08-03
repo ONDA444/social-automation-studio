@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import { api, mediaUrl } from '../api'
 import { useWs } from '../App.jsx'
+import { useAccounts } from '../AccountsContext.jsx'
 import AddJobModal from '../components/AddJobModal.jsx'
-import { PageHeader, EmptyState, StatusBadge } from '../components/ui.jsx'
+import { PageHeader, EmptyState, ErrorBanner, StatusBadge, useToast, useConfirm } from '../components/ui.jsx'
 import { PLATFORM_META, fmtDate } from '../lib'
 
 const CHANNEL_EDITABLE = new Set(['queued', 'awaiting_approval', 'approved', 'error', 'tiktok_pending_approval'])
@@ -22,7 +23,13 @@ function Row({ job, accounts, selected, onToggleSelect, onChannelChange, onRetry
     <div className="card px-3 py-2 fade-in">
       {/* Uma linha só no desktop; empilha no mobile (flex-wrap). */}
       <div className="flex items-center gap-2 sm:gap-3 flex-wrap">
-        <input type="checkbox" className="shrink-0 accent-accent w-4 h-4" checked={selected} onChange={() => onToggleSelect(job.id)} />
+        <input
+          type="checkbox"
+          className="shrink-0 accent-accent w-4 h-4"
+          checked={selected}
+          onChange={() => onToggleSelect(job.id)}
+          aria-label={`Selecionar vídeo "${job.title}"`}
+        />
 
         <div className="flex-1 min-w-0" style={{ flexBasis: '180px' }}>
           <p className="font-medium truncate text-sm leading-tight">
@@ -121,8 +128,11 @@ function Row({ job, accounts, selected, onToggleSelect, onChannelChange, onRetry
 
 export default function Queue() {
   const [jobs, setJobs]         = useState([])
+  const [total, setTotal]       = useState(0)
+  const [pageSize, setPageSize] = useState(200)
   const [loaded, setLoaded]     = useState(false)
-  const [accounts, setAccounts] = useState([])
+  const [loadError, setLoadError] = useState(false)
+  const { accounts, error: accountsError, refresh: refreshAccounts } = useAccounts()
   const [selected, setSelected] = useState(() => new Set())
   const [modal, setModal]       = useState(false)
   const [statusFilter, setStatusFilter] = useState('all')
@@ -130,17 +140,22 @@ export default function Queue() {
   const [query, setQuery] = useState('')
   const fileRef = useRef(null)
   const { count } = useWs()
+  const toast = useToast()
+  const confirmDialog = useConfirm()
 
-  const load = () => api.get('/jobs?limit=200')
-    .then((d) => setJobs(d.jobs || []))
-    .catch(() => {})
+  // On failure, keep whatever jobs were last loaded (don't overwrite good data
+  // with an empty list) but flag it so the UI can warn instead of showing a
+  // plain "fila vazia" as if there simply were no jobs.
+  const load = () => api.get(`/jobs?limit=${pageSize}`)
+    .then((d) => { setJobs(d.jobs || []); setTotal(d.total ?? (d.jobs || []).length); setLoadError(false) })
+    .catch(() => setLoadError(true))
     .finally(() => setLoaded(true))
 
-  useEffect(() => { load() }, [])
+  // Também recarrega quando pageSize cresce (botão "Carregar mais" abaixo).
+  useEffect(() => { load() }, [pageSize])
   useEffect(() => { const t = setTimeout(load, 800); return () => clearTimeout(t) }, [count])
-  useEffect(() => {
-    api.get('/accounts').then((d) => setAccounts(d.accounts || [])).catch(() => setAccounts([]))
-  }, [])
+  const loadMore = () => setPageSize((n) => Math.min(n + 200, 500))
+  const hasMore = jobs.length < total && pageSize < 500
 
   useEffect(() => {
     setSelected((prev) => {
@@ -153,26 +168,26 @@ export default function Queue() {
 
   const retry = async (id) => {
     try { await api.post(`/jobs/${id}/retry`); load() }
-    catch (err) { alert(err.message) }
+    catch (err) { toast.error(err.message) }
   }
 
   const del = async (id) => {
-    if (!confirm('Remover job?')) return
+    if (!await confirmDialog('Remover job?', { confirmLabel: 'Remover', danger: true })) return
     try { await api.del(`/jobs/${id}`); load() }
-    catch (err) { alert(err.message) }
+    catch (err) { toast.error(err.message) }
   }
 
   const importCsv = async (e) => {
     const f = e.target.files?.[0]
     if (!f) return
-    try { const r = await api.upload('/jobs/import-csv', f); alert(`${r.count} jobs criados`); load() }
-    catch (err) { alert(err.message) }
+    try { const r = await api.upload('/jobs/import-csv', f); toast.success(`${r.count} jobs criados`); load() }
+    catch (err) { toast.error(err.message) }
     e.target.value = ''
   }
 
   const changeChannel = async (id, val) => {
     try { await api.patch(`/jobs/${id}`, { account_id: val ? Number(val) : null }); load() }
-    catch (err) { alert(err.message) }
+    catch (err) { toast.error(err.message) }
   }
 
   const republish = async (id) => {
@@ -181,9 +196,9 @@ export default function Queue() {
       const parts = []
       if (r?.note) parts.push(r.note)
       if (r?.pending_platforms?.length) parts.push(`Pendentes: ${r.pending_platforms.join(', ')}`)
-      alert(parts.length ? parts.join('\n') : 'Republicação iniciada.')
+      toast.success(parts.length ? parts.join('\n') : 'Republicação iniciada.')
       load()
-    } catch (err) { alert(err.message) }
+    } catch (err) { toast.error(err.message) }
   }
 
   // Seleção múltipla
@@ -214,15 +229,15 @@ export default function Queue() {
   const deleteSelected = async () => {
     const ids = [...selected]
     if (ids.length === 0) return
-    if (!confirm(`Excluir ${ids.length} job(s) selecionado(s)?`)) return
+    if (!await confirmDialog(`Excluir ${ids.length} job(s) selecionado(s)?`, { confirmLabel: 'Excluir', danger: true })) return
     try { await api.post('/jobs/bulk-delete', { ids }); setSelected(new Set()); load() }
-    catch (err) { alert(err.message) }
+    catch (err) { toast.error(err.message) }
   }
 
   const clearErrors = async () => {
-    if (!confirm('Excluir todos os jobs com erro?')) return
+    if (!await confirmDialog('Excluir todos os jobs com erro?', { confirmLabel: 'Excluir', danger: true })) return
     try { await api.post('/jobs/bulk-delete', { status: 'error' }); setSelected(new Set()); load() }
-    catch (err) { alert(err.message) }
+    catch (err) { toast.error(err.message) }
   }
 
   return (
@@ -230,7 +245,7 @@ export default function Queue() {
       <PageHeader title={
         <span className="inline-flex items-center gap-2.5">
           Fila
-          <span className="badge" style={{ background: 'var(--accent-dim)', color: 'var(--accent)', border: '1px solid var(--border)' }}>{jobs.length}</span>
+          <span className="badge" style={{ background: 'var(--accent-dim)', color: 'var(--accent)', border: '1px solid var(--border)' }}>{total || jobs.length}</span>
           {errCount > 0 && (
             <span className="badge" style={{ background: 'rgba(255,80,102,0.12)', color: 'var(--error)', border: '1px solid rgba(255,80,102,0.2)' }}>
               {errCount} erro{errCount > 1 ? 's' : ''}
@@ -246,6 +261,10 @@ export default function Queue() {
       <p className="text-xs text-text-muted">
         CSV: <code className="font-mono bg-elevated px-1.5 py-0.5 rounded">title, topic, content_type, mode, target_platforms (a|b), account_id</code>
       </p>
+
+      {(loadError || accountsError) && (
+        <ErrorBanner message="Backend offline — não foi possível atualizar a fila." onRetry={() => { load(); refreshAccounts() }} />
+      )}
 
       {jobs.length > 0 && (
         <div className="card p-3 flex items-center gap-3 flex-wrap">
@@ -288,15 +307,26 @@ export default function Queue() {
         </div>
       )}
 
+      {hasMore && (
+        <div className="flex items-center gap-2 flex-wrap text-xs text-text-muted">
+          <span>Mostrando {jobs.length} de {total} jobs mais recentes — os filtros acima só enxergam os já carregados.</span>
+          <button className="btn-ghost text-xs" onClick={loadMore}>Carregar mais</button>
+        </div>
+      )}
+
       {!loaded ? (
         <div className="space-y-1.5">
           {Array.from({ length: 5 }).map((_, i) => <div key={i} className="skeleton h-14 rounded-card" />)}
         </div>
       ) : jobs.length === 0 ? (
         <div className="rounded-card" style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)' }}>
-          <EmptyState icon="🎬" title="Fila vazia."
-            hint="Crie um vídeo ou importe um CSV para começar."
-            action={<button className="btn btn-primary text-sm" onClick={() => setModal(true)}>+ Novo vídeo</button>} />
+          {loadError
+            ? <EmptyState icon="⚠" title="Não foi possível carregar a fila."
+                hint="Verifique se o backend está no ar e tente novamente."
+                action={<button className="btn btn-primary text-sm" onClick={load}>↻ Tentar novamente</button>} />
+            : <EmptyState icon="🎬" title="Fila vazia."
+                hint="Crie um vídeo ou importe um CSV para começar."
+                action={<button className="btn btn-primary text-sm" onClick={() => setModal(true)}>+ Novo vídeo</button>} />}
         </div>
       ) : filteredJobs.length === 0 ? (
         <div className="rounded-card" style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)' }}>

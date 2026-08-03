@@ -271,12 +271,12 @@ Formato EXATO:
         base = copy.deepcopy(HEURISTICS.get(content_type, HEURISTICS["film_recap_ai_images"]))
         if plan.get("color_grade") in COLOR_GRADES:
             base["color_grade"] = plan["color_grade"]
-        tr = plan.get("transitions", {})
+        tr = plan.get("transitions") or {}
         if tr.get("default") in TRANSITIONS:
             base["transitions"]["default"] = tr["default"]
         if tr.get("on_highlight") in TRANSITIONS:
             base["transitions"]["on_highlight"] = tr["on_highlight"]
-        cam = plan.get("camera_effects", {})
+        cam = plan.get("camera_effects") or {}
         if cam.get("default") in CAMERA:
             base["camera_effects"]["default"] = cam["default"]
         if cam.get("alt") in CAMERA:

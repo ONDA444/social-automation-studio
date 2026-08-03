@@ -1,9 +1,35 @@
-import { useRef, useState } from 'react'
-import { createPortal } from 'react-dom'
+import { useEffect, useRef, useState } from 'react'
 import { api } from '../api'
+import { Modal } from './ui.jsx'
 
 export default function VoiceRecorder({ account, onClose, onCloned }) {
   const [mode, setMode] = useState('record')
+
+  // ── Vozes ja existentes na LMNT (evita regravar/reclonar toda vez) ──
+  const [library, setLibrary] = useState(null) // null = ainda nao carregou
+  const [libraryError, setLibraryError] = useState('')
+  const [libraryBusy, setLibraryBusy] = useState(false)
+  const [linking, setLinking] = useState(false)
+
+  useEffect(() => {
+    if (mode !== 'existing' || library !== null) return
+    setLibraryBusy(true); setLibraryError('')
+    api.get('/accounts/voice-library')
+      .then((r) => setLibrary(r.voices || []))
+      .catch((e) => setLibraryError(e.message))
+      .finally(() => setLibraryBusy(false))
+  }, [mode, library])
+
+  const linkExisting = async (voiceId) => {
+    setLinking(true); setLibraryError('')
+    try {
+      const r = await api.patch(`/accounts/${account.id}`, { preferred_voice: voiceId })
+      onCloned?.({ ok: true, voice_id: voiceId, account: r })
+      onClose?.()
+    } catch (e) {
+      setLibraryError(e.message)
+    } finally { setLinking(false) }
+  }
 
   // ── Gravação ──
   const [recording, setRecording] = useState(false)
@@ -88,14 +114,10 @@ export default function VoiceRecorder({ account, onClose, onCloned }) {
     ? `${(bytes / 1024).toFixed(0)} KB`
     : `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 
-  // Portal to document.body — see ManualUploadModal.jsx for why: a page
-  // wrapper's `.fade-in` animation leaves a residual `transform` after
-  // finishing (animation-fill-mode: both), breaking `fixed inset-0` for any
-  // modal nested inside it.
-  return createPortal(
-    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm grid place-items-center z-50 p-3 sm:p-4 fade-in overflow-y-auto" onClick={onClose}>
-      <div className="card p-4 sm:p-6 w-full max-w-md max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
-        <h3 className="heading text-lg font-semibold mb-1">🎙️ Voz do canal</h3>
+  return (
+    <Modal onClose={onClose} labelledBy="voice-recorder-modal-title"
+      cardClassName="card p-4 sm:p-6 w-full max-w-md max-h-[90vh] overflow-y-auto">
+        <h3 id="voice-recorder-modal-title" className="heading text-lg font-semibold mb-1">🎙️ Voz do canal</h3>
         <p className="text-xs text-text-muted mb-4">
           Clone sua voz e use nas narrações de <b>{account.display_name}</b>.
           Fale ou envie um áudio claro de <b>10 a 30 segundos</b>.
@@ -103,7 +125,7 @@ export default function VoiceRecorder({ account, onClose, onCloned }) {
 
         {/* Abas */}
         <div className="flex gap-1 mb-4 p-1 rounded-xl" style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.06)' }}>
-          {[{ key: 'record', label: '🎤 Gravar' }, { key: 'upload', label: '📂 Enviar arquivo' }].map(({ key, label }) => (
+          {[{ key: 'record', label: '🎤 Gravar' }, { key: 'upload', label: '📂 Enviar arquivo' }, { key: 'existing', label: '📚 Já tenho uma' }].map(({ key, label }) => (
             <button
               key={key}
               className="flex-1 text-xs py-1.5 rounded-lg transition-all"
@@ -176,9 +198,42 @@ export default function VoiceRecorder({ account, onClose, onCloned }) {
           </>
         )}
 
+        {/* ── Aba Ja tenho uma ── */}
+        {mode === 'existing' && (
+          <>
+            <p className="text-xs text-text-muted mb-3">
+              Vozes já clonadas na sua conta LMNT (de qualquer canal). Escolher uma aqui só
+              vincula — não grava nem clona de novo.
+            </p>
+            {libraryBusy && <p className="text-xs text-text-muted text-center py-4">Carregando vozes…</p>}
+            {libraryError && <p className="text-xs mb-3 text-center" style={{ color: 'var(--error)' }}>{libraryError}</p>}
+            {!libraryBusy && library && library.length === 0 && !libraryError && (
+              <p className="text-xs text-text-muted text-center py-4">Nenhuma voz clonada ainda. Use Gravar ou Enviar arquivo.</p>
+            )}
+            {!libraryBusy && library && library.length > 0 && (
+              <div className="max-h-64 overflow-y-auto flex flex-col gap-1.5 mb-2">
+                {library.map((v) => (
+                  <button
+                    key={v.id}
+                    className="w-full text-left text-sm px-3 py-2 rounded-lg transition-colors disabled:opacity-50"
+                    style={{
+                      background: account.preferred_voice === v.id ? 'rgba(124,106,255,0.2)' : 'rgba(255,255,255,0.04)',
+                      border: account.preferred_voice === v.id ? '1px solid rgba(124,106,255,0.4)' : '1px solid transparent',
+                    }}
+                    onClick={() => linkExisting(v.id)}
+                    disabled={linking}
+                  >
+                    <span className="font-medium">{v.name}</span>
+                    {account.preferred_voice === v.id && <span className="text-[10px] ml-2" style={{ color: 'var(--accent)' }}>voz atual</span>}
+                    {linking && <span className="text-[10px] ml-2 text-text-muted">vinculando…</span>}
+                  </button>
+                ))}
+              </div>
+            )}
+          </>
+        )}
+
         <button className="btn-ghost w-full text-xs mt-2" onClick={onClose}>Fechar</button>
-      </div>
-    </div>,
-    document.body
+    </Modal>
   )
 }

@@ -10,15 +10,35 @@ from unittest.mock import patch
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from backend.agents.publisher import _with_retry, publish_youtube, run_publish
+from backend.agents.publisher import (
+    _overall_status,
+    _resolve_account,
+    _with_retry,
+    publish_youtube,
+    run_publish,
+)
+from backend.crypto import encrypt_credentials
 from backend.database import Base
-from backend.models import JobStatus, VideoJob
+from backend.models import JobStatus, PlatformAccount, VideoJob
 
 
 def _make_sessionmaker():
     engine = create_engine("sqlite:///:memory:", future=True)
     Base.metadata.create_all(bind=engine)
     return sessionmaker(bind=engine, future=True)
+
+
+def _make_file_sessionmaker(tmpdir: tempfile.TemporaryDirectory):
+    # run_publish reaches into a worker thread (the heartbeat and
+    # _ensure_ready_video_local both open their own SessionLocal()). A plain
+    # sqlite:///:memory: engine hands each thread a SEPARATE, empty database
+    # (SingletonThreadPool) — a real file-backed DB is required so every
+    # thread sees the same rows, like separate connections against Postgres
+    # in production.
+    db_path = Path(tmpdir.name) / "test.db"
+    engine = create_engine(f"sqlite:///{db_path}", connect_args={"check_same_thread": False})
+    Base.metadata.create_all(bind=engine)
+    return engine, sessionmaker(bind=engine, future=True)
 
 
 class RunPublishIdempotencyTests(unittest.TestCase):
@@ -56,6 +76,136 @@ class RunPublishIdempotencyTests(unittest.TestCase):
         refreshed = db2.get(VideoJob, job_id)
         self.assertEqual(refreshed.status, JobStatus.PUBLISHED)
         db2.close()
+
+
+class MultiPlatformPartialFailureTests(unittest.TestCase):
+    def test_youtube_success_with_tiktok_failure_still_publishes_the_job(self) -> None:
+        """_overall_status flips to PUBLISHED the moment ANY platform succeeds,
+        even while another target platform failed — a 2-platform job must not
+        be left in ERROR just because TikTok choked. error_message must name
+        the failed platform so the user knows what didn't go out."""
+        import threading
+
+        tmpdir = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self.addCleanup(tmpdir.cleanup)
+        engine, Session = _make_file_sessionmaker(tmpdir)
+        self.addCleanup(engine.dispose)
+        db = Session()
+        yt_acct = PlatformAccount(
+            platform="youtube", display_name="Canal YT", status="active",
+            credentials_encrypted=encrypt_credentials({"refresh_token": "rt"}),
+        )
+        tk_acct = PlatformAccount(
+            platform="tiktok", display_name="Conta TikTok", status="active",
+            credentials_encrypted=encrypt_credentials({"access_token": "at"}),
+        )
+        db.add_all([yt_acct, tk_acct])
+        job = VideoJob(
+            title="Job multi-plataforma",
+            mode="from_title",
+            content_type="film_recap_ai_images",
+            video_format="long",
+            status=JobStatus.APPROVED,
+            target_platforms=["youtube", "tiktok"],
+            main_video_path="/tmp/does-not-matter.mp4",
+            shorts_paths=["/tmp/short_1.mp4"],
+        )
+        db.add(job)
+        db.commit()
+        db.refresh(job)
+        job_id = job.id
+        db.close()
+
+        with patch("backend.agents.publisher.SessionLocal", Session), \
+             patch("backend.agents.publisher.publish_youtube",
+                   return_value={"ok": True, "platform": "youtube", "status": "ok", "video_id": "vid1"}), \
+             patch("backend.agents.publisher.self_publish_tiktok",
+                   return_value={"ok": False, "platform": "tiktok", "status": "error", "error": "boom"}):
+            result = asyncio.run(run_publish(job_id))
+
+        # The heartbeat thread's own SessionLocal keeps a connection open to the
+        # file-backed DB above; join it before the tmpdir cleanup runs a Windows
+        # file delete or it races an in-use handle.
+        for t in threading.enumerate():
+            if t.name == f"studio-publish-heartbeat-{job_id}":
+                t.join(timeout=5)
+
+        self.assertEqual(result["status"], JobStatus.PUBLISHED.value)
+        self.assertTrue(result["results"]["youtube"]["ok"])
+        self.assertFalse(result["results"]["tiktok"]["ok"])
+
+        db2 = Session()
+        refreshed = db2.get(VideoJob, job_id)
+        self.assertEqual(refreshed.status, JobStatus.PUBLISHED)
+        self.assertIn("tiktok", refreshed.error_message)
+        self.assertTrue(refreshed.error_message.startswith("Publicado parcialmente"))
+        db2.close()
+
+
+class OverallStatusTests(unittest.TestCase):
+    def test_any_success_wins_even_with_another_platform_failing(self) -> None:
+        results = {
+            "youtube": {"ok": True, "status": "ok"},
+            "tiktok": {"ok": False, "status": "error"},
+        }
+        self.assertEqual(_overall_status(results), JobStatus.PUBLISHED)
+
+    def test_no_success_with_quota_exceeded_is_awaiting_quota(self) -> None:
+        results = {"youtube": {"ok": False, "status": "quota_exceeded"}}
+        self.assertEqual(_overall_status(results), JobStatus.AWAITING_QUOTA)
+
+    def test_no_success_with_tiktok_pending_is_tiktok_pending_approval(self) -> None:
+        results = {"tiktok": {"ok": False, "status": "tiktok_pending_approval"}}
+        self.assertEqual(_overall_status(results), JobStatus.TIKTOK_PENDING_APPROVAL)
+
+    def test_no_success_falls_back_to_error(self) -> None:
+        results = {"youtube": {"ok": False, "status": "auth_error"}}
+        self.assertEqual(_overall_status(results), JobStatus.ERROR)
+
+
+class ResolveAccountPinningTests(unittest.TestCase):
+    """job.account_id must pin the publish to a SPECIFIC channel — otherwise
+    a user with 2+ connected YouTube channels can't control which one a job
+    goes out on, and it silently falls back to whichever has the most quota."""
+
+    def test_pinned_account_wins_over_highest_quota_account(self) -> None:
+        pinned = SimpleNamespace(id=1, platform="youtube")
+        fallback = SimpleNamespace(id=2, platform="youtube")
+
+        class FakeSvc:
+            def has_valid_credentials(self, acct):
+                return True
+
+            def get_active_account(self, platform):
+                return fallback
+
+        self.assertIs(_resolve_account(FakeSvc(), "youtube", pinned), pinned)
+
+    def test_falls_back_when_pin_is_for_a_different_platform(self) -> None:
+        pinned = SimpleNamespace(id=1, platform="tiktok")
+        fallback = SimpleNamespace(id=2, platform="youtube")
+
+        class FakeSvc:
+            def has_valid_credentials(self, acct):
+                return True
+
+            def get_active_account(self, platform):
+                return fallback
+
+        self.assertIs(_resolve_account(FakeSvc(), "youtube", pinned), fallback)
+
+    def test_falls_back_when_pinned_account_has_no_valid_credentials(self) -> None:
+        pinned = SimpleNamespace(id=1, platform="youtube")
+        fallback = SimpleNamespace(id=2, platform="youtube")
+
+        class FakeSvc:
+            def has_valid_credentials(self, acct):
+                return acct is fallback
+
+            def get_active_account(self, platform):
+                return fallback
+
+        self.assertIs(_resolve_account(FakeSvc(), "youtube", pinned), fallback)
 
 
 class WithRetryTerminalStatusTests(unittest.TestCase):

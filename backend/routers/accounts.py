@@ -4,11 +4,13 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field, field_validator
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from backend.database import get_db
 from backend.agents.account_profile import AccountProfileService
 from backend.agents.drive_library import extract_folder_id
+from backend.models import PlatformAccount
 from backend.models.video_job import JobStatus, VideoJob
 from backend.uploaders import instagram as ig
 from backend.uploaders import tiktok as tk
@@ -59,7 +61,11 @@ class AccountUpdate(BaseModel):
     trends_per_cycle: int | None = None      # 1..2
     preferred_templates: list[str] | None = None
     avoid_topics: list[str] | None = None
-    schedule: dict | None = None
+    # NOTE: no `schedule` field here on purpose — it's a denormalised leftover
+    # on PlatformAccount that the real pipeline doesn't read for the publish
+    # decision (that's ScheduleConfig, see routers/schedule.py). Exposing it
+    # for PATCH would let a caller believe it configures scheduling when it
+    # doesn't; use PUT /schedule/config/{account_id} instead.
 
     @field_validator("display_name")
     @classmethod
@@ -87,6 +93,53 @@ def create_account(payload: AccountCreate, db: Session = Depends(get_db)):
     svc = AccountProfileService(db)
     acct = svc.create(**payload.model_dump())
     return acct.to_dict()
+
+
+# NOTE: must stay ABOVE `GET /accounts/{account_id}` -- FastAPI/Starlette
+# matches routes in declaration order, so a literal path declared AFTER a
+# parameterized one is unreachable (`/accounts/voice-library` was matching
+# `/accounts/{account_id}` instead, "voice-library" failing int validation
+# with a 422 -- confirmed live, this isn't hypothetical).
+@router.get("/accounts/voice-library")
+async def voice_library():
+    """List every custom voice already cloned under the configured LMNT
+    account (shared across every channel -- one LMNT API key for the whole
+    system, same as clone-voice below). Lets an operator reuse a voice
+    that's already there (recorded once, maybe for a different channel, or
+    left over from a previous clone attempt) instead of re-recording and
+    re-cloning -- which is slower and, per LMNT's own dashboard, leaves
+    behind yet another duplicate voice every time."""
+    import httpx
+
+    from backend.config import settings
+
+    if not settings.lmnt_api_key:
+        raise HTTPException(400, "Biblioteca de voz indisponível (LMNT_API_KEY não configurada).")
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            r = await client.get(
+                "https://api.lmnt.com/v1/ai/voice/list",
+                headers={"X-API-Key": settings.lmnt_api_key},
+            )
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(502, f"Falha ao listar vozes no LMNT: {exc}")
+    if r.status_code >= 400:
+        try:
+            detail = r.json()
+            detail_msg = detail.get("error") or detail.get("message") or str(detail)
+        except Exception:  # noqa: BLE001
+            detail_msg = r.text
+        raise HTTPException(
+            502, f"LMNT recusou a listagem ({r.status_code}): {(detail_msg or '').strip()[:300]}"
+        )
+    payload = r.json()
+    voices = payload if isinstance(payload, list) else (payload.get("voices") or [])
+    return {
+        "voices": [
+            {"id": v.get("id"), "name": v.get("name") or v.get("id"), "state": v.get("state")}
+            for v in voices if v.get("id")
+        ]
+    }
 
 
 @router.get("/accounts/{account_id}")
@@ -173,10 +226,23 @@ async def clone_voice(account_id: int, file: UploadFile = File(...), db: Session
                     {"name": f"voz-{acct.display_name or account_id}", "type": "instant"})},
                 files={"files": (file.filename or "voice.webm", audio, file.content_type or "audio/webm")},
             )
-            r.raise_for_status()
-            voice = r.json()
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001 -- network-level failure (DNS, timeout, connection reset)
         raise HTTPException(502, f"Falha ao clonar a voz no LMNT: {exc}")
+    if r.status_code >= 400:
+        # r.raise_for_status()'s str(exc) is just the generic status line ("400
+        # Bad Request for url ...") -- LMNT's actual rejection reason is in the
+        # response body, and swallowing it made every clone failure look
+        # identical regardless of the real cause (bad audio format, duration,
+        # quota, etc). Surface it so this is actually debuggable.
+        try:
+            detail = r.json()
+            detail_msg = detail.get("error") or detail.get("message") or _json.dumps(detail)
+        except Exception:  # noqa: BLE001
+            detail_msg = r.text
+        raise HTTPException(
+            502, f"LMNT recusou o áudio ({r.status_code}): {(detail_msg or '').strip()[:300]}"
+        )
+    voice = r.json()
     vid = voice.get("id") or (voice.get("voice") or {}).get("id")
     if not vid:
         raise HTTPException(502, "LMNT não retornou o id da voz clonada.")
@@ -351,6 +417,23 @@ def oauth_callback(platform: str, code: str = Query(""), state: str = Query(""),
     svc.set_credentials(account_id, result["credentials"])
     channel = result.get("channel") or {}
     if channel.get("channel_id"):
+        # Same external channel connected to two PlatformAccount rows would run
+        # two independent ScheduleConfig/quota loops publishing to the one real
+        # channel — block it here instead of letting the DB's unique index
+        # (platform, channel_id) turn this into a raw 500 on commit.
+        dup_id = db.execute(
+            select(PlatformAccount.id).where(
+                PlatformAccount.platform == platform,
+                PlatformAccount.channel_id == channel["channel_id"],
+                PlatformAccount.id != account_id,
+            )
+        ).scalar()
+        if dup_id:
+            svc.mark_auth_error(account_id)
+            return _html(
+                f"Este canal do {platform.capitalize()} já está conectado à conta "
+                f"#{dup_id}. Desconecte-o de lá antes de conectá-lo aqui."
+            )
         acct.channel_id = channel["channel_id"]
         if channel.get("title"):
             acct.display_name = channel["title"]

@@ -11,23 +11,32 @@ import threading
 from datetime import date as date_, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from backend.database import SessionLocal, get_db
+from backend.intro_modes import INTRO_MODES
 from backend.models import Channel, PlatformAccount, PublishSession, VideoJob
 
 router = APIRouter(prefix="/channels", tags=["channels"])
 logger = logging.getLogger("studio.channels")
+
+_INTRO_MODES = set(INTRO_MODES)
+
+
+def _validate_intro_mode(value: str | None) -> str | None:
+    if value is not None and value not in _INTRO_MODES:
+        raise ValueError(f"intro_mode invalido; use um de: {', '.join(sorted(_INTRO_MODES))}")
+    return value
 
 
 class ChannelCreate(BaseModel):
     account_id: int
     name: str = Field(..., min_length=1)
     youtube_channel_id: str | None = None
-    niche: str | None = None
     tts_voice: str = "pt-BR-AntonioNeural"
+    intro_mode: str = "mixed"
     visual_theme: dict = Field(default_factory=dict)
     daily_limit_long: int = Field(1, ge=0, le=20)
     daily_limit_short: int = Field(3, ge=0, le=50)
@@ -35,17 +44,21 @@ class ChannelCreate(BaseModel):
     posting_window_end: str = "23:00"
     active: bool = True
 
+    _check_intro_mode = field_validator("intro_mode")(_validate_intro_mode)
+
 
 class ChannelPatch(BaseModel):
     name: str | None = None
-    niche: str | None = None
     tts_voice: str | None = None
+    intro_mode: str | None = None
     visual_theme: dict | None = None
     daily_limit_long: int | None = Field(None, ge=0, le=20)
     daily_limit_short: int | None = Field(None, ge=0, le=50)
     posting_window_start: str | None = None
     posting_window_end: str | None = None
     active: bool | None = None
+
+    _check_intro_mode = field_validator("intro_mode")(_validate_intro_mode)
 
 
 def _get_channel(db: Session, channel_id: int) -> Channel:
@@ -197,12 +210,32 @@ def preview_design(channel_id: int, payload: PreviewRequest, db: Session = Depen
     return {"preview_path": out_path, "media_url": f"/media?path={out_path}"}
 
 
+def _run_refresh_channel(channel_id: int) -> None:
+    from backend.agents.channel_refresh import refresh_channel as _refresh_channel
+
+    db = SessionLocal()
+    try:
+        channel = db.get(Channel, channel_id)
+        if channel is None:
+            return
+        _refresh_channel(db, channel)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("channel refresh failed for channel %s: %s", channel_id, exc)
+    finally:
+        db.close()
+
+
 @router.post("/{channel_id}/refresh")
 def refresh_channel(channel_id: int, job_id: int | None = Query(None), db: Session = Depends(get_db)):
     """Best-effort re-curation of one job (or every eligible job in the
     channel's most recent session when job_id is omitted). See
-    agents/channel_refresh.py for the change-detection/idempotency logic."""
-    from backend.agents.channel_refresh import refresh_channel as _refresh_channel, refresh_job
+    agents/channel_refresh.py for the change-detection/idempotency logic.
+
+    A single job's curation is one ffmpeg render, fast enough to hold the
+    request open for -- same tradeoff as /preview. The whole-channel batch is
+    up to _DEFAULT_BATCH_LIMIT of those in sequence, so it's kicked off on a
+    background thread instead (same reasoning as /agenda/generate)."""
+    from backend.agents.channel_refresh import refresh_job
 
     channel = _get_channel(db, channel_id)
     if job_id is not None:
@@ -211,4 +244,8 @@ def refresh_channel(channel_id: int, job_id: int | None = Query(None), db: Sessi
             raise HTTPException(404, f"job {job_id} não encontrado neste canal")
         result = refresh_job(db, channel, job)
         return {"results": [result]}
-    return {"results": _refresh_channel(db, channel)}
+    threading.Thread(
+        target=_run_refresh_channel, args=(channel.id,), daemon=True,
+        name=f"channel-refresh-ch{channel.id}",
+    ).start()
+    return {"status": "started", "channel_id": channel.id}

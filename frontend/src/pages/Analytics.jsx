@@ -1,10 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from 'recharts'
 import { api } from '../api'
 import { useWs } from '../App.jsx'
+import { useAccounts } from '../AccountsContext.jsx'
 import { BarMetrics } from '../components/MetricsChart.jsx'
+import { useCountUp, useLatestRequest } from '../components/ui.jsx'
 import { fmtNum, PLATFORM_META } from '../lib'
 
 const REFRESH_MS = 30_000
@@ -31,32 +33,6 @@ const dayKey = (iso) => (iso ? String(iso).slice(0, 10) : null)
 const dayLabel = (k) => {
   try { return new Date(k + 'T12:00:00').toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' }) }
   catch { return k }
-}
-const easeOut = (p) => 1 - Math.pow(1 - p, 3)
-
-// Smoothly counts a number up to its new value on change (feels alive without faking
-// data). Respects prefers-reduced-motion.
-function useCountUp(target, ms = 650) {
-  const [val, setVal] = useState(target || 0)
-  const prev = useRef(target || 0)
-  useEffect(() => {
-    const to = target || 0
-    const from = prev.current
-    prev.current = to
-    const reduce = typeof window !== 'undefined'
-      && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
-    if (reduce || from === to) { setVal(to); return }
-    let raf, start
-    const step = (t) => {
-      if (!start) start = t
-      const p = Math.min(1, (t - start) / ms)
-      setVal(Math.round(from + (to - from) * easeOut(p)))
-      if (p < 1) raf = requestAnimationFrame(step)
-    }
-    raf = requestAnimationFrame(step)
-    return () => cancelAnimationFrame(raf)
-  }, [target, ms])
-  return val
 }
 
 // Build a cumulative channel-views curve from the stored snapshots. For each day we
@@ -470,7 +446,7 @@ function SectionCard({ title, sub, children }) {
 
 export default function Analytics() {
   const { connected, count, events } = useWs()
-  const [accounts, setAccounts] = useState([])
+  const { accounts } = useAccounts()
   const [selected, setSelected] = useState(null)      // null = Todos
   const [tab, setTab] = useState('overview')
   const [win, setWin] = useState('7d')                // delta window: 24h | 7d
@@ -482,14 +458,10 @@ export default function Analytics() {
   const [updatedAt, setUpdatedAt] = useState(null)
   const [recentJob, setRecentJob] = useState(null)
   const [, setTick] = useState(0)
-  const requestIdRef = useRef(0)
-
-  useEffect(() => {
-    api.get('/accounts').then((d) => setAccounts(d.accounts || [])).catch(() => setAccounts([]))
-  }, [])
+  const loadReq = useLatestRequest()
 
   const load = useCallback(async () => {
-    const requestId = ++requestIdRef.current
+    const requestId = loadReq.start()
     let vid = []
     if (selected) {
       const [v, ins, bt] = await Promise.all([
@@ -497,7 +469,7 @@ export default function Analytics() {
         api.get(`/analytics/insights/${selected}`).catch(() => null),
         api.get(`/analytics/best-times/${selected}`).catch(() => null),
       ])
-      if (requestId !== requestIdRef.current) return
+      if (!loadReq.isCurrent(requestId)) return
       vid = v
       setVideos(v); setInsights(ins); setBestTimes(bt); setOverview(null)
     } else {
@@ -505,7 +477,7 @@ export default function Analytics() {
         api.get('/analytics/overview').catch(() => ({ totals: {}, by_platform: {} })),
         api.get('/analytics/videos').then((r) => r.videos || []).catch(() => []),
       ])
-      if (requestId !== requestIdRef.current) return
+      if (!loadReq.isCurrent(requestId)) return
       vid = v
       setOverview(ov); setVideos(v); setInsights(null); setBestTimes(null)
     }
@@ -513,7 +485,7 @@ export default function Analytics() {
     const topJobs = (vid || []).slice(0, 12)
     const entries = await Promise.all(topJobs.map((v) =>
       api.get(`/analytics/job/${v.job_id}`).then((r) => [v.job_id, r.snapshots || []]).catch(() => [v.job_id, []])))
-    if (requestId !== requestIdRef.current) return
+    if (!loadReq.isCurrent(requestId)) return
     setSnaps(Object.fromEntries(entries))
     setUpdatedAt(Date.now())
   }, [selected])

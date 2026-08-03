@@ -49,7 +49,7 @@ export default function CalendarView({ events = [] }) {
         {cells.map((d, i) => {
           const dayEvents = d ? (byDay[d.toDateString()] || []) : []
           return (
-            <div key={i} className={`min-h-[72px] sm:min-h-[92px] rounded-btn p-1.5 border ${d ? 'border-border bg-white' : 'border-transparent'} ${d && d.toDateString() === today ? 'ring-2 ring-accent/30' : ''}`}>
+            <div key={i} className={`min-h-[72px] sm:min-h-[92px] rounded-btn p-1.5 border ${d ? 'border-border bg-elevated' : 'border-transparent'} ${d && d.toDateString() === today ? 'ring-2 ring-accent/30' : ''}`}>
               {d && <span className="text-xs font-semibold text-text-muted">{d.getDate()}</span>}
               <div className="space-y-1 mt-1">
                 {dayEvents.slice(0, 2).map((e) => {

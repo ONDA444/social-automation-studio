@@ -2,7 +2,7 @@
 BaseAgent — shared machinery for every pipeline stage.
 
 Provides:
-  * retry with backoff (spec default 30s / 2min / 5min, overridable/shortened for tests)
+  * retry with backoff (default 30s / 2min / 5min, overridable/shortened for tests)
   * structured JSON logging to logs/agents.log
   * live WebSocket events via backend.events.publish_event
   * a shared VideoContext dict passed between agents of the same job
@@ -35,6 +35,16 @@ if not _json_logger.handlers:
     _json_logger.addHandler(_fh)
     _json_logger.propagate = False
 
+# Plain-text logger for terminal failures. Deliberately NOT nested under
+# "studio.agents" (that logger has propagate=False, so anything logged
+# there — or on any child of it — is swallowed by the FileHandler above
+# and never reaches stdout). This one has no handlers of its own, so it
+# propagates up to the root logger main.py configures with
+# logging.basicConfig, i.e. stdout, which is what Railway actually
+# captures as deploy logs. logs/agents.log lives on an ephemeral
+# filesystem and is lost on every redeploy.
+_error_logger = logging.getLogger("studio.agent_errors")
+
 # When testing, long real backoffs are painful. STUDIO_FAST_RETRY shortens them.
 _FAST = os.getenv("STUDIO_FAST_RETRY") == "1"
 
@@ -45,7 +55,7 @@ class AgentError(Exception):
 
 class BaseAgent:
     name: str = "base"
-    # Spec: 3 attempts, backoff 30s / 2min / 5min.
+    # Default policy: 3 attempts, backoff 30s / 2min / 5min.
     max_retries: int = 3
     backoffs: list[int] = [30, 120, 300]
 
@@ -101,6 +111,10 @@ class BaseAgent:
                 is_last = attempt == self.max_retries - 1
                 if is_last:
                     self.emit("error", f"{self.name} falhou: {exc}", error=str(exc))
+                    _error_logger.error(
+                        "%s esgotou %d tentativas (job_id=%s): %s",
+                        self.name, self.max_retries, self.job_id, exc,
+                    )
                     break
                 wait = 2 if _FAST else self.backoffs[min(attempt, len(self.backoffs) - 1)]
                 self.emit(

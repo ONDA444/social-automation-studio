@@ -11,7 +11,16 @@ from __future__ import annotations
 
 from datetime import date as date_, datetime
 
-from sqlalchemy import JSON, Date, DateTime, ForeignKey, Integer, String, UniqueConstraint
+from sqlalchemy import (
+    JSON,
+    CheckConstraint,
+    Date,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from backend.database import Base
@@ -23,11 +32,20 @@ from backend.database import Base
 #   item that errored out and was never recovered.
 SESSION_STATUSES = ("pending", "running", "completed", "partial_failure")
 
+_SESSION_STATUS_LIST_SQL = ", ".join(f"'{status}'" for status in SESSION_STATUSES)
+
 
 class PublishSession(Base):
     __tablename__ = "publish_sessions"
     __table_args__ = (
         UniqueConstraint("channel_id", "date", name="uq_publish_sessions_channel_date"),
+        # Backstops SESSION_STATUSES at the DB level -- without this, a typo'd
+        # literal or a manual migration script can write a value outside the
+        # enum and silently corrupt any `status == "..."` comparison downstream.
+        CheckConstraint(
+            f"status IN ({_SESSION_STATUS_LIST_SQL})",
+            name="ck_publish_sessions_status",
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)

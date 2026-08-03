@@ -17,6 +17,32 @@ export const PLATFORM_META = {
   instagram: { label: 'Instagram', color: 'var(--accent-ig)', icon: 'IG' },
 }
 
+// Mirrors backend/intro_modes.py's INTRO_MODES tuple (single source of truth
+// there; no endpoint exposes it, so this is kept in sync by hand like
+// Schedule.jsx's MODE_OPTIONS/FALLBACK_CONTENT_TYPES).
+export const INTRO_MODE_OPTIONS = [
+  { value: 'mixed', label: 'Misto (recomendado)', hint: 'Alterna entre os modos abaixo automaticamente.' },
+  { value: 'tts', label: 'TTS', hint: 'Sempre voz sintetica.' },
+  { value: 'voice_bank', label: 'Banco de vozes', hint: 'Usa gravacoes do operador quando disponiveis.' },
+  { value: 'text_only', label: 'Somente texto', hint: 'Sem narracao no intro/overlay.' },
+]
+
+// Fallback usado quando GET /jobs/content-types falhar ou ainda não existir.
+// Espelha backend/content_types.py (CONTENT_TYPES) — única fonte compartilhada
+// pelas telas que listam tipos de conteúdo, pra não divergirem entre si.
+export const FALLBACK_CONTENT_TYPES = [
+  { value: 'auto', label: '✨ Automático (IA detecta)' },
+  { value: 'film_recap_ai_images', label: 'Recap de Filme (imagens IA)' },
+  { value: 'sports_highlights', label: 'Melhores Momentos (Esportes)' },
+  { value: 'quote_viral', label: 'Frase Viral' },
+  { value: 'top_list_ranking', label: 'Top 5/10 (Ranking)' },
+  { value: 'explainer_curiosity', label: 'Curiosidade Explicada' },
+  { value: 'true_crime_mystery', label: 'True Crime / Mistério' },
+  { value: 'reaction_commentary', label: 'Reação / Comentário' },
+  { value: 'reddit_story', label: 'História do Reddit' },
+  { value: 'motivational_speech', label: 'Discurso Motivacional' },
+]
+
 export const LANGUAGES = [
   { code: 'pt-BR', label: 'Portugues' },
   { code: 'en-US', label: 'English' },

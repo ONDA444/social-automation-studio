@@ -82,6 +82,28 @@ def get_system_health() -> dict:
     except Exception as exc:  # noqa: BLE001
         checks["scheduler"] = {"status": "red", "detail": str(exc)[:80]}
 
+    # In-process pipeline worker (renders/publishes running inside THIS
+    # process when Celery is off, or for manual-upload/ready-video jobs even
+    # when it's on — see pipeline/dispatch.py). Without this check a frozen
+    # worker loop is invisible: dispatch_job/dispatch_publish keep returning
+    # normally while nothing dispatched from that point on ever runs.
+    try:
+        from backend.pipeline.dispatch import worker_status
+
+        worker = worker_status()
+        if worker["alive"]:
+            checks["pipeline_worker"] = {
+                "status": "green",
+                "detail": "ativo" if worker["started"] else "ocioso (nenhum job local ainda)",
+            }
+        else:
+            checks["pipeline_worker"] = {
+                "status": "red",
+                "detail": "worker interno travado — jobs despachados localmente não estão sendo processados",
+            }
+    except Exception as exc:  # noqa: BLE001
+        checks["pipeline_worker"] = {"status": "red", "detail": str(exc)[:80]}
+
     overall = "green"
     if any(c["status"] == "red" for c in checks.values()):
         overall = "red"
@@ -126,9 +148,20 @@ def cleanup_old_cache(days: int = CACHE_MAX_AGE_DAYS) -> int:
                 if f.is_file() and f.stat().st_mtime < cutoff:
                     freed += f.stat().st_size
                     f.unlink()
-            except Exception:
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("cleanup_old_cache: falha ao apagar %s: %s", f, exc)
                 continue
     return freed
+
+
+def _rehome_path(path: str | None, src: Path, dst: Path) -> str | None:
+    """Rewrite a stored path from the pre-archive job dir to its new home."""
+    if not path:
+        return path
+    try:
+        return str(dst / Path(path).relative_to(src))
+    except ValueError:
+        return path  # not under src — leave untouched
 
 
 def archive_published_outputs() -> int:
@@ -158,7 +191,15 @@ def archive_published_outputs() -> int:
                         size = sum(f.stat().st_size for f in src.rglob("*") if f.is_file())
                         shutil.move(str(src), str(dst))
                         moved += size
-                except Exception:
+                        job.main_video_path = _rehome_path(job.main_video_path, src, dst)
+                        job.thumbnail_path = _rehome_path(job.thumbnail_path, src, dst)
+                        job.shorts_paths = [
+                            _rehome_path(p, src, dst) for p in (job.shorts_paths or [])
+                        ]
+                        db.commit()
+                except Exception as exc:  # noqa: BLE001
+                    db.rollback()
+                    logger.warning("archive_published_outputs: falha ao arquivar job %s: %s", job.id, exc)
                     continue
     finally:
         db.close()

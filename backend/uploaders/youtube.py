@@ -143,7 +143,7 @@ def _credentials(creds: dict):
     )
 
 
-def _service_with_creds(creds: dict):
+def _service_with_creds(creds: dict, prebuilt: tuple | None = None):
     """Like _service(), but also returns the underlying Credentials object so
     the caller can detect (and persist) a refresh_token Google rotates during
     an internal refresh. google-auth-httplib2's AuthorizedHttp transparently
@@ -152,7 +152,14 @@ def _service_with_creds(creds: dict):
     back, so a rotated refresh_token was silently lost the moment this
     function returned. The NEXT call would then present the now-invalidated
     OLD refresh_token to Google and fail with invalid_grant, even though the
-    account was never actually disconnected by the user."""
+    account was never actually disconnected by the user.
+
+    `prebuilt`, if given, is an earlier (service, creds_obj) pair from THIS
+    same publish — reused as-is instead of rebuilding, so a single publish
+    that makes several calls (upload + captions + playlist + localizations)
+    only ever pays for one OAuth refresh round-trip, not one per call."""
+    if prebuilt is not None:
+        return prebuilt
     import google_auth_httplib2
     import httplib2
     from googleapiclient.discovery import build
@@ -195,8 +202,8 @@ def _service_with_creds(creds: dict):
     return build("youtube", "v3", http=http, cache_discovery=False), creds_obj
 
 
-def _service(creds: dict):
-    service, _ = _service_with_creds(creds)
+def _service(creds: dict, prebuilt: tuple | None = None):
+    service, _ = _service_with_creds(creds, prebuilt=prebuilt)
     return service
 
 
@@ -232,19 +239,39 @@ def _fetch_channel(creds: dict) -> dict:
 # Grouping uploads into a series/topic playlist is the cheapest session-time win
 # (a returning binge-viewer is worth 5-10x). All best-effort: a playlist failure
 # must NEVER affect the publish. Scope `youtube` already covers these (no re-consent).
-def ensure_playlist(creds: dict, title: str, description: str = "") -> str | None:
+#
+# In-memory, per-process cache of title -> playlist_id, keyed by refresh_token
+# (stable per connected channel, no extra API call needed to derive a key).
+# Without it, ensure_playlist() re-paged EVERY playlist on the channel on
+# EVERY single publish just to resolve one title it likely already resolved
+# minutes ago. A miss (new title, or fresh process) still does the full scan
+# and populates the cache with every title it finds along the way, so the
+# NEXT unseen title is often already warm too. Self-heals on channel-side
+# playlist deletions/renames on the next process restart.
+_playlist_cache: dict[tuple[str, str], str] = {}
+
+
+def ensure_playlist(creds: dict, title: str, description: str = "",
+                    service_pair: tuple | None = None) -> str | None:
     """Return the id of the channel playlist named `title`, creating it if missing.
     Looks up by title first (1 unit) so it never duplicates. None on any failure."""
     title = (title or "").strip()
     if not title:
         return None
+    refresh_token = creds.get("refresh_token")
+    cache_key = (refresh_token, title.lower()) if refresh_token else None
+    if cache_key and cache_key in _playlist_cache:
+        return _playlist_cache[cache_key]
     try:
-        yt = _service(creds)
+        yt = _service(creds, prebuilt=service_pair)
         req = yt.playlists().list(part="snippet", mine=True, maxResults=50)
         while req is not None:
             resp = req.execute()
             for it in resp.get("items", []):
-                if (it.get("snippet", {}).get("title") or "").strip().lower() == title.lower():
+                found = (it.get("snippet", {}).get("title") or "").strip()
+                if refresh_token and found:
+                    _playlist_cache[(refresh_token, found.lower())] = it["id"]
+                if found.lower() == title.lower():
                     return it["id"]
             req = yt.playlists().list_next(req, resp)
         created = yt.playlists().insert(
@@ -252,19 +279,23 @@ def ensure_playlist(creds: dict, title: str, description: str = "") -> str | Non
             body={"snippet": {"title": title[:150], "description": description[:5000]},
                   "status": {"privacyStatus": "public"}},
         ).execute()
-        return created.get("id")
+        playlist_id = created.get("id")
+        if cache_key and playlist_id:
+            _playlist_cache[cache_key] = playlist_id
+        return playlist_id
     except Exception as exc:  # noqa: BLE001
         logger.warning("ensure_playlist(%r) failed: %s", title, exc)
         return None
 
 
-def add_to_playlist(creds: dict, playlist_id: str, video_id: str) -> bool:
+def add_to_playlist(creds: dict, playlist_id: str, video_id: str,
+                    service_pair: tuple | None = None) -> bool:
     """Add a video to a playlist, idempotently (orphan-recovery can re-dispatch a
     publish, so skip if already present). Best-effort — returns False on any failure."""
     if not (playlist_id and video_id):
         return False
     try:
-        yt = _service(creds)
+        yt = _service(creds, prebuilt=service_pair)
         existing = yt.playlistItems().list(
             part="contentDetails", playlistId=playlist_id, videoId=video_id, maxResults=1,
         ).execute()
@@ -283,7 +314,7 @@ def add_to_playlist(creds: dict, playlist_id: str, video_id: str) -> bool:
 
 # ---------------------------------------------------------------- localizations
 def set_localizations(creds: dict, video_id: str, default_language: str,
-                      localizations: dict) -> bool:
+                      localizations: dict, service_pair: tuple | None = None) -> bool:
     """Add localized title/description to a video for free international reach.
 
     READ-MODIFY-WRITE: reads the current snippet+localizations first and writes it
@@ -293,7 +324,7 @@ def set_localizations(creds: dict, video_id: str, default_language: str,
     if not (video_id and localizations):
         return False
     try:
-        yt = _service(creds)
+        yt = _service(creds, prebuilt=service_pair)
         cur = yt.videos().list(part="snippet,localizations", id=video_id).execute()
         items = cur.get("items") or []
         if not items:
@@ -531,6 +562,7 @@ def upload_video(
     made_for_kids: bool = False,
     embeddable: bool = True,
     public_stats: bool = True,
+    service_pair: tuple | None = None,
 ) -> dict:
     err = _missing_libs()
     if err:
@@ -538,7 +570,7 @@ def upload_video(
     try:
         from googleapiclient.http import MediaFileUpload
 
-        yt, creds_obj = _service_with_creds(credentials)
+        yt, creds_obj = _service_with_creds(credentials, prebuilt=service_pair)
         # Safe default: private. STUDIO_TEST_MODE forces private so test runs
         # never publish a real public video by accident.
         import os
@@ -660,6 +692,7 @@ def upload_video(
             status = "auth_error"
         else:
             status = "error"
+        logger.warning("upload_video falhou: %s", msg)
         result = {"ok": False, "platform": "youtube", "error": msg, "status": status}
         # Even a failed upload may have refreshed (and rotated) the token before
         # the eventual error — persist it so the retry doesn't inherit a dead one.
@@ -704,7 +737,8 @@ def get_video_processing_status(video_id: str, credentials: dict) -> dict:
 
 
 def upload_captions(credentials: dict, video_id: str, srt_path: str,
-                    language: str = "pt-BR", name: str = "") -> dict:
+                    language: str = "pt-BR", name: str = "",
+                    service_pair: tuple | None = None) -> dict:
     """Attach an SRT as a real YouTube caption track — search-indexable transcript +
     closed captions + free auto-translation (the cheapest international-reach lever for
     a faceless channel). Uses the broad 'youtube' scope already in SCOPES (no re-consent).
@@ -718,7 +752,7 @@ def upload_captions(credentials: dict, video_id: str, srt_path: str,
     try:
         from googleapiclient.http import MediaFileUpload
 
-        yt = _service(credentials)
+        yt = _service(credentials, prebuilt=service_pair)
         lang = (language or "pt-BR").split("-")[0]  # YouTube caption language = BCP-47 primary
         body = {"snippet": {"videoId": video_id, "language": lang,
                             "name": (name or "")[:150], "isDraft": False}}

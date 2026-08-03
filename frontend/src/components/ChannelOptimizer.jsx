@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
-import { createPortal } from 'react-dom'
 import { api } from '../api'
+import { Modal } from './ui.jsx'
 
 const ACTION_META = {
   auto: { label: 'será aplicado', color: 'var(--success)', bg: 'rgba(0,245,160,0.14)' },
@@ -72,24 +72,20 @@ export default function ChannelOptimizer({ account, onClose, onApplied }) {
   const willApply = fields.some((f) => f.action === 'auto') ||
     fields.some((f) => f.action === 'confirm' && confirmed[f.key])
 
-  // Portal to document.body — see ManualUploadModal.jsx for why: a page
-  // wrapper's `.fade-in` animation leaves a residual `transform` after
-  // finishing (animation-fill-mode: both), breaking `fixed inset-0` for any
-  // modal nested inside it.
-  return createPortal(
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
-      style={{ background: 'rgba(0,0,0,0.65)', backdropFilter: 'blur(3px)' }} onClick={onClose}>
-      <div className="card w-full max-w-2xl max-h-[88vh] overflow-y-auto p-0 fade-in"
-        onClick={(e) => e.stopPropagation()}>
+  return (
+    <Modal onClose={onClose} labelledBy="channel-optimizer-modal-title"
+      overlayClassName="fixed inset-0 z-50 flex items-center justify-center p-4"
+      overlayStyle={{ background: 'rgba(0,0,0,0.65)', backdropFilter: 'blur(3px)' }}
+      cardClassName="card w-full max-w-2xl max-h-[88vh] overflow-y-auto p-0 fade-in">
 
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b sticky top-0 z-10"
           style={{ borderColor: 'rgba(255,255,255,0.07)', background: 'var(--bg-surface)' }}>
           <div>
-            <h3 className="heading font-semibold">✨ Otimizar canal</h3>
+            <h3 id="channel-optimizer-modal-title" className="heading font-semibold">✨ Otimizar canal</h3>
             <p className="text-[11px] text-text-muted">{plan?.title || account.display_name}</p>
           </div>
-          <button className="btn-ghost text-sm px-2" onClick={onClose}>✕</button>
+          <button className="btn-ghost text-sm px-2" onClick={onClose} aria-label="Fechar">✕</button>
         </div>
 
         <div className="p-5 space-y-5">
@@ -211,8 +207,6 @@ export default function ChannelOptimizer({ account, onClose, onApplied }) {
             </>
           )}
         </div>
-      </div>
-    </div>,
-    document.body
+    </Modal>
   )
 }

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -50,6 +51,29 @@ VENC = ["-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "veryfast",
 
 class FFmpegError(RuntimeError):
     pass
+
+
+# ---- ASS timestamp helpers (H:MM:SS.cs, matches CaptionAgent's format) ----
+_ASS_TS_RE = re.compile(r"(\d+):(\d{2}):(\d{2})\.(\d{2})")
+
+
+def _parse_ass_ts(ts: str) -> float:
+    m = _ASS_TS_RE.match(ts.strip())
+    if not m:
+        return 0.0
+    h, mm, s, cs = (int(x) for x in m.groups())
+    return h * 3600 + mm * 60 + s + cs / 100
+
+
+def _format_ass_ts(seconds: float) -> str:
+    seconds = max(0.0, seconds)
+    h = int(seconds // 3600)
+    m = int((seconds % 3600) // 60)
+    s = int(seconds % 60)
+    cs = int(round((seconds - int(seconds)) * 100))
+    if cs == 100:
+        cs = 99
+    return f"{h}:{m:02d}:{s:02d}.{cs:02d}"
 
 
 # Hard ceiling per ffmpeg invocation. A healthy encode of one clip/segment is far
@@ -152,23 +176,34 @@ class VideoEditorAgent(BaseAgent):
         cam_alt = plan.get("camera_effects", {}).get("alt", "ken_burns_zoom_out")
         atmos = plan.get("special_effects", [])
 
+        # Resolve the stitch mode up front. A hard cut (the common path for
+        # long-form content -- see MAX_XFADE_CLIPS) lets each scene burn its own
+        # caption slice during the per-clip render pass below, so the final
+        # concat can stream-copy instead of re-encoding the whole video a
+        # second time just to draw captions on top.
+        default_tr = plan.get("transitions", {}).get("default", "crossfade")
+        ass_name = self._stage_captions(captions, work)
+        hard_cut = self._resolve_soft_transition(default_tr, len(scene_assets)) is None
+        clip_ass = self._slice_captions(ass_name, durations, work) if hard_cut else None
+
         # 1) Render each scene clip (video only).
         clip_files: list[str] = []
         for i, (asset, dur) in enumerate(zip(scene_assets, durations)):
             clip = work / f"clip_{i:03d}.mp4"
             cam = cam_default if i % 2 == 0 else cam_alt
+            ass = clip_ass[i] if clip_ass else None
             if asset.get("type") == "video":
-                self._render_video_scene(asset["path"], clip, dur, color, atmos)
+                self._render_video_scene(asset["path"], clip, dur, color, atmos, ass)
             else:
-                self._render_image_scene(asset["path"], clip, dur, cam, color, atmos)
+                self._render_image_scene(asset["path"], clip, dur, cam, color, atmos, ass)
             clip_files.append(clip.name)
             self.emit("progress", f"Clipe {i + 1}/{len(scene_assets)}", progress=72)
 
-        # 2) Stitch (xfade chain or concat) + optional caption burn -> silent video.
-        default_tr = plan.get("transitions", {}).get("default", "crossfade")
-        ass_name = self._stage_captions(captions, work)
+        # 2) Stitch (xfade chain or concat) -> silent video. Captions are
+        # already burned in per-clip when clip_ass is set; otherwise burn
+        # them here (soft xfade re-encodes the whole thing anyway).
         silent = work / "stitched.mp4"
-        self._stitch(clip_files, durations, default_tr, ass_name, work, silent)
+        self._stitch(clip_files, durations, default_tr, None if clip_ass else ass_name, work, silent)
 
         # 3) Build audio bed.
         video_len = self._probe_duration(silent)
@@ -192,39 +227,41 @@ class VideoEditorAgent(BaseAgent):
         _run(cmd, cwd=str(work))
         return video_len
 
-    def _render_image_scene(self, src: str, dst: Path, dur: float, cam: str, color: str, atmos):
+    def _render_image_scene(self, src: str, dst: Path, dur: float, cam: str, color: str, atmos, ass: str | None = None):
         vf = fx.build_scene_filter(color, cam, dur, FPS, self.W, self.H, atmos)
+        if ass:
+            vf += f",ass={ass}"
         cmd = ["ffmpeg", "-y", "-loop", "1", "-i", src, "-t", f"{dur:.3f}",
                "-vf", vf, "-r", str(FPS), *VENC, str(dst)]
-        _run(cmd)
+        # cwd=dst.parent so a per-clip `ass` filename (relative, staged in the
+        # same work dir) resolves without needing to escape the absolute path
+        # inside the filtergraph (breaks on Windows drive letters like "C:").
+        _run(cmd, cwd=str(dst.parent))
 
-    def _render_video_scene(self, src: str, dst: Path, dur: float, color: str, atmos):
+    def _render_video_scene(self, src: str, dst: Path, dur: float, color: str, atmos, ass: str | None = None):
         grade = fx.color_grade(color)
         atmos_frags = ",".join(filter(None, (fx.atmosphere(a) for a in atmos)))
         chain = f"scale={self.W}:{self.H}:force_original_aspect_ratio=increase,crop={self.W}:{self.H},{grade}"
         if atmos_frags:
             chain += f",{atmos_frags}"
         chain += ",format=yuv420p,setsar=1"
+        if ass:
+            chain += f",ass={ass}"
         cmd = ["ffmpeg", "-y", "-stream_loop", "-1", "-i", src, "-t", f"{dur:.3f}",
                "-vf", chain, "-an", "-r", str(FPS), *VENC, str(dst)]
-        _run(cmd)
+        _run(cmd, cwd=str(dst.parent))
 
     def _stitch(self, clip_files, durations, transition, ass_name, work: Path, dst: Path):
         n = len(clip_files)
-        soft = fx.xfade_name(transition)
-        # Soft xfade decodes every clip of the segment simultaneously (filter_complex
-        # with all inputs) — the memory spike that OOM-kills a small container. Use it
-        # only when explicitly enabled AND the clip count is small; otherwise hard cuts
-        # (concat demuxer, one clip at a time) keep memory flat.
-        if soft is not None and (_FORCE_HARD_CUT or not settings.video_transitions or n > MAX_XFADE_CLIPS):
-            soft = None
+        soft = self._resolve_soft_transition(transition, n)
 
         if n == 1:
-            vf = f"ass={ass_name}" if ass_name else None
             cmd = ["ffmpeg", "-y", "-i", clip_files[0]]
-            if vf:
-                cmd += ["-vf", vf]
-            cmd += [*VENC, dst.name]
+            if ass_name:
+                cmd += ["-vf", f"ass={ass_name}", *VENC]
+            else:
+                cmd += ["-c", "copy"]
+            cmd.append(dst.name)
             _run(cmd, cwd=str(work))
             return
 
@@ -314,6 +351,76 @@ class VideoEditorAgent(BaseAgent):
         local = work / "captions.ass"
         shutil.copyfile(ass_path, local)
         return local.name
+
+    @staticmethod
+    def _resolve_soft_transition(transition: str, n: int) -> str | None:
+        """Return the xfade name the stitch will use, or None for a hard cut.
+
+        Pure function of (transition, clip count) — mirrors the fallback rules
+        in `_stitch` itself, so `_render` can decide ahead of the per-clip
+        render pass whether captions should burn per-clip (hard cut) or on the
+        final stitch (soft xfade, which re-encodes regardless).
+        """
+        if n <= 1:
+            return None
+        soft = fx.xfade_name(transition)
+        # Soft xfade decodes every clip of the segment simultaneously (filter_complex
+        # with all inputs) — the memory spike that OOM-kills a small container. Use it
+        # only when explicitly enabled AND the clip count is small; otherwise hard cuts
+        # (concat demuxer, one clip at a time) keep memory flat.
+        if soft is not None and (_FORCE_HARD_CUT or not settings.video_transitions or n > MAX_XFADE_CLIPS):
+            soft = None
+        return soft
+
+    @staticmethod
+    def _slice_captions(ass_name: str | None, durations: list[float], work: Path) -> list[str | None] | None:
+        """Split the full-video ASS into one file per scene clip.
+
+        Each Dialogue event is clipped to its scene's [offset, offset+dur)
+        window and rebased to clip-local time (0 == clip start). An event
+        straddling a cut is duplicated, trimmed, into both neighboring clips —
+        same on-screen result as burning the untouched ASS on the stitched
+        video, just spread across the per-clip render passes instead of a
+        second full-video encode.
+        """
+        if not ass_name:
+            return None
+        lines = (work / ass_name).read_text(encoding="utf-8").splitlines()
+        split_at = next((i for i, l in enumerate(lines) if l.startswith("Dialogue:")), len(lines))
+        header = "\n".join(lines[:split_at])
+        events = []
+        for line in lines[split_at:]:
+            if not line.startswith("Dialogue:"):
+                continue
+            fields = line[len("Dialogue:"):].strip().split(",", 9)
+            if len(fields) < 10:
+                continue
+            events.append((_parse_ass_ts(fields[1]), _parse_ass_ts(fields[2]), fields))
+
+        clip_ass: list[str | None] = []
+        offset = 0.0
+        for i, dur in enumerate(durations):
+            win_start, win_end = offset, offset + dur
+            clip_lines = []
+            for start, end, fields in events:
+                if end <= win_start or start >= win_end:
+                    continue
+                local_start = max(0.0, start - win_start)
+                local_end = min(dur, end - win_start)
+                if local_end <= local_start:
+                    continue
+                f = list(fields)
+                f[1] = _format_ass_ts(local_start)
+                f[2] = _format_ass_ts(local_end)
+                clip_lines.append("Dialogue:" + ",".join(f))
+            if clip_lines:
+                name = f"captions_{i:03d}.ass"
+                (work / name).write_text(header + "\n" + "\n".join(clip_lines) + "\n", encoding="utf-8")
+                clip_ass.append(name)
+            else:
+                clip_ass.append(None)
+            offset += dur
+        return clip_ass
 
     @staticmethod
     def _probe_duration(path: Path) -> float:

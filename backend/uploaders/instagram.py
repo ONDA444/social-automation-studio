@@ -227,4 +227,5 @@ def upload_reel(video_path: str, caption: str, credentials: dict, public_url: st
         return {"ok": True, "platform": "instagram", "video_id": media_id, "status": "published"}
     except Exception as exc:  # noqa: BLE001
         status, error_msg = _friendly_api_error(exc, "publicar o Reel")
+        logger.warning("upload_reel falhou: %s", exc)
         return {"ok": False, "platform": "instagram", "status": status, "error": error_msg}

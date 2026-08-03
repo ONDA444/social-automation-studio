@@ -1,7 +1,7 @@
 # Social Automation Studio — backend deps.
-# NOTE: a few pins differ from the original CLAUDE.md spec for Python 3.12 +
-# Pillow 10 compatibility (moviepy 1.0.3 calls the removed Image.ANTIALIAS and
-# will not import alongside Pillow>=10; we use ffmpeg directly and moviepy 2.x).
+# NOTE: a few pins are chosen for Python 3.12 + Pillow 10 compatibility
+# (moviepy 1.0.3 calls the removed Image.ANTIALIAS and will not import
+# alongside Pillow>=10; we use ffmpeg directly and moviepy 2.x).
 
 # --- Web / async ---
 fastapi==0.111.0
@@ -12,8 +12,10 @@ aiofiles==23.2.1
 httpx==0.27.0
 
 # --- DB ---
+# NOTE: no alembic. Schema changes ship as idempotent ALTER TABLEs in
+# backend/database.py (ensure_columns/ensure_indexes/ensure_constraints),
+# run automatically on boot — see that module's docstring.
 sqlalchemy==2.0.30
-alembic==1.13.1
 psycopg2-binary==2.9.9      # PostgreSQL on Railway
 
 # --- Queue / schedule ---

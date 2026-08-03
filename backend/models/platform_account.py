@@ -55,7 +55,12 @@ class PlatformAccount(Base):
     # never clobbered a value the user purposely set (apply is reversible).
     channel_optimization: Mapped[dict] = mapped_column(JSON, default=dict)
 
-    # --- Scheduling (denormalised convenience copy; canonical config in ScheduleConfig) ---
+    # --- Scheduling (legacy denormalised copy) ---
+    # NOT read for the publish decision — that's ScheduleConfig, consumed by
+    # routers/schedule.py and scheduler.py. This field is no longer writable
+    # via PATCH /accounts (see AccountUpdate); it survives only as a fallback
+    # source for videos_per_day in content_calendar.py and for the
+    # auto_approve_mirrors flag in cross_platform_linker.py.
     schedule: Mapped[dict] = mapped_column(JSON, default=dict)
 
     # --- Cross-platform linking ---

@@ -149,15 +149,12 @@ async def run_publish(job_id: int, platforms: list | None = None) -> dict:
     job is kept APPROVED (not PUBLISHED) so the scheduler's _job_publish_due
     picks it up again at scheduled_at to publish the remaining platforms.
     """
-    logger.warning("CANARY_RUN_PUBLISH enter job=%s", job_id)
     db = SessionLocal()
-    logger.warning("CANARY_RUN_PUBLISH got db session job=%s", job_id)
     job = None
     results: dict = {}
     heartbeat: threading.Event | None = None
     try:
         job = db.get(VideoJob, job_id)
-        logger.warning("CANARY_RUN_PUBLISH loaded job=%s status=%s", job_id, getattr(job, "status", None))
         if not job:
             return {"error": "job not found"}
         if job.status not in (JobStatus.APPROVED, JobStatus.PUBLISHING):
@@ -472,12 +469,25 @@ async def publish_youtube(job, seo, creds, publish_at, shorts, privacy="private"
         # exactly the signal this comment says the Shorts classifier needs.
         suffix = " #Shorts"
         main_title = (main_title or "")[: 100 - len(suffix)].rstrip() + suffix
+    # Build the OAuth service/Credentials ONCE for this whole publish and reuse it
+    # for every YouTube call below (main upload, captions, playlist, localizations,
+    # each Short) instead of rebuilding from the saved dict each time — an expired/
+    # near-expiry access token would otherwise trigger a separate OAuth refresh
+    # HTTP round-trip on EACH of up to 5+ calls instead of just the first one.
+    # Falls back to None on any failure (e.g. missing refresh_token) — every call
+    # below rebuilds its own service in that case, exactly as before, and
+    # upload_video's own try/except still classifies and surfaces that failure.
+    try:
+        service_pair = yt._service_with_creds(creds)
+    except Exception:  # noqa: BLE001
+        service_pair = None
     main = await _with_retry(
         yt.upload_video, job.main_video_path, main_title,
         y.get("description", ""), y.get("tags", []), creds,
         category_id=y.get("category_id", "22"), privacy=privacy, publish_at=publish_at,
         thumbnail_path=job.thumbnail_path,
         default_language=_lang, default_audio_language=_lang, label="yt-main",
+        service_pair=service_pair,
     )
     short_results = []
     if main.get("ok"):
@@ -488,7 +498,8 @@ async def publish_youtube(job, seo, creds, publish_at, shorts, privacy="private"
             vid = main.get("video_id")
             srt = os.path.join(os.path.dirname(job.main_video_path), "captions.srt")
             if vid and os.path.exists(srt):
-                cap = await asyncio.to_thread(yt.upload_captions, creds, vid, srt, _lang)
+                cap = await asyncio.to_thread(yt.upload_captions, creds, vid, srt, _lang,
+                                              service_pair=service_pair)
                 if not cap.get("ok"):
                     logger.info("caption track not attached for job %s: %s",
                                 getattr(job, "id", "?"), cap.get("error") or cap.get("status"))
@@ -501,9 +512,11 @@ async def publish_youtube(job, seo, creds, publish_at, shorts, privacy="private"
             pl_title = ((seo.get("feed") or {}).get("playlist_target") or "").strip()
             vid = main.get("video_id")
             if pl_title and vid:
-                pid = await asyncio.to_thread(yt.ensure_playlist, creds, pl_title)
+                pid = await asyncio.to_thread(yt.ensure_playlist, creds, pl_title,
+                                              service_pair=service_pair)
                 if pid:
-                    await asyncio.to_thread(yt.add_to_playlist, creds, pid, vid)
+                    await asyncio.to_thread(yt.add_to_playlist, creds, pid, vid,
+                                            service_pair=service_pair)
         except Exception as exc:  # noqa: BLE001
             logger.warning("playlist grouping failed for job %s: %s", getattr(job, "id", "?"), exc)
         # Localized title/description for free international reach (opt-in via
@@ -513,7 +526,8 @@ async def publish_youtube(job, seo, creds, publish_at, shorts, privacy="private"
             vid = main.get("video_id")
             if locs and vid:
                 await asyncio.to_thread(yt.set_localizations, creds, vid,
-                                        settings.default_language, locs)
+                                        settings.default_language, locs,
+                                        service_pair=service_pair)
         except Exception as exc:  # noqa: BLE001
             logger.warning("localization apply failed for job %s: %s", getattr(job, "id", "?"), exc)
         # Derived shorts ride the long video's SEO; force the Shorts feed signal into
@@ -534,8 +548,18 @@ async def publish_youtube(job, seo, creds, publish_at, shorts, privacy="private"
                 short_desc, y.get("tags", []), creds,
                 category_id=y.get("category_id", "22"), privacy=privacy,
                 default_language=_lang, default_audio_language=_lang, label="yt-short",
+                service_pair=service_pair,
             ))
-    return {**main, "shorts": short_results}
+    result = {**main, "shorts": short_results}
+    # Re-check rotation against the shared Credentials object's FINAL state, not
+    # just main's snapshot at the moment it returned — with the service reused
+    # above, a rotation triggered later (captions/playlist/localizations/a Short)
+    # would otherwise never make it into the result run_publish persists.
+    if service_pair is not None:
+        rotated = yt._rotated_credentials(creds, service_pair[1])
+        if rotated:
+            result["rotated_credentials"] = rotated
+    return result
 
 
 async def self_publish_tiktok(seo, creds, shorts, privacy="private") -> dict:

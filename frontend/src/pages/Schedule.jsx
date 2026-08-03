@@ -1,22 +1,11 @@
-import { useEffect, useRef, useState } from 'react'
-import { api, API_BASE } from '../api'
+import { useEffect, useState } from 'react'
+import { api } from '../api'
+import { useAccounts } from '../AccountsContext.jsx'
+import { openOAuthPopup, navigateOAuthPopup } from '../oauth.js'
 import CalendarView from '../components/CalendarView.jsx'
 import ManualUploadModal from '../components/ManualUploadModal.jsx'
-import { PageHeader } from '../components/ui.jsx'
-import { fmtDate, PLATFORM_META } from '../lib'
-
-const BASE_API = API_BASE
-
-const FALLBACK_CONTENT_TYPES = [
-  { value: 'film_recap_ai_images', label: 'Recap (imagens IA)' },
-  { value: 'sports_highlights', label: 'Esportes (highlights)' },
-  { value: 'quote_viral', label: 'Frase viral' },
-  { value: 'top_list_ranking', label: 'Top list / Ranking' },
-  { value: 'explainer_curiosity', label: 'Curiosidade / Explainer' },
-  { value: 'true_crime_mystery', label: 'True crime / Mistério' },
-  { value: 'motivational_speech', label: 'Motivacional' },
-  { value: 'reddit_story', label: 'Reddit Story' },
-]
+import { PageHeader, useLatestRequest, useToast, useConfirm } from '../components/ui.jsx'
+import { fmtDate, FALLBACK_CONTENT_TYPES, PLATFORM_META } from '../lib'
 
 const parseThemes = (raw) => (raw || '').split(/[\n,]+/).map((t) => t.trim()).filter(Boolean)
 
@@ -35,11 +24,13 @@ const driveConfigFromAccount = (acct) => ({
 
 export default function Schedule() {
   const [events, setEvents]     = useState([])
-  const [accounts, setAccounts] = useState([])
+  const { accounts, refresh: refreshAccounts } = useAccounts()
   const [sel, setSel]           = useState('')
-  const driveReqIdRef = useRef(0)
-  const cfgReqIdRef = useRef(0)
-  const queueReqIdRef = useRef(0)
+  const driveReq = useLatestRequest()
+  const cfgReq = useLatestRequest()
+  const queueReq = useLatestRequest()
+  const toast = useToast()
+  const confirmDialog = useConfirm()
   const [cfg, setCfg]           = useState({
     mode: 'fixed', videos_per_day: 1, post_times: ['19:00'],
     timezone: 'America/Sao_Paulo', auto_shorts: true, shorts_formats: [1, 2, 4],
@@ -87,23 +78,26 @@ export default function Schedule() {
 
   useEffect(() => {
     refreshCalendar()
-    api.get('/accounts')
-      .then((d) => { const a = d.accounts || []; setAccounts(a); if (a[0]) setSel(String(a[0].id)) })
-      .catch(() => {})
     api.get('/jobs/content-types')
       .then((d) => { const list = Array.isArray(d) ? d : d?.content_types; if (Array.isArray(list) && list.length) setContentTypes(list) })
       .catch(() => setContentTypes(FALLBACK_CONTENT_TYPES))
   }, [])
 
+  // Default to the first channel once the shared accounts cache resolves —
+  // only while nothing is selected yet, so it never overrides the user's pick.
+  useEffect(() => {
+    if (!sel && accounts[0]) setSel(String(accounts[0].id))
+  }, [sel, accounts])
+
   useEffect(() => {
     if (!sel) return
     // Guard against stale responses: only the most recent sel change may commit its result.
-    const reqId = ++cfgReqIdRef.current
+    const reqId = cfgReq.start()
     api.get(`/schedule/config/${sel}`)
-      .then((c) => { if (reqId === cfgReqIdRef.current) setCfg((p) => ({ ...p, ...c, post_times: c.post_times?.length ? c.post_times : p.post_times })) })
+      .then((c) => { if (cfgReq.isCurrent(reqId)) setCfg((p) => ({ ...p, ...c, post_times: c.post_times?.length ? c.post_times : p.post_times })) })
       .catch(() => {})
     api.get(`/schedule/${sel}/slots?count=6`)
-      .then((d) => { if (reqId === cfgReqIdRef.current) { setSlots(d.slots || []); setSlotsMeta(d) } })
+      .then((d) => { if (cfgReq.isCurrent(reqId)) { setSlots(d.slots || []); setSlotsMeta(d) } })
       .catch(() => {})
     const acct = accounts.find((a) => String(a.id) === sel)
     if (acct) {
@@ -119,19 +113,19 @@ export default function Schedule() {
   const loadQueue = () => {
     if (!sel) { setQueue([]); setHistory([]); return }
     // Guard against stale responses: only the most recent loadQueue() call may commit its result.
-    const reqId = ++queueReqIdRef.current
+    const reqId = queueReq.start()
     api.get(`/themes?account_id=${sel}&status=pending`)
-      .then((d) => { if (reqId === queueReqIdRef.current) setQueue(d.themes || []) })
-      .catch(() => { if (reqId === queueReqIdRef.current) setQueue([]) })
+      .then((d) => { if (queueReq.isCurrent(reqId)) setQueue(d.themes || []) })
+      .catch(() => { if (queueReq.isCurrent(reqId)) setQueue([]) })
     // Consumed themes (already generated) — shown as history so they don't look "lost".
     api.get(`/themes?account_id=${sel}&status=consumed`)
-      .then((d) => { if (reqId === queueReqIdRef.current) setHistory((d.themes || []).slice().reverse()) })
-      .catch(() => { if (reqId === queueReqIdRef.current) setHistory([]) })
+      .then((d) => { if (queueReq.isCurrent(reqId)) setHistory((d.themes || []).slice().reverse()) })
+      .catch(() => { if (queueReq.isCurrent(reqId)) setHistory([]) })
   }
   useEffect(() => { loadQueue() }, [sel])
 
   const saveCfg = async () => {
-    if (!sel) return alert('Selecione uma conta primeiro')
+    if (!sel) return toast.error('Selecione uma conta primeiro')
     setSaving(true)
     setSaveState({ status: 'saving', message: 'Salvando configuracao...' })
     try {
@@ -144,32 +138,37 @@ export default function Schedule() {
       const d = await api.get(`/schedule/${sel}/slots?count=6&mode=${savedCfg.mode || cfg.mode}`, { timeoutMs: 20000 })
       setSlots(d.slots || [])
       setSlotsMeta(d)
-      const fresh = await api.get('/accounts', { timeoutMs: 20000 })
-      setAccounts(fresh.accounts || [])
+      await refreshAccounts({ timeoutMs: 20000 })
       await loadDrive(savedDriveCfg, savedAccount)
       refreshCalendar()
       setSaveState({ status: 'saved', message: `Salvo com sucesso as ${new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}.` })
     } catch (e) {
       setSaveState({ status: 'error', message: e.message || 'Falha ao salvar configuracao.' })
-      alert(e.message)
+      toast.error(e.message)
     } finally { setSaving(false) }
   }
 
-  const openOAuth = (acct) => {
-    window.open(`${BASE_API}/auth/${acct.platform}/start?account_id=${acct.id}`, 'oauth', 'width=500,height=640')
+  const openOAuth = async (acct) => {
+    const popup = openOAuthPopup(refreshAccounts)
+    try {
+      const { auth_url } = await api.get(`/auth/${acct.platform}/start?account_id=${acct.id}`)
+      navigateOAuthPopup(popup, auth_url)
+    } catch (e) {
+      popup?.close()
+      toast.error(e.message)
+    }
   }
 
   const [uploadOpen, setUploadOpen] = useState(false)
 
   const openDriveOAuth = async () => {
-    const popup = window.open('', 'drive-oauth', 'width=520,height=680')
+    const popup = openOAuthPopup(() => loadDrive())
     try {
       const r = await api.get('/drive-library/auth/start')
-      if (popup) popup.location = r.auth_url
-      else window.location.href = r.auth_url
+      navigateOAuthPopup(popup, r.auth_url)
     } catch (e) {
-      if (popup) popup.close()
-      alert(e.message)
+      popup?.close()
+      toast.error(e.message)
     }
   }
 
@@ -177,20 +176,20 @@ export default function Schedule() {
     if (!driveStatus?.redirect_uri) return
     try {
       await navigator.clipboard.writeText(driveStatus.redirect_uri)
-      alert('Callback do Drive copiado.')
+      toast.success('Callback do Drive copiado.')
     } catch {
-      alert(driveStatus.redirect_uri)
+      toast.info(driveStatus.redirect_uri, { duration: 0 })
     }
   }
 
   const disconnectDrive = async () => {
-    if (!confirm('Desconectar o Google Drive deste sistema? Os canais em modo Drive/Misto vao parar de sincronizar ate conectar novamente.')) return
+    if (!await confirmDialog('Desconectar o Google Drive deste sistema? Os canais em modo Drive/Misto vao parar de sincronizar ate conectar novamente.', { confirmLabel: 'Desconectar', danger: true })) return
     try {
       await api.post('/drive-library/disconnect')
       setDriveVideos([])
       await loadDrive()
     } catch (e) {
-      alert(e.message)
+      toast.error(e.message)
     }
   }
 
@@ -198,7 +197,7 @@ export default function Schedule() {
     const accountId = accountIdOverride || sel
     if (!accountId) return
     // Guard against stale responses: only the most recent loadDrive() call may commit its result.
-    const reqId = ++driveReqIdRef.current
+    const reqId = driveReq.start()
     try {
       const acct = acctOverride || accounts.find((a) => String(a.id) === String(accountId))
       const effectiveDriveCfg = cfgOverride || driveCfg
@@ -208,19 +207,19 @@ export default function Schedule() {
         api.get('/drive-library/status').catch(() => null),
         api.get(`/drive-library/videos?account_id=${accountId}&status=available&limit=500${nicheParam}`).catch(() => ({ videos: [] })),
       ])
-      if (reqId !== driveReqIdRef.current) return
+      if (!driveReq.isCurrent(reqId)) return
       setDriveStatus(status)
       setDriveVideos(videos.videos || [])
       setDriveVideoStats(videos.stats || {})
     } catch {
-      if (reqId !== driveReqIdRef.current) return
+      if (!driveReq.isCurrent(reqId)) return
       setDriveVideos([])
       setDriveVideoStats({})
     }
   }
 
   const syncDrive = async () => {
-    if (!sel) return alert('Selecione uma conta primeiro')
+    if (!sel) return toast.error('Selecione uma conta primeiro')
     if (!driveStatus?.has_credentials && !driveStatus?.api_key_configured) {
       await openDriveOAuth()
       return
@@ -230,24 +229,23 @@ export default function Schedule() {
       await api.patch(`/accounts/${sel}`, driveCfg)
       const r = await api.post(`/drive-library/accounts/${sel}/sync`)
       const ignored = Number(r.ignored_audio || 0) + Number(r.ignored_non_video || 0)
-      alert(`Drive sincronizado: ${r.imported || 0} novo(s), ${r.updated || 0} atualizado(s), ${r.stale || 0} antigo(s) removido(s) do estoque ativo, ${ignored} ignorado(s) que nao eram video.`)
-      const fresh = await api.get('/accounts')
-      setAccounts(fresh.accounts || [])
-      const freshAccount = (fresh.accounts || []).find((a) => String(a.id) === sel)
+      toast.success(`Drive sincronizado: ${r.imported || 0} novo(s), ${r.updated || 0} atualizado(s), ${r.stale || 0} antigo(s) removido(s) do estoque ativo, ${ignored} ignorado(s) que nao eram video.`)
+      const freshAccounts = await refreshAccounts()
+      const freshAccount = freshAccounts.find((a) => String(a.id) === sel)
       await loadDrive(driveConfigFromAccount(freshAccount), freshAccount)
-    } catch (e) { alert(e.message) } finally { setDriveSyncing(false) }
+    } catch (e) { toast.error(e.message) } finally { setDriveSyncing(false) }
   }
 
   const clearDriveInventory = async () => {
-    if (!sel) return alert('Selecione uma conta primeiro')
-    if (!confirm('Limpar o estoque ativo deste canal? Videos ja usados ficam guardados no historico, mas os disponiveis/reservados saem da lista.')) return
+    if (!sel) return toast.error('Selecione uma conta primeiro')
+    if (!await confirmDialog('Limpar o estoque ativo deste canal? Videos ja usados ficam guardados no historico, mas os disponiveis/reservados saem da lista.', { confirmLabel: 'Limpar estoque', danger: true })) return
     setDriveSyncing(true)
     try {
       const r = await api.post(`/drive-library/accounts/${sel}/clear`)
-      alert(`Estoque limpo: ${r.cleared || 0} video(s) removido(s) do estoque ativo.`)
+      toast.success(`Estoque limpo: ${r.cleared || 0} video(s) removido(s) do estoque ativo.`)
       await loadDrive()
     } catch (e) {
-      alert(e.message)
+      toast.error(e.message)
     } finally {
       setDriveSyncing(false)
     }
@@ -256,8 +254,8 @@ export default function Schedule() {
   const parsedThemes = parseThemes(themesText)
 
   const addThemes = async () => {
-    if (!sel) return alert('Selecione uma conta primeiro')
-    if (parsedThemes.length === 0) return alert('Informe ao menos um tema')
+    if (!sel) return toast.error('Selecione uma conta primeiro')
+    if (parsedThemes.length === 0) return toast.error('Informe ao menos um tema')
     setBusy(true)
     try {
       const r = await api.post('/themes', {
@@ -265,15 +263,15 @@ export default function Schedule() {
         content_type: themeType, format: themeFormat,
         target_platforms: selAccount && selAccount.platform ? [selAccount.platform] : ['youtube'],
       })
-      alert(`${r?.created ?? 0} tema(s) adicionado(s) à fila`)
+      toast.success(`${r?.created ?? 0} tema(s) adicionado(s) à fila`)
       setThemesText('')
       loadQueue()
       refreshCalendar()
-    } catch (e) { alert(e.message) } finally { setBusy(false) }
+    } catch (e) { toast.error(e.message) } finally { setBusy(false) }
   }
 
   const deleteTheme = async (id) => {
-    try { await api.del(`/themes/${id}`); loadQueue() } catch (e) { alert(e.message) }
+    try { await api.del(`/themes/${id}`); loadQueue() } catch (e) { toast.error(e.message) }
   }
 
   // Re-queue a consumed theme as a fresh pending one (re-uses POST /themes — no
@@ -288,13 +286,13 @@ export default function Schedule() {
         target_platforms: t.target_platforms || ['youtube'],
       })
       loadQueue()
-    } catch (e) { alert(e.message) } finally { setRegenBusyId(null) }
+    } catch (e) { toast.error(e.message) } finally { setRegenBusyId(null) }
   }
 
   const clearThemes = async () => {
     if (queue.length === 0) return
-    if (!confirm(`Limpar ${queue.length} tema(s) da fila?`)) return
-    try { await api.post('/themes/bulk-delete', { status: 'pending', account_id: Number(sel) }); loadQueue() } catch (e) { alert(e.message) }
+    if (!await confirmDialog(`Limpar ${queue.length} tema(s) da fila?`, { confirmLabel: 'Limpar fila', danger: true })) return
+    try { await api.post('/themes/bulk-delete', { status: 'pending', account_id: Number(sel) }); loadQueue() } catch (e) { toast.error(e.message) }
   }
 
   return (
@@ -316,8 +314,8 @@ export default function Schedule() {
 
           {/* Seletor de conta */}
           <div>
-            <label className="text-xs text-text-muted mb-1 block">Canal</label>
-            <select className="input" value={sel} onChange={(e) => setSel(e.target.value)}>
+            <label htmlFor="sched-canal" className="text-xs text-text-muted mb-1 block">Canal</label>
+            <select id="sched-canal" className="input" value={sel} onChange={(e) => setSel(e.target.value)}>
               <option value="">Selecione a conta</option>
               {accounts.map((a) => {
                 const m = PLATFORM_META[a.platform] || {}
@@ -386,8 +384,8 @@ export default function Schedule() {
 
               {/* Vídeos por dia */}
               <div>
-                <label className="text-xs text-text-muted mb-1 block">Vídeos por dia</label>
-                <input type="number" min="1" max="6" className="input"
+                <label htmlFor="sched-videos-per-dia" className="text-xs text-text-muted mb-1 block">Vídeos por dia</label>
+                <input id="sched-videos-per-dia" type="number" min="1" max="6" className="input"
                   value={cfg.videos_per_day}
                   onChange={(e) => { setCfg({ ...cfg, videos_per_day: Number(e.target.value) }); markDirty() }} />
               </div>
@@ -395,8 +393,8 @@ export default function Schedule() {
               {/* Horários — só visível no modo fixo */}
               {cfg.mode === 'fixed' && (
                 <div className="slide-down">
-                  <label className="text-xs text-text-muted mb-1 block">Horários (vírgula)</label>
-                  <input className="input font-mono"
+                  <label htmlFor="sched-horarios" className="text-xs text-text-muted mb-1 block">Horários (vírgula)</label>
+                  <input id="sched-horarios" className="input font-mono"
                     value={(cfg.post_times || []).join(', ')}
                     onChange={(e) => { setCfg({ ...cfg, post_times: e.target.value.split(',').map((s) => s.trim()) }); markDirty() }}
                     placeholder="19:00, 21:00" />
@@ -498,16 +496,16 @@ export default function Schedule() {
                     )}
 
                     <div>
-                      <label className="text-xs text-text-muted mb-1 block">Pasta do Drive</label>
-                      <input className="input text-xs" value={driveCfg.drive_folder_url}
+                      <label htmlFor="sched-drive-folder" className="text-xs text-text-muted mb-1 block">Pasta do Drive</label>
+                      <input id="sched-drive-folder" className="input text-xs" value={driveCfg.drive_folder_url}
                         onChange={(e) => { setDriveCfg({ ...driveCfg, drive_folder_url: e.target.value }); markDirty() }}
                         placeholder="https://drive.google.com/drive/folders/..." />
                     </div>
 
                     <div className="grid grid-cols-2 gap-2">
                       <div>
-                        <label className="text-xs text-text-muted mb-1 block">Nicho</label>
-                        <input className="input text-xs" value={driveCfg.drive_niche}
+                        <label htmlFor="sched-drive-niche" className="text-xs text-text-muted mb-1 block">Nicho</label>
+                        <input id="sched-drive-niche" className="input text-xs" value={driveCfg.drive_niche}
                           onChange={(e) => { setDriveCfg({ ...driveCfg, drive_niche: e.target.value }); markDirty() }}
                           placeholder={selAccount?.niche || 'saude, filmes, memes...'} />
                       </div>
@@ -637,8 +635,9 @@ export default function Schedule() {
             {/* Coluna: adicionar temas */}
             <div className="space-y-3">
               <div>
-                <label className="text-xs text-text-muted mb-1 block">Temas</label>
+                <label htmlFor="sched-temas" className="text-xs text-text-muted mb-1 block">Temas</label>
                 <textarea
+                  id="sched-temas"
                   className="input min-h-[130px] resize-y"
                   rows={5}
                   value={themesText}
@@ -651,8 +650,8 @@ export default function Schedule() {
               </div>
 
               <div>
-                <label className="text-xs text-text-muted mb-1 block">Tipo de conteúdo</label>
-                <select className="input" value={themeType} onChange={(e) => setThemeType(e.target.value)}>
+                <label htmlFor="sched-theme-type" className="text-xs text-text-muted mb-1 block">Tipo de conteúdo</label>
+                <select id="sched-theme-type" className="input" value={themeType} onChange={(e) => setThemeType(e.target.value)}>
                   {contentTypes.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
                 </select>
               </div>

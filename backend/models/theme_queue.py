@@ -42,7 +42,12 @@ class ThemeQueue(Base):
     status: Mapped[str] = mapped_column(String(20), index=True, default="pending")
     position: Mapped[int] = mapped_column(Integer, default=0)  # FIFO ordering
 
-    consumed_job_id: Mapped[int | None] = mapped_column(Integer, default=None)
+    # Real FK (ondelete=SET NULL): deleting a VideoJob shouldn't leave a
+    # ThemeQueue row permanently stuck referencing a non-existent job — same
+    # reasoning as ReadyVideo.reserved_job_id/used_job_id.
+    consumed_job_id: Mapped[int | None] = mapped_column(
+        ForeignKey("video_jobs.id", ondelete="SET NULL"), index=True, default=None
+    )
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 

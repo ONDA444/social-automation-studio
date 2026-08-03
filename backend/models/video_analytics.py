@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import JSON, DateTime, Float, ForeignKey, Integer, String
+from sqlalchemy import JSON, DateTime, Float, ForeignKey, Integer, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from backend.database import Base
@@ -11,6 +11,18 @@ from backend.database import Base
 
 class VideoAnalytics(Base):
     __tablename__ = "video_analytics"
+    __table_args__ = (
+        # One row per (job, platform, snapshot_type): without this, two concurrent
+        # collectors (e.g. the manual "collect now" button racing the scheduler's
+        # _job_collect_analytics tick) can both see "no existing row" in the
+        # select-then-insert upsert (agents/analytics.py) and each insert their own,
+        # leaving duplicates that break "latest snapshot per platform" reads
+        # (PerformanceInsights, thumbnail A/B summary). Also gives the scheduler's
+        # existence check (scheduler.py _job_collect_analytics) a composite index
+        # instead of just the job_id one.
+        UniqueConstraint("job_id", "platform", "snapshot_type",
+                          name="uq_video_analytics_job_platform_snapshot"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     job_id: Mapped[int] = mapped_column(

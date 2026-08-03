@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from datetime import datetime, timedelta
 from unittest.mock import patch
 
 from sqlalchemy import create_engine
@@ -70,7 +71,7 @@ class ReadyVideoFinalizeRetryCapTests(unittest.TestCase):
         db.refresh(job)
         db.refresh(ready)
         self.assertEqual(job.status, JobStatus.ERROR)
-        self.assertEqual(job.retry_count, 1)
+        self.assertEqual(job.ready_video_attempt_count, 1)
         self.assertNotIn("desistindo apos", job.error_message)
         # Still reserved by THIS job — must not be up for grabs by a different theme.
         self.assertEqual(ready.status, "reserved")
@@ -78,7 +79,7 @@ class ReadyVideoFinalizeRetryCapTests(unittest.TestCase):
 
     def test_second_failure_releases_the_file_and_marks_the_job_non_retryable(self) -> None:
         db, account, ready, job = self._setup()
-        job.retry_count = 1  # simulate the first failure already having happened
+        job.ready_video_attempt_count = 1  # simulate the first failure already having happened
         db.commit()
         drive = DriveLibraryService(db)
 
@@ -90,7 +91,7 @@ class ReadyVideoFinalizeRetryCapTests(unittest.TestCase):
         db.refresh(job)
         db.refresh(ready)
         self.assertEqual(job.status, JobStatus.ERROR)
-        self.assertEqual(job.retry_count, 2)
+        self.assertEqual(job.ready_video_attempt_count, 2)
         self.assertIn("desistindo apos", job.error_message)
         # NOW released for a fresh attempt by a different theme/job.
         self.assertEqual(ready.status, "available")
@@ -99,6 +100,53 @@ class ReadyVideoFinalizeRetryCapTests(unittest.TestCase):
     def test_exhausted_marker_is_excluded_from_blind_auto_retry(self) -> None:
         markers = " ".join(scheduler._NO_AUTO_RETRY_MARKERS)
         self.assertIn("desistindo apos", markers)
+
+
+class ReadyVideoAttemptCountIndependentOfRetryCountTests(unittest.TestCase):
+    """_job_retry_errored's unrelated LLM-failure resurrection sweep bumps
+    retry_count on ANY eligible ERROR job, including a from_ready_video one.
+    Sharing that counter with the Drive-download attempt budget would let a
+    couple of resurrection cycles exhaust _READY_VIDEO_MAX_ATTEMPTS before the
+    job ever made a second real download attempt — this is the same class of
+    bug orphan_resume_count was split off from retry_count to avoid."""
+
+    def test_retry_errored_resurrection_does_not_touch_ready_video_attempt_count(self) -> None:
+        engine = create_engine("sqlite:///:memory:", future=True)
+        Base.metadata.create_all(bind=engine)
+        Session = sessionmaker(bind=engine, future=True)
+        db = Session()
+        account = PlatformAccount(platform="youtube", display_name="Canal", niche="geral")
+        db.add(account)
+        db.flush()
+        job = VideoJob(
+            title="Video do Drive",
+            mode="from_ready_video",
+            content_type="film_recap_ai_images",
+            video_format="short",
+            account_id=account.id,
+            status=JobStatus.ERROR,
+            retry_count=0,
+            ready_video_attempt_count=1,  # already had one real download failure
+            error_message="Falha ao baixar video do Drive: timeout de rede",
+            updated_at=datetime.utcnow() - timedelta(hours=2),
+        )
+        db.add(job)
+        db.commit()
+        job_id = job.id
+
+        settings_mock = type("S", (), {"llm_retry_max": 5})()
+        with patch.object(scheduler, "SessionLocal", Session), \
+             patch("backend.config.settings", settings_mock), \
+             patch("backend.pipeline.dispatch.dispatch_job"):
+            scheduler._job_retry_errored()
+
+        refreshed = db.get(VideoJob, job_id)
+        db.refresh(refreshed)
+        # retry_count moved (this IS what the resurrection sweep owns)...
+        self.assertEqual(refreshed.retry_count, 1)
+        # ...but the Drive-download attempt budget must be untouched: this
+        # was never a real download attempt, just a QUEUED->dispatch bounce.
+        self.assertEqual(refreshed.ready_video_attempt_count, 1)
 
 
 if __name__ == "__main__":

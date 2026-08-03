@@ -56,11 +56,14 @@ class RefreshLiveBatchLimitTests(unittest.TestCase):
         db.commit()
 
         with patch.object(scheduler, "SessionLocal", lambda: db), \
-             patch("backend.agents.analytics.AnalyticsAgent.refresh_live", return_value=[{"views": 1}]) as fake_refresh, \
+             patch("backend.agents.analytics.AnalyticsAgent.refresh_live_batch") as fake_refresh, \
              patch("backend.events.publish_event"):
+            fake_refresh.side_effect = lambda job_ids: {jid: [{"views": 1}] for jid in job_ids}
             scheduler._job_refresh_live()
 
-        self.assertEqual(fake_refresh.call_count, scheduler._REFRESH_LIVE_BATCH_LIMIT)
+        fake_refresh.assert_called_once()
+        (batched_job_ids,), _kwargs = fake_refresh.call_args
+        self.assertEqual(len(batched_job_ids), scheduler._REFRESH_LIVE_BATCH_LIMIT)
 
     def test_never_refreshed_jobs_are_prioritized_over_recently_refreshed_ones(self) -> None:
         """Least-recently-refreshed-first ordering: a job whose 'live' snapshot
@@ -88,13 +91,13 @@ class RefreshLiveBatchLimitTests(unittest.TestCase):
 
         seen_ids = []
 
-        def fake_refresh(self_agent, job_id):
-            seen_ids.append(job_id)
-            return [{"views": 1}]
+        def fake_refresh_batch(self_agent, job_ids):
+            seen_ids.extend(job_ids)
+            return {jid: [{"views": 1}] for jid in job_ids}
 
         with patch.object(scheduler, "SessionLocal", lambda: db), \
              patch.object(scheduler, "_REFRESH_LIVE_BATCH_LIMIT", 2), \
-             patch("backend.agents.analytics.AnalyticsAgent.refresh_live", fake_refresh), \
+             patch("backend.agents.analytics.AnalyticsAgent.refresh_live_batch", fake_refresh_batch), \
              patch("backend.events.publish_event"):
             scheduler._job_refresh_live()
 

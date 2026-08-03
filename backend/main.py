@@ -10,7 +10,6 @@ import asyncio
 import importlib
 import logging
 import os
-import shutil
 import socket
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -20,7 +19,6 @@ from fastapi.staticfiles import StaticFiles
 
 from backend import events
 from backend.config import settings
-from backend.database import engine
 
 # Process-wide safety net: any blocking socket call anywhere (including a
 # stalled TCP connect/read on a library that forgot to set its own timeout)
@@ -305,10 +303,11 @@ async def _on_startup() -> None:
     except Exception as exc:  # noqa: BLE001
         logger.warning("create_all falhou: %s", exc)
     try:
-        from backend.database import ensure_columns, ensure_indexes
+        from backend.database import ensure_columns, ensure_constraints, ensure_indexes
 
         ensure_columns()  # idempotent: adds new columns (e.g. video_format) to old DBs
         ensure_indexes()  # idempotent: indexes the scheduler's hot query paths
+        ensure_constraints()  # idempotent: adds CHECK constraints to old DBs (e.g. publish_sessions.status)
     except Exception as exc:  # noqa: BLE001
         logger.warning("ensure_columns/indexes falhou: %s", exc)
     _recover_orphan_jobs()
@@ -378,45 +377,28 @@ async def media(path: str):
 
 @app.get("/health")
 async def health():
-    """Service health snapshot — used by Railway healthcheck and the Settings page."""
-    checks: dict[str, dict] = {}
+    """Service health snapshot — used by Railway healthcheck and the Settings page.
 
-    # Database
+    Delegates database/redis/ffmpeg/disk/llm/scheduler to get_system_health()
+    (backend/agents/error_recovery.py) — the same checks /dashboard/health
+    already exposes — instead of a thinner, drifted copy that never noticed a
+    stalled scheduler (which runs publish_due, retry_errored and every
+    recovery sweep) or a full disk. A frozen scheduler used to leave Railway's
+    healthcheck green forever; now it's the one signal that flips it red.
+    """
+    from backend.agents.error_recovery import get_system_health
+
     try:
-        from sqlalchemy import text
-
-        with engine.connect() as conn:
-            conn.execute(text("SELECT 1"))
-        checks["database"] = {"status": "green", "detail": settings.sqlalchemy_url.split("://")[0]}
+        checks: dict[str, dict] = dict(get_system_health()["checks"])
     except Exception as exc:
-        checks["database"] = {"status": "red", "detail": str(exc)}
+        checks = {"system_health": {"status": "red", "detail": str(exc)}}
 
-    # Redis
-    try:
-        import redis
-
-        r = redis.from_url(settings.redis_url, decode_responses=True, socket_connect_timeout=2)
-        r.ping()
-        checks["redis"] = {"status": "green", "detail": "reachable"}
-    except Exception:
-        checks["redis"] = {"status": "yellow", "detail": "unreachable (Celery disabled; in-process mode)"}
-
-    # FFmpeg
-    if shutil.which("ffmpeg"):
-        checks["ffmpeg"] = {"status": "green", "detail": "found"}
-    else:
-        checks["ffmpeg"] = {"status": "red", "detail": "not on PATH"}
-
-    # edge-tts importability
+    # edge-tts importability (not covered by get_system_health)
     try:
         importlib.import_module("edge_tts")
         checks["edge_tts"] = {"status": "green", "detail": "import ok"}
     except Exception:
         checks["edge_tts"] = {"status": "yellow", "detail": "not installed"}
-
-    # LLM keys present?
-    checks["groq"] = {"status": "green" if settings.groq_api_key else "yellow",
-                      "detail": "key set" if settings.groq_api_key else "no key (set GROQ_API_KEY)"}
 
     overall = "green"
     if any(c["status"] == "red" for c in checks.values()):

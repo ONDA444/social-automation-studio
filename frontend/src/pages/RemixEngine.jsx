@@ -1,15 +1,10 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../api'
+import { useAccounts } from '../AccountsContext.jsx'
 import StyleDNACard from '../components/StyleDNACard.jsx'
-import { PageHeader } from '../components/ui.jsx'
-
-const FALLBACK_CONTENT_TYPES = [
-  { value: 'film_recap_ai_images', label: 'Recap (narrado)' },
-  { value: 'sports_highlights', label: 'Esportes (highlights)' },
-  { value: 'top_list_ranking', label: 'Top / Ranking' },
-  { value: 'explainer_curiosity', label: 'Curiosidade / Explicação' },
-]
+import { PageHeader, ErrorBanner } from '../components/ui.jsx'
+import { FALLBACK_CONTENT_TYPES } from '../lib'
 
 export default function RemixEngine() {
   const [source, setSource] = useState('')
@@ -21,12 +16,11 @@ export default function RemixEngine() {
   const [format, setFormat] = useState('long')
   const [analyzing, setAnalyzing] = useState(false)
   const [creating, setCreating] = useState(false)
-  const [accounts, setAccounts] = useState([])
+  const { accounts, error: accountsError, refresh: loadAccounts } = useAccounts()
   const [accountId, setAccountId] = useState('')
   const nav = useNavigate()
 
   useEffect(() => {
-    api.get('/accounts').then((d) => setAccounts(d.accounts || [])).catch(() => {})
     api.get('/jobs/content-types')
       .then((d) => { const list = Array.isArray(d) ? d : d?.content_types; if (Array.isArray(list) && list.length) setContentTypes(list) })
       .catch(() => setContentTypes(FALLBACK_CONTENT_TYPES))
@@ -63,6 +57,10 @@ export default function RemixEngine() {
       <PageHeader title="Remix Engine" sub="Analise um vídeo de referência para extrair o StyleDNA (apenas o estilo).">
         <span className="badge text-[10px]" style={{ background: 'var(--accent-dim)', color: 'var(--accent)', border: '1px solid var(--border)' }}>100% original</span>
       </PageHeader>
+
+      {accountsError && (
+        <ErrorBanner message="Backend offline — não foi possível carregar os canais de destino." onRetry={loadAccounts} />
+      )}
 
       <div className="card p-4 flex items-start gap-3" style={{ borderColor: 'rgba(0,245,160,0.2)', background: 'rgba(0,245,160,0.04)' }}>
         <span className="text-lg shrink-0 mt-0.5">🛡️</span>

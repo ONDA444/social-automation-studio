@@ -17,7 +17,7 @@ class ReadyVideo(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
 
-    drive_file_id: Mapped[str] = mapped_column(String(160), index=True)
+    drive_file_id: Mapped[str] = mapped_column(String(160))
     drive_folder_id: Mapped[str | None] = mapped_column(String(160), index=True, default=None)
     name: Mapped[str] = mapped_column(String(300))
     mime_type: Mapped[str | None] = mapped_column(String(120), default=None)
@@ -32,6 +32,11 @@ class ReadyVideo(Base):
 
     status: Mapped[str] = mapped_column(String(20), index=True, default="available")
     # available | reserved | used | rejected | missing | error
+    # Also covered by the composite ix_ready_videos_status_account_format
+    # (status, account_id, video_format) in database.ensure_indexes -- that's
+    # the real WHERE agents/drive_library.py's _reserve_matching runs on every
+    # scheduler slot-fill tick, so the single-column index here alone would
+    # fall back to a bitmap-and (or scan) as the ready-video inventory grows.
     # Real FKs (ondelete=SET NULL) so deleting a VideoJob can't leave a
     # ReadyVideo permanently stuck referencing a non-existent job.
     reserved_job_id: Mapped[int | None] = mapped_column(

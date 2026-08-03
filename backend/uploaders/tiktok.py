@@ -209,4 +209,5 @@ def upload_video(video_path: str, caption: str, credentials: dict, privacy: str 
         return {"ok": False, "platform": "tiktok", "status": "error",
                 "error": f"TikTok HTTP {sc}: {detail}"}
     except Exception as exc:  # noqa: BLE001
+        logger.warning("upload_video falhou: %s", exc)
         return {"ok": False, "platform": "tiktok", "status": "error", "error": str(exc)}

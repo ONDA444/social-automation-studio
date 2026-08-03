@@ -18,6 +18,12 @@ from backend.models import PlatformAccount, VideoAnalytics, VideoJob
 
 logger = logging.getLogger("studio.analytics")
 
+# YouTube Data/Analytics APIs accept up to 50 IDs per call at the SAME quota
+# cost as a single ID (videos().list `id=`, reports().query `filters=video==`).
+# refresh_live_batch() below chunks at this size instead of firing one call
+# per video.
+_YT_ID_CHUNK = 50
+
 
 class AnalyticsAgent:
     def __init__(self, db: Session) -> None:
@@ -96,27 +102,111 @@ class AnalyticsAgent:
             metrics = self._fetch(platform, res["video_id"], creds, with_analytics=job_age_h >= 24)
             if metrics is None:
                 continue
-            row = self.db.execute(
-                select(VideoAnalytics).where(
-                    VideoAnalytics.job_id == job_id,
-                    VideoAnalytics.platform == platform,
-                    VideoAnalytics.snapshot_type == "live",
-                )
-            ).scalars().first()
-            if row is None:
-                row = VideoAnalytics(
-                    job_id=job_id, platform=platform, platform_video_id=res["video_id"],
-                    snapshot_type="live",
-                    thumbnail_variant=self._thumbnail_variant(job.thumbnail_path),
-                )
-                self.db.add(row)
-            for k, v in metrics.items():
-                setattr(row, k, v)
-            row.platform_video_id = res["video_id"]
-            row.collected_at = datetime.utcnow()  # bump so this stays the "latest"
+            self._upsert_live_row(job, platform, res["video_id"], metrics)
             out.append({"platform": platform, **metrics})
         self.db.commit()
         return out
+
+    def refresh_live_batch(self, job_ids: list[int]) -> dict[int, list[dict]]:
+        """Same as refresh_live(), but for many jobs in one shot: groups every
+        job's YouTube video across the whole batch by the account whose
+        credentials own it and fetches statistics/watch-time in chunks of up
+        to 50 video IDs per call instead of one videos().list /
+        reports().query call per video. The Data/Analytics APIs charge the
+        SAME quota for a 50-ID chunk as for a single ID, so this is what
+        actually cuts the HTTP-call volume behind the OOM burst
+        _REFRESH_LIVE_BATCH_LIMIT (scheduler.py) caps the symptom of — not
+        just the number of jobs processed per tick.
+
+        Other platforms (Instagram/TikTok) aren't batchable the same way, so
+        they still go through _fetch() per video, unchanged.
+        """
+        now = datetime.utcnow()
+        jobs_by_id = {
+            job.id: job
+            for job in self.db.execute(select(VideoJob).where(VideoJob.id.in_(job_ids))).scalars()
+        }
+        svc = AccountProfileService(self.db)
+
+        # account_id -> [(job, video_id, job_age_hours), ...]
+        yt_groups: dict[int, list[tuple[VideoJob, str, float]]] = {}
+        yt_creds: dict[int, dict] = {}
+        other: list[tuple[VideoJob, str, str]] = []  # (job, platform, video_id)
+
+        for job_id in job_ids:
+            job = jobs_by_id.get(job_id)
+            if not job or not job.publish_status:
+                continue
+            for platform, res in (job.publish_status or {}).items():
+                if not res.get("ok") or not res.get("video_id"):
+                    continue
+                if platform != "youtube":
+                    other.append((job, platform, res["video_id"]))
+                    continue
+                acct = self._account_for(svc, job, platform)
+                if acct is None:
+                    continue
+                if acct.id not in yt_creds:
+                    yt_creds[acct.id] = svc.get_credentials(acct.id)
+                job_age_h = (
+                    (now - job.updated_at).total_seconds() / 3600 if job.updated_at else 999
+                )
+                yt_groups.setdefault(acct.id, []).append((job, res["video_id"], job_age_h))
+
+        results: dict[int, list[dict]] = {}
+
+        for acct_id, entries in yt_groups.items():
+            creds = yt_creds.get(acct_id)
+            if not creds:
+                continue
+            video_ids = [video_id for _, video_id, _ in entries]
+            analytics_ids = [video_id for _, video_id, age_h in entries if age_h >= 24]
+            stats_by_id = self._youtube_batch_stats(video_ids, creds)
+            wt_by_id, wt_error = self._youtube_watchtime_batch(analytics_ids, creds)
+            for job, video_id, _age_h in entries:
+                stats = stats_by_id.get(video_id)
+                if stats is None:
+                    continue
+                metrics = dict(stats)
+                wt = wt_by_id.get(video_id)
+                if wt:
+                    metrics.update(wt)
+                if wt_error and video_id in analytics_ids:
+                    metrics["raw"] = {**metrics.get("raw", {}), "analytics_error": wt_error}
+                self._upsert_live_row(job, "youtube", video_id, metrics)
+                results.setdefault(job.id, []).append({"platform": "youtube", **metrics})
+
+        for job, platform, video_id in other:
+            acct = self._account_for(svc, job, platform)
+            creds = svc.get_credentials(acct.id) if acct else {}
+            metrics = self._fetch(platform, video_id, creds, with_analytics=False)
+            if metrics is None:
+                continue
+            self._upsert_live_row(job, platform, video_id, metrics)
+            results.setdefault(job.id, []).append({"platform": platform, **metrics})
+
+        self.db.commit()
+        return results
+
+    def _upsert_live_row(self, job: VideoJob, platform: str, video_id: str, metrics: dict) -> None:
+        row = self.db.execute(
+            select(VideoAnalytics).where(
+                VideoAnalytics.job_id == job.id,
+                VideoAnalytics.platform == platform,
+                VideoAnalytics.snapshot_type == "live",
+            )
+        ).scalars().first()
+        if row is None:
+            row = VideoAnalytics(
+                job_id=job.id, platform=platform, platform_video_id=video_id,
+                snapshot_type="live",
+                thumbnail_variant=self._thumbnail_variant(job.thumbnail_path),
+            )
+            self.db.add(row)
+        for k, v in metrics.items():
+            setattr(row, k, v)
+        row.platform_video_id = video_id
+        row.collected_at = datetime.utcnow()  # bump so this stays the "latest"
 
     @staticmethod
     def _account_for(svc: AccountProfileService, job: VideoJob, platform: str) -> PlatformAccount | None:
@@ -248,6 +338,98 @@ class AnalyticsAgent:
         except Exception as exc:  # noqa: BLE001
             logger.warning("YT watch-time failed for video %s: %s", video_id, exc)
             return None, str(exc)
+
+    def _youtube_batch_stats(self, video_ids: list[str], creds: dict) -> dict[str, dict]:
+        """Batched counterpart to _youtube(): statistics for up to
+        _YT_ID_CHUNK video IDs per videos().list call (same quota cost as one
+        ID) instead of one call per video. Keyed by video ID so the caller can
+        redistribute results to each job."""
+        if not creds or not video_ids:
+            return {}
+        out: dict[str, dict] = {}
+        try:
+            from backend.uploaders.youtube import _service
+
+            yt = _service(creds)
+            for chunk in self._chunk(video_ids, _YT_ID_CHUNK):
+                resp = yt.videos().list(part="statistics", id=",".join(chunk)).execute()
+                stats_by_id = {item.get("id"): item.get("statistics", {}) for item in resp.get("items", [])}
+                for video_id in chunk:
+                    stats = stats_by_id.get(video_id, {})
+                    out[video_id] = {
+                        "views": int(stats.get("viewCount", 0)),
+                        "likes": int(stats.get("likeCount", 0)),
+                        "comments": int(stats.get("commentCount", 0)),
+                        "raw": stats,
+                    }
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("YT batch analytics failed: %s", exc)
+        return out
+
+    @staticmethod
+    def _youtube_watchtime_batch(video_ids: list[str], creds: dict) -> tuple[dict[str, dict], str | None]:
+        """Batched counterpart to _youtube_watchtime(): one reports().query per
+        chunk of up to _YT_ID_CHUNK IDs (dimensions=video splits the response
+        into one row per video) instead of one query per video."""
+        if not video_ids:
+            return {}, None
+        try:
+            from datetime import timedelta
+
+            from googleapiclient.discovery import build
+
+            from backend.uploaders.youtube import _credentials
+
+            ya = build("youtubeAnalytics", "v2",
+                       credentials=_credentials(creds), cache_discovery=False)
+            end = datetime.utcnow().date()
+            start = end - timedelta(days=400)
+            out: dict[str, dict] = {}
+            for chunk in AnalyticsAgent._chunk(video_ids, _YT_ID_CHUNK):
+                resp = ya.reports().query(
+                    ids="channel==MINE",
+                    startDate=start.isoformat(), endDate=end.isoformat(),
+                    dimensions="video",
+                    metrics="estimatedMinutesWatched,averageViewDuration,averageViewPercentage,subscribersGained",
+                    filters=f"video=={','.join(chunk)}",
+                ).execute()
+                cols = [h.get("name") for h in resp.get("columnHeaders", [])]
+                for row in resp.get("rows") or []:
+                    vals = dict(zip(cols, row))
+                    pct = float(vals.get("averageViewPercentage", 0) or 0)
+                    out[vals.get("video")] = {
+                        "watch_minutes": int(vals.get("estimatedMinutesWatched", 0) or 0),
+                        "avg_view_seconds": float(vals.get("averageViewDuration", 0) or 0),
+                        "avg_view_pct": pct,
+                        "subscribers_gained": int(vals.get("subscribersGained", 0) or 0),
+                        "retention_avg": pct / 100.0,
+                        "completion_rate": pct / 100.0,
+                    }
+                try:
+                    ctr_resp = ya.reports().query(
+                        ids="channel==MINE",
+                        startDate=start.isoformat(), endDate=end.isoformat(),
+                        dimensions="video",
+                        metrics="impressions,impressionsClickThroughRate",
+                        filters=f"video=={','.join(chunk)}",
+                    ).execute()
+                    ctr_cols = [h.get("name") for h in ctr_resp.get("columnHeaders", [])]
+                    for row in ctr_resp.get("rows") or []:
+                        ctr_vals = dict(zip(ctr_cols, row))
+                        video_id = ctr_vals.get("video")
+                        if video_id in out:
+                            out[video_id]["impressions"] = int(ctr_vals.get("impressions", 0) or 0)
+                            out[video_id]["ctr"] = float(ctr_vals.get("impressionsClickThroughRate", 0) or 0)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("YT batch CTR fetch failed: %s", exc)
+            return out, None
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("YT batch watch-time failed: %s", exc)
+            return {}, str(exc)
+
+    @staticmethod
+    def _chunk(items: list[str], size: int) -> list[list[str]]:
+        return [items[i:i + size] for i in range(0, len(items), size)]
 
     def _instagram(self, media_id: str, creds: dict) -> dict | None:
         token = creds.get("access_token")

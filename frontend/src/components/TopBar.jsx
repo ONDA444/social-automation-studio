@@ -1,6 +1,5 @@
-import { useEffect, useState } from 'react'
 import { useLocation } from 'react-router-dom'
-import { api } from '../api'
+import { useDashboardStatus } from '../App.jsx'
 
 const PAGE_TITLES = {
   '/': 'Dashboard',
@@ -47,30 +46,9 @@ function StatusChip({ tone = 'neutral', dot, children }) {
 }
 
 export default function TopBar({ connected, onMenuClick = () => {}, theme = 'dark', onToggleTheme = () => {} }) {
-  const [active, setActive] = useState(0)
-  const [health, setHealth] = useState('green')
+  const { data, health } = useDashboardStatus()
+  const active = data?.active_jobs || 0
   const location = useLocation()
-
-  useEffect(() => {
-    let t
-    const poll = async () => {
-      try {
-        // Fire both in parallel — the old sequential await chained two round-trips
-        // every 8s, doubling the status-bar latency.
-        const [d, h] = await Promise.all([
-          api.get('/dashboard'),
-          api.get('/dashboard/health'),
-        ])
-        setActive(d.active_jobs || 0)
-        setHealth(h.status)
-      } catch {
-        setHealth('red')
-      }
-      t = setTimeout(poll, 8000)
-    }
-    poll()
-    return () => clearTimeout(t)
-  }, [])
 
   const pageTitle = PAGE_TITLES[location.pathname] || 'Social Studio'
   const healthTone = health === 'green' ? 'ok' : health === 'yellow' ? 'warn' : 'bad'

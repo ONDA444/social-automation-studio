@@ -24,6 +24,7 @@ from pathlib import Path
 
 from backend import llm
 from backend.config import settings
+from backend.intro_modes import INTRO_MODES
 
 logger = logging.getLogger("studio.ready_video_curation")
 
@@ -41,13 +42,22 @@ _TAKE_SYSTEM = (
 def apply_curation_layer(
     *, job_id: int, local_path: str, analysis: dict, context: dict, video_format: str,
     visual_theme: dict | None = None, voice: str | None = None,
+    intro_mode: str | None = None, channel_id: int | None = None,
 ) -> str:
     """Best-effort. Returns `local_path` unchanged on ANY failure -- curation
     is a value-add, never a publish blocker.
 
     `visual_theme`/`voice` are optional -- callers with no Channel (see
     backend/models/channel.py) simply omit them and get the previous fixed
-    yellow-on-black look + the global default TTS voice, unchanged."""
+    yellow-on-black look + the global default TTS voice, unchanged.
+
+    `intro_mode`/`channel_id` (long-form only) pick how the intro is
+    delivered -- see _resolve_intro_mode. Preventive risk mitigation: a
+    tutorial video claiming YouTube derates channels using 100% synthetic
+    narration (an unconfirmed creator claim, not documented policy) is what
+    motivates this -- the intro is a small fraction of the video, but the
+    SAME TTS voice in the SAME format on every video is still a detectable
+    pattern worth breaking up regardless of whether that specific claim is true."""
     if not settings.ready_video_curation_enabled:
         return local_path
     try:
@@ -61,7 +71,10 @@ def apply_curation_layer(
         if video_format == "short":
             out = _apply_short_overlay(job_id, local_path, take, analysis or {}, visual_theme)
         else:
-            out = _apply_long_intro(job_id, local_path, take, analysis or {}, visual_theme, voice)
+            out = _apply_long_intro(
+                job_id, local_path, take, analysis or {}, visual_theme, voice,
+                intro_mode, channel_id,
+            )
     except Exception as exc:  # noqa: BLE001
         logger.info("curation render failed for job %s (%s): %s", job_id, video_format, exc)
         return local_path
@@ -216,13 +229,74 @@ def _theme_rgb(visual_theme: dict | None, key: str, default_rgb: tuple[int, int,
 
 # ---- Long-form: narrated commentary intro prepended to the clip -------------
 
+# "tts" is the only mode that existed before this. Left as the fallback for
+# an unset/unrecognised/empty-bank mode -- every other mode degrades to it.
+# Canonical list lives in backend/intro_modes.py (shared with the router's
+# request validation).
+_INTRO_MODES = INTRO_MODES
+# Default spread for "mixed": mostly TTS (cheap, always available), a
+# meaningful chunk of pure on-screen text (breaks the "always narrated
+# intro" pattern outright), and voice_bank whenever the channel has real
+# human recordings banked -- see _resolve_intro_mode for the empty-bank
+# fallback. Tune per channel later if needed; this is just the shared default.
+_MIXED_WEIGHTS = {"tts": 0.60, "text_only": 0.25, "voice_bank": 0.15}
+_TEXT_ONLY_CARD_SECONDS = 4.5
+
+# Fixed target params for the intro clip's own encode (see _render_intro_clip)
+# -- also what `_can_stream_copy` compares the ORIGINAL clip against to decide
+# whether it can be concat-demuxed with `-c copy` instead of fully re-encoded.
+_INTRO_FPS = 30
+_INTRO_AUDIO_RATE = 44100
+_INTRO_AUDIO_CHANNELS = 2
+
+
+def _pick_weighted(weights: dict) -> str:
+    import random
+
+    items = list(weights.items())
+    total = sum(w for _, w in items) or 1.0
+    r = random.uniform(0, total)
+    upto = 0.0
+    for key, w in items:
+        upto += w
+        if r <= upto:
+            return key
+    return items[-1][0]
+
+
+def _voice_bank_dir(channel_id: int | None) -> Path | None:
+    if not channel_id:
+        return None
+    return Path(settings.abs_path(settings.assets_dir)) / "voice_bank" / str(channel_id)
+
+
+def _voice_bank_files(channel_id: int | None) -> list[Path]:
+    """Operator-recorded modular phrases ("Aqui vai minha visao sobre isso:"
+    etc.), recorded once per channel and committed under
+    assets/voice_bank/<channel_id>/ -- NOT generated, NOT per-video. Empty
+    (or missing channel_id) just means this channel hasn't recorded any yet."""
+    d = _voice_bank_dir(channel_id)
+    if not d or not d.exists():
+        return []
+    return sorted(p for p in d.glob("*.mp3") if p.is_file())
+
+
+def _resolve_intro_mode(intro_mode: str | None, channel_id: int | None) -> str:
+    mode = (intro_mode or "tts").strip().lower()
+    if mode not in _INTRO_MODES:
+        mode = "tts"
+    if mode == "mixed":
+        mode = _pick_weighted(_MIXED_WEIGHTS)
+    if mode == "voice_bank" and not _voice_bank_files(channel_id):
+        mode = "tts"
+    return mode
+
+
 def _apply_long_intro(
     job_id: int, local_path: str, take: dict, analysis: dict,
     visual_theme: dict | None = None, voice: str | None = None,
+    intro_mode: str | None = None, channel_id: int | None = None,
 ) -> str | None:
-    spoken = take.get("spoken")
-    if not spoken:
-        return None
     src = Path(local_path)
     dims = _dims(src, analysis)
     if not dims:
@@ -230,17 +304,40 @@ def _apply_long_intro(
     w, h = dims
     work = _work_dir(job_id)
 
-    narration_path = work / "intro_narration.mp3"
-    resolved_voice = voice or settings.default_tts_voice or "pt-BR-AntonioNeural"
-    asyncio.run(_synthesize(spoken, resolved_voice, narration_path))
-    if not narration_path.exists() or narration_path.stat().st_size < 1024:
-        return None
-    narr_seconds = _probe_duration(narration_path)
-    if narr_seconds <= 0:
+    mode = _resolve_intro_mode(intro_mode, channel_id)
+    line = (take.get("line") or take.get("spoken") or "").strip()
+    if not line:
         return None
 
+    narration_path: Path | None
+    if mode == "text_only":
+        narration_path = None
+        narr_seconds = _TEXT_ONLY_CARD_SECONDS
+    elif mode == "voice_bank":
+        bank = _voice_bank_files(channel_id)
+        if not bank:  # bank emptied between _resolve_intro_mode and here (race) -- bail cleanly
+            return None
+        import random
+
+        narration_path = random.choice(bank)
+        narr_seconds = _probe_duration(narration_path)
+        if narr_seconds <= 0:
+            return None
+    else:  # tts
+        spoken = take.get("spoken")
+        if not spoken:
+            return None
+        narration_path = work / "intro_narration.mp3"
+        resolved_voice = voice or settings.default_tts_voice or "pt-BR-AntonioNeural"
+        asyncio.run(_synthesize(spoken, resolved_voice, narration_path))
+        if not narration_path.exists() or narration_path.stat().st_size < 1024:
+            return None
+        narr_seconds = _probe_duration(narration_path)
+        if narr_seconds <= 0:
+            return None
+
     card = work / "intro_card.jpg"
-    _render_intro_card(job_id, src, take.get("line") or spoken, w, h, card, visual_theme)
+    _render_intro_card(job_id, src, line, w, h, card, visual_theme)
 
     intro_clip = work / "intro_clip.mp4"
     _render_intro_clip(card, narration_path, narr_seconds, w, h, intro_clip)
@@ -252,6 +349,7 @@ def _apply_long_intro(
     dst = work / f"curated_{src.name}"
     if not _concat(intro_clip, src, orig_duration, has_audio, w, h, dst):
         return None
+    logger.info("ready_video_curation_intro_mode job_id=%s mode=%s", job_id, mode)
     return str(dst)
 
 
@@ -312,15 +410,24 @@ def _extract_frame(src: Path, dst: Path, w: int, h: int) -> None:
     _run(cmd, timeout=30)
 
 
-def _render_intro_clip(card: Path, narration: Path, narr_seconds: float, w: int, h: int, dst: Path) -> None:
-    duration = narr_seconds + 0.4
+def _render_intro_clip(card: Path, narration: Path | None, narr_seconds: float, w: int, h: int, dst: Path) -> None:
+    """narration=None (text_only mode) still produces a clip with exactly one
+    (silent) audio stream -- via anullsrc, not `-an` -- so downstream _concat
+    never needs a third has-audio combination to handle."""
+    duration = narr_seconds if narration is None else narr_seconds + 0.4
+    inputs = ["-loop", "1", "-i", str(card)]
+    if narration is not None:
+        inputs += ["-i", str(narration)]
+    else:
+        inputs += ["-f", "lavfi", "-i", f"anullsrc=r=44100:cl=stereo:d={duration:.3f}"]
     cmd = [
-        "ffmpeg", "-y", "-loop", "1", "-i", str(card), "-i", str(narration),
+        "ffmpeg", "-y", *inputs,
         "-c:v", "libx264", "-tune", "stillimage", "-preset", "veryfast",
-        "-pix_fmt", "yuv420p", "-r", "30",
+        "-pix_fmt", "yuv420p", "-r", str(_INTRO_FPS),
         "-threads", str(max(1, settings.ffmpeg_threads)),
         "-vf", f"scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h}",
-        "-c:a", "aac", "-b:a", "192k", "-shortest", "-t", f"{duration:.3f}",
+        "-c:a", "aac", "-b:a", "192k", "-ar", str(_INTRO_AUDIO_RATE), "-ac", str(_INTRO_AUDIO_CHANNELS),
+        "-shortest", "-t", f"{duration:.3f}",
         str(dst),
     ]
     _run(cmd)
@@ -328,6 +435,14 @@ def _render_intro_clip(card: Path, narration: Path, narr_seconds: float, w: int,
 
 def _concat(intro: Path, original: Path, orig_duration: float, has_audio: bool,
             w: int, h: int, dst: Path) -> bool:
+    # Fast path: the ORIGINAL clip can run several minutes -- if it already
+    # matches the intro clip's own encode params (h264/yuv420p/same WxH/30fps,
+    # aac/44100/stereo audio), the concat DEMUXER can stream-copy it untouched
+    # and only the few-second intro needs a real encode. Falls through to the
+    # filter-based re-encode below on any mismatch or ffmpeg failure.
+    if has_audio and _can_stream_copy(original, w, h) and _concat_copy(intro, original, dst):
+        return True
+
     venc = ["-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "veryfast", "-crf", "21",
             "-threads", str(max(1, settings.ffmpeg_threads))]
     scale = (f"scale={w}:{h}:force_original_aspect_ratio=decrease,"
@@ -355,6 +470,97 @@ def _concat(intro: Path, original: Path, orig_duration: float, has_audio: bool,
            "-movflags", "+faststart", str(dst)]
     _run(cmd)
     return dst.exists() and dst.stat().st_size > 0
+
+
+def _can_stream_copy(original: Path, w: int, h: int) -> bool:
+    vinfo = _probe_video_stream_info(original)
+    if not vinfo:
+        return False
+    if vinfo["codec_name"] != "h264" or vinfo["pix_fmt"] != "yuv420p":
+        return False
+    if vinfo["width"] != w or vinfo["height"] != h:
+        return False
+    if abs(vinfo["fps"] - _INTRO_FPS) > 0.05:
+        return False
+    ainfo = _probe_audio_stream_info(original)
+    if not ainfo:
+        return False
+    if ainfo["codec_name"] != "aac":
+        return False
+    if ainfo["sample_rate"] != _INTRO_AUDIO_RATE or ainfo["channels"] != _INTRO_AUDIO_CHANNELS:
+        return False
+    return True
+
+
+def _probe_entries(path: Path, select_stream: str, entries: str) -> dict[str, str]:
+    out = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", select_stream,
+         "-show_entries", f"stream={entries}",
+         "-of", "default=noprint_wrappers=1", str(path)],
+        capture_output=True, text=True, timeout=15,
+    )
+    fields: dict[str, str] = {}
+    for line in out.stdout.splitlines():
+        key, sep, value = line.partition("=")
+        if sep:
+            fields[key] = value
+    return fields
+
+
+def _probe_video_stream_info(path: Path) -> dict | None:
+    try:
+        fields = _probe_entries(path, "v:0", "codec_name,pix_fmt,width,height,r_frame_rate")
+        return {
+            "codec_name": fields["codec_name"],
+            "pix_fmt": fields["pix_fmt"],
+            "width": int(fields["width"]),
+            "height": int(fields["height"]),
+            "fps": _parse_frame_rate(fields["r_frame_rate"]),
+        }
+    except Exception:
+        return None
+
+
+def _probe_audio_stream_info(path: Path) -> dict | None:
+    try:
+        fields = _probe_entries(path, "a:0", "codec_name,sample_rate,channels")
+        return {
+            "codec_name": fields["codec_name"],
+            "sample_rate": int(fields["sample_rate"]),
+            "channels": int(fields["channels"]),
+        }
+    except Exception:
+        return None
+
+
+def _parse_frame_rate(value: str) -> float:
+    try:
+        if "/" in value:
+            num, den = value.split("/", 1)
+            den_f = float(den)
+            return float(num) / den_f if den_f else 0.0
+        return float(value)
+    except Exception:
+        return 0.0
+
+
+def _concat_copy(intro: Path, original: Path, dst: Path) -> bool:
+    list_path = dst.with_name(f"{dst.stem}_concat_list.txt")
+    entries = "\n".join(_concat_list_entry(p) for p in (intro, original))
+    list_path.write_text(entries + "\n", encoding="utf-8")
+    cmd = ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(list_path),
+           "-c", "copy", "-movflags", "+faststart", str(dst)]
+    try:
+        _run(cmd)
+    except Exception as exc:  # noqa: BLE001
+        logger.info("concat stream-copy fast path failed, falling back to re-encode: %s", exc)
+        return False
+    return dst.exists() and dst.stat().st_size > 0
+
+
+def _concat_list_entry(path: Path) -> str:
+    escaped = str(path).replace("\\", "/").replace("'", "'\\''")
+    return f"file '{escaped}'"
 
 
 # ---- design preview (no ffmpeg video render) ---------------------------------

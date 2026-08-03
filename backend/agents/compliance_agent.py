@@ -17,8 +17,8 @@ from backend.config import ROOT_DIR
 BANNED_FILE = ROOT_DIR / "backend" / "rules" / "ig_banned_hashtags.txt"
 
 FINANCIAL_PROMISES = re.compile(
-    r"\b(ganhe?\s+(dinheiro|r\$)|fique\s+rico|renda\s+garantida|lucro\s+garantido|"
-    r"dinheiro\s+f[áa]cil|enriquecer\s+r[áa]pido|get\s+rich)\b",
+    r"\b(ganhe?\s+dinheiro\b|ganhe?\s+r\$|fique\s+rico\b|renda\s+garantida\b|lucro\s+garantido\b|"
+    r"dinheiro\s+f[áa]cil\b|enriquecer\s+r[áa]pido\b|get\s+rich\b)",
     re.IGNORECASE,
 )
 

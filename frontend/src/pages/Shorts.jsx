@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { api, mediaUrl } from '../api'
-import { PageHeader, EmptyState } from '../components/ui.jsx'
+import { PageHeader, EmptyState, ErrorBanner } from '../components/ui.jsx'
 
 // Aba dedicada aos Shorts verticais (TikTok / Reels / YouTube Shorts).
 // Mostra cada short com player vertical, gancho do 1º frame e captions por
@@ -8,12 +8,16 @@ import { PageHeader, EmptyState } from '../components/ui.jsx'
 export default function Shorts() {
   const [jobs, setJobs] = useState([])
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(false)
 
+  // On failure, keep whatever jobs were last loaded (don't overwrite good
+  // data with an empty list) but flag it so the UI can warn instead of
+  // showing a plain "nenhum short ainda" as if there simply were none.
   const load = () => {
     setLoading(true)
     api.get('/jobs?limit=200')
-      .then((d) => setJobs(Array.isArray(d) ? d : d?.jobs || []))
-      .catch(() => setJobs([]))
+      .then((d) => { setJobs(Array.isArray(d) ? d : d?.jobs || []); setLoadError(false) })
+      .catch(() => setLoadError(true))
       .finally(() => setLoading(false))
   }
   useEffect(load, [])
@@ -47,13 +51,25 @@ export default function Shorts() {
         <button className="btn btn-ghost" onClick={load}>↻ Atualizar</button>
       </PageHeader>
 
+      {loadError && (
+        <ErrorBanner message="Backend offline — não foi possível atualizar os Shorts." onRetry={load} />
+      )}
+
       {loading && (
         <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(165px, 1fr))' }}>
           {[1,2,3,4,5,6,7,8].map(i => <div key={i} className="card skeleton aspect-[9/16]" />)}
         </div>
       )}
 
-      {!loading && cards.length === 0 && (
+      {!loading && loadError && cards.length === 0 && (
+        <div className="rounded-card" style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)' }}>
+          <EmptyState icon="⚠" title="Não foi possível carregar os Shorts."
+            hint="Verifique se o backend está no ar e tente novamente."
+            action={<button className="btn btn-primary text-sm" onClick={load}>↻ Tentar novamente</button>} />
+        </div>
+      )}
+
+      {!loading && !loadError && cards.length === 0 && (
         <div className="rounded-card" style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)' }}>
           <EmptyState icon="📱" title="Nenhum Short ainda"
             hint="Crie um vídeo na Fila — os Shorts são gerados automaticamente em 9:16." />

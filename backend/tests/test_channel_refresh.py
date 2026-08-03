@@ -122,6 +122,26 @@ class FingerprintSkipTests(unittest.TestCase):
         fake_dl.assert_called_once()
         fake_curate.assert_called_once()
         self.assertEqual(result["action"], "refreshed")
+
+    def test_intro_mode_change_also_invalidates_the_fingerprint(self) -> None:
+        """A channel switching intro_mode (e.g. tts -> mixed, the risk
+        mitigation) must be picked up by refresh just like a theme/voice
+        change -- it's part of the same fingerprint."""
+        db, channel, ready, job = _setup(_make_session(), analysis={"summary": "s"})
+        job.video_context = {**job.video_context, "curation_fingerprint": cr._fingerprint(job, channel)}
+        db.commit()
+        channel.intro_mode = "text_only"
+        db.commit()
+
+        with patch("backend.agents.drive_library.DriveLibraryService.download_for_job",
+                   return_value="/tmp/source.mp4"), \
+             patch("backend.agents.ready_video_curation.apply_curation_layer",
+                   return_value="/tmp/curated_new.mp4") as fake_curate:
+            result = cr.refresh_job(db, channel, job)
+
+        fake_curate.assert_called_once()
+        self.assertEqual(fake_curate.call_args.kwargs["intro_mode"], "text_only")
+        self.assertEqual(result["action"], "refreshed")
         self.assertEqual(job.main_video_path, "/tmp/curated_new.mp4")
         self.assertEqual(job.video_context["curation_fingerprint"], cr._fingerprint(job, channel))
 

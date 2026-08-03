@@ -11,7 +11,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from backend.content_types import CONTENT_TYPE_KEYS, public_list
@@ -231,10 +231,10 @@ def create_jobs_batch(payload: JobBatchCreate, db: Session = Depends(get_db)):
     no_channel = payload.account_id is None
     debut_pending = _manual_needs_approval(db, payload.account_id)
 
-    job_ids: list[int] = []
+    jobs: list[VideoJob] = []
     for idx, theme in enumerate(themes):
         gate = no_channel or (debut_pending and idx == 0)
-        job = VideoJob(
+        jobs.append(VideoJob(
             title=theme,
             topic=theme,
             content_type=payload.content_type,
@@ -243,12 +243,17 @@ def create_jobs_batch(payload: JobBatchCreate, db: Session = Depends(get_db)):
             target_platforms=payload.target_platforms,
             status=JobStatus.QUEUED,
             video_context={"require_approval": True} if gate else {},
-        )
-        db.add(job)
-        db.commit()
-        db.refresh(job)
-        dispatch_job(job.id)
-        job_ids.append(job.id)
+        ))
+
+    # One insert round-trip for the whole batch instead of a commit+refresh per
+    # theme; ids are read right after flush (before commit expires them) so no
+    # extra per-row SELECT is needed either. dispatch_job still runs per job.
+    db.add_all(jobs)
+    db.flush()
+    job_ids = [job.id for job in jobs]
+    db.commit()
+    for job_id in job_ids:
+        dispatch_job(job_id)
 
     return {"created": len(job_ids), "job_ids": job_ids}
 
@@ -261,12 +266,18 @@ def list_jobs(
     db: Session = Depends(get_db),
 ):
     stmt = select(VideoJob).order_by(VideoJob.created_at.desc()).limit(limit)
+    count_stmt = select(func.count()).select_from(VideoJob)
     if status:
         stmt = stmt.where(VideoJob.status == status)
+        count_stmt = count_stmt.where(VideoJob.status == status)
     if account_id is not None:
         stmt = stmt.where(VideoJob.account_id == account_id)
+        count_stmt = count_stmt.where(VideoJob.account_id == account_id)
     jobs = db.execute(stmt).scalars().all()
-    return {"jobs": [j.to_dict_slim() for j in jobs], "count": len(jobs)}
+    # `total` ignores `limit` so the frontend can tell "showing 200 of N" and
+    # offer to load more instead of silently truncating the list.
+    total = db.execute(count_stmt).scalar_one()
+    return {"jobs": [j.to_dict_slim() for j in jobs], "count": len(jobs), "total": total}
 
 
 @router.get("/content-types")
@@ -363,6 +374,7 @@ def approve_job(job_id: int, db: Session = Depends(get_db)):
             if importlib.util.find_spec("backend.agents.publisher"):
                 dispatched = dispatch_publish(job.id)
         except Exception as exc:  # noqa: BLE001
+            logger.exception("approve_job: dispatch_publish falhou para job %s", job_id)
             dispatched = None
             dispatch_error = str(exc)
         if dispatched:
@@ -398,7 +410,7 @@ async def import_csv(file: UploadFile = File(...), db: Session = Depends(get_db)
     """
     raw = (await file.read()).decode("utf-8-sig")
     reader = csv.DictReader(io.StringIO(raw))
-    created: list[int] = []
+    jobs: list[VideoJob] = []
     skipped: list[dict] = []
     debuted_in_run: set[int] = set()  # channels already given their gate this import
     for i, row in enumerate(reader, start=1):
@@ -423,7 +435,7 @@ async def import_csv(file: UploadFile = File(...), db: Session = Depends(get_db)
         else:
             gate = _manual_needs_approval(db, account_id)
             debuted_in_run.add(account_id)
-        job = VideoJob(
+        jobs.append(VideoJob(
             title=title,
             topic=(row.get("topic") or None),
             content_type=ct if ct in CONTENT_TYPES else "film_recap_ai_images",
@@ -432,12 +444,18 @@ async def import_csv(file: UploadFile = File(...), db: Session = Depends(get_db)
             account_id=account_id,
             status=JobStatus.QUEUED,
             video_context={"require_approval": True} if gate else {},
-        )
-        db.add(job)
-        db.commit()
-        db.refresh(job)
-        dispatch_job(job.id)
-        created.append(job.id)
+        ))
+
+    # One insert round-trip for the whole file instead of a commit+refresh per
+    # row; ids are read right after flush (before commit expires them) so no
+    # extra per-row SELECT is needed either. dispatch_job still runs per job.
+    db.add_all(jobs)
+    db.flush()
+    created = [job.id for job in jobs]
+    db.commit()
+    for job_id in created:
+        dispatch_job(job_id)
+
     return {"created": created, "count": len(created), "skipped": skipped}
 
 

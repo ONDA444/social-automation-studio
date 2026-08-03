@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react'
 import { api } from '../api'
+import { openOAuthPopup, navigateOAuthPopup } from '../oauth.js'
 import { PLATFORM_META, LANGUAGES, voicesForLang } from '../lib'
 import VoiceRecorder from './VoiceRecorder.jsx'
 import ChannelOptimizer from './ChannelOptimizer.jsx'
+import { useToast, useConfirm } from './ui.jsx'
 
 const UPLOAD_COST = { youtube: 1600, tiktok: 1, instagram: 1 }
 
@@ -37,6 +39,8 @@ export default function PlatformCard({ account, onChange, onChanged, onDone }) {
   const [savingRide, setSavingRide] = useState(false)
   const [toggling, setToggling] = useState(false)
   const [removing, setRemoving] = useState(false)
+  const toast = useToast()
+  const confirmDialog = useConfirm()
 
   // account is not remounted (keyed by stable account.id in Platforms.jsx), so when the
   // parent refetches and passes a new account object, resync local fields from it here.
@@ -62,17 +66,19 @@ export default function PlatformCard({ account, onChange, onChanged, onDone }) {
   }[account.status] || 'var(--text-muted)'
 
   const connect = async () => {
+    const popup = openOAuthPopup(refresh, { width: 600, height: 720 })
     try {
       const { auth_url } = await api.get(`/auth/${account.platform}/start?account_id=${account.id}`)
-      window.open(auth_url, '_blank', 'width=600,height=720')
+      navigateOAuthPopup(popup, auth_url)
     } catch (e) {
-      alert('OAuth indisponivel: ' + e.message)
+      popup?.close()
+      toast.error('OAuth indisponivel: ' + e.message)
     }
   }
 
   const disconnect = async () => {
     try { await api.post(`/accounts/${account.id}/disconnect`); refresh?.() }
-    catch (e) { alert('Falha ao desconectar: ' + e.message) }
+    catch (e) { toast.error('Falha ao desconectar: ' + e.message) }
   }
 
   const toggle = async () => {
@@ -81,17 +87,17 @@ export default function PlatformCard({ account, onChange, onChanged, onDone }) {
       await api.post(`/accounts/${account.id}/${account.status === 'active' ? 'pause' : 'resume'}`)
       refresh?.()
     } catch (e) {
-      alert('Falha ao atualizar status: ' + e.message)
+      toast.error('Falha ao atualizar status: ' + e.message)
     } finally {
       setToggling(false)
     }
   }
 
   const remove = async () => {
-    if (confirm('Remover esta conta?')) {
+    if (await confirmDialog('Remover esta conta?', { confirmLabel: 'Remover', danger: true })) {
       setRemoving(true)
       try { await api.del(`/accounts/${account.id}`); refresh?.() }
-      catch (e) { alert('Falha ao remover conta: ' + e.message) }
+      catch (e) { toast.error('Falha ao remover conta: ' + e.message) }
       finally { setRemoving(false) }
     }
   }
@@ -99,28 +105,28 @@ export default function PlatformCard({ account, onChange, onChanged, onDone }) {
   const changeLang = async (code) => {
     setLang(code); setSavingLang(true)
     try { await api.patch(`/accounts/${account.id}`, { content_language: code }); refresh?.() }
-    catch (e) { alert('Falha ao salvar idioma: ' + e.message); setLang(account.content_language || 'pt-BR') }
+    catch (e) { toast.error('Falha ao salvar idioma: ' + e.message); setLang(account.content_language || 'pt-BR') }
     finally { setSavingLang(false) }
   }
 
   const changeVoice = async (vid) => {
     setVoice(vid); setSavingVoice(true)
     try { await api.patch(`/accounts/${account.id}`, { preferred_voice: vid }); refresh?.() }
-    catch (e) { alert('Falha ao salvar voz: ' + e.message); setVoice(isClone ? '' : (account.preferred_voice || '')) }
+    catch (e) { toast.error('Falha ao salvar voz: ' + e.message); setVoice(isClone ? '' : (account.preferred_voice || '')) }
     finally { setSavingVoice(false) }
   }
 
   const changeMusic = async (style) => {
     setMusic(style); setSavingMusic(true)
     try { await api.patch(`/accounts/${account.id}`, { music_style: style }); refresh?.() }
-    catch (e) { alert('Falha ao salvar musica: ' + e.message); setMusic(account.music_style || 'balanced') }
+    catch (e) { toast.error('Falha ao salvar musica: ' + e.message); setMusic(account.music_style || 'balanced') }
     finally { setSavingMusic(false) }
   }
 
   const changeRide = async (on) => {
     setRide(on); setSavingRide(true)
     try { await api.patch(`/accounts/${account.id}`, { ride_trends: on }); refresh?.() }
-    catch (e) { alert('Falha ao salvar: ' + e.message); setRide(account.ride_trends || false) }
+    catch (e) { toast.error('Falha ao salvar: ' + e.message); setRide(account.ride_trends || false) }
     finally { setSavingRide(false) }
   }
 

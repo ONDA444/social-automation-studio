@@ -309,6 +309,13 @@ async def run_pipeline(job_id: int) -> dict:
                      "hashtags": s.get("hashtags")}
                     for s in ctx.get("shorts", [])
                 ],
+                # Carried over from job creation (backend/scheduler.py:_job_ride_trends) —
+                # _job_ride_trends' anti-stacking cooldown and max_trending_per_day cap both
+                # read is_trending back off completed jobs' video_context, so dropping it
+                # here would blind those guards to every job that finished the pipeline.
+                "is_trending": ctx.get("is_trending", False),
+                "trend_source": ctx.get("trend_source"),
+                "trend_evidence": ctx.get("trend_evidence"),
             }
             # Auto-publish (hands-off): a video tied to a channel skips the human
             # gate and goes straight to APPROVED. _job_publish_due then publishes it
@@ -358,6 +365,7 @@ async def run_pipeline(job_id: int) -> dict:
             return {"status": "awaiting_approval", "qc": qc, "compliance": comp}
 
         except Exception as exc:  # noqa: BLE001
+            logger.exception("run_pipeline falhou para job %s", job_id)
             upd(status=JobStatus.ERROR, agent=None, error_message=str(exc)[:500])
             _emit_job(job_id, status="error", error=str(exc)[:500])
             return {"status": "error", "error": str(exc)}

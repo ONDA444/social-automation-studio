@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../api'
-import { useWs } from '../App.jsx'
+import { useWs, useDashboardStatus } from '../App.jsx'
 import VideoCard from '../components/VideoCard.jsx'
 import AgentLog from '../components/AgentLog.jsx'
 import AddJobModal from '../components/AddJobModal.jsx'
@@ -9,26 +9,19 @@ import { PageHeader, SectionCard, StatTile, EmptyState } from '../components/ui.
 import { fmtNum } from '../lib'
 
 export default function Dashboard() {
-  const [data, setData] = useState(null)
   const [trending, setTrending] = useState([])
   const [modal, setModal] = useState(false)
-  const [stale, setStale] = useState(false)
-  const { count, connected } = useWs()
+  const { connected } = useWs()
+  // Shared with TopBar (also polls /dashboard) so the two don't run separate
+  // pollers hitting the same endpoint while this page is open.
+  const { data, stale, refresh } = useDashboardStatus()
   const nav = useNavigate()
 
-  // On failure, keep any previously-loaded data (don't overwrite good data with
-  // an error) but flag it as stale so the UI can warn the user it's not live.
-  const load = () => api.get('/dashboard')
-    .then((d) => { setData(d); setStale(false) })
-    .catch(() => { setStale(true); setData((prev) => prev || { error: true }) })
   useEffect(() => {
-    load()
     api.get('/dashboard/trending?niche=entretenimento')
       .then((d) => setTrending(d.suggestions || []))
       .catch(() => {})
   }, [])
-  // Refresh job cards when pipeline events arrive.
-  useEffect(() => { const t = setTimeout(load, 800); return () => clearTimeout(t) }, [count])
 
   /* ── Loading skeleton ── */
   if (!data) return (
@@ -128,7 +121,7 @@ export default function Dashboard() {
         </SectionCard>
       )}
 
-      <AddJobModal open={modal} onClose={() => setModal(false)} onCreated={load} />
+      <AddJobModal open={modal} onClose={() => setModal(false)} onCreated={refresh} />
     </div>
   )
 }

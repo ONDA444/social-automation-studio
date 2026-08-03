@@ -28,6 +28,12 @@ SYSTEM = (
     "Responda SOMENTE com JSON válido."
 )
 
+# YouTube API hard limit (snippet.description). Nothing downstream (chapters,
+# hashtags, the monetization CTA, localizations) checks this, so a long
+# LLM-generated description + auto chapters + CTA can silently exceed it and
+# make the whole upload fail — clamp everywhere the description grows.
+YT_DESCRIPTION_LIMIT = 5000
+
 YT_CATEGORY = {
     "film_recap_ai_images": "24",   # Entertainment
     "sports_highlights": "17",      # Sports
@@ -52,6 +58,7 @@ async def apply_runtime_youtube_enrichment(seo: dict) -> dict:
         desc = yt.get("description") or ""
         if not desc.strip().startswith(cta.strip()):
             yt["description"] = cta + "\n\n" + desc
+    yt["description"] = (yt.get("description") or "")[:YT_DESCRIPTION_LIMIT]
 
     await localize_youtube_metadata(seo)
     return seo
@@ -71,6 +78,8 @@ def apply_runtime_youtube_enrichment_sync(seo: dict) -> dict:
             desc = seo["youtube"].get("description") or ""
             if not desc.strip().startswith(cta.strip()):
                 seo["youtube"]["description"] = cta + "\n\n" + desc
+        if "youtube" in seo:
+            seo["youtube"]["description"] = (seo["youtube"].get("description") or "")[:YT_DESCRIPTION_LIMIT]
         return seo
     return loop.run_until_complete(apply_runtime_youtube_enrichment(seo))
 
@@ -200,8 +209,10 @@ class SEOAgent(BaseAgent):
         hashtags = self._yt_hashtags(script.get("seo_keywords") or [], is_short)
         if hashtags:
             desc = (seo["youtube"].get("description") or "").rstrip()
-            if not any(h.lower() in desc.lower() for h in hashtags):
-                seo["youtube"]["description"] = (desc + "\n\n" + " ".join(hashtags)).strip()
+            desc_lower = desc.lower()
+            new_hashtags = [h for h in hashtags if h.lower() not in desc_lower]
+            if new_hashtags:
+                seo["youtube"]["description"] = (desc + "\n\n" + " ".join(new_hashtags)).strip()
 
         seo = self._clamp(seo)
         await apply_runtime_youtube_enrichment(seo)
@@ -450,6 +461,7 @@ JSON EXATO (preencha todos os campos, não omita plataformas):
     def _clamp(seo: dict) -> dict:
         yt = seo.setdefault("youtube", {})
         yt["title"] = (yt.get("title") or "Vídeo")[:100]
+        yt["description"] = (yt.get("description") or "")[:YT_DESCRIPTION_LIMIT]
         yt["tags"] = cap_tags_to_budget(yt.get("tags") or [])
         tk = seo.setdefault("tiktok", {})
         tk["caption"] = (tk.get("caption") or "")[:150]

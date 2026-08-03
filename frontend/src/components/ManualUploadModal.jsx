@@ -1,6 +1,6 @@
 import { useState } from 'react'
-import { createPortal } from 'react-dom'
 import { api } from '../api'
+import { Modal } from './ui.jsx'
 
 // "Enviar video do PC": upload a local file, analyze it with the same engine
 // used for Drive ready-videos, and land it in Aprovações. Standalone one-off
@@ -12,8 +12,6 @@ export default function ManualUploadModal({ open, onClose, accountId }) {
   const [at, setAt]       = useState('')
   const [busy, setBusy]   = useState(false)
   const [msg, setMsg]     = useState('')
-
-  if (!open) return null
 
   const reset = () => { setFile(null); setHint(''); setWhen('now'); setAt(''); setMsg('') }
   const close = () => { if (!busy) { reset(); onClose() } }
@@ -37,25 +35,17 @@ export default function ManualUploadModal({ open, onClose, accountId }) {
     }
   }
 
-  // Rendered via portal straight onto document.body: `fixed` positioning only
-  // fills the viewport when NO ancestor has a `transform` (creates a new
-  // containing block otherwise). The page wrapper's `.fade-in` animation
-  // leaves a residual `transform: matrix(...)` after finishing
-  // (animation-fill-mode: both), which silently broke `fixed inset-0` for any
-  // modal nested inside it — the backdrop rendered pinned to the SCROLLABLE
-  // CONTENT AREA's box instead of the viewport, pushing the dialog itself off
-  // screen. A portal escapes that ancestor entirely.
-  return createPortal(
-    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm grid place-items-center z-50 p-3 sm:p-4 fade-in overflow-y-auto" onClick={close}>
-      <div className="card p-4 sm:p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto shadow-[0_20px_60px_rgba(0,0,0,0.5)] animate-[fadeIn_.2s_ease-out] origin-center" onClick={(e) => e.stopPropagation()}>
-        <h3 className="heading text-lg font-semibold mb-1">Enviar vídeo do PC</h3>
+  return (
+    <Modal open={open} onClose={close} labelledBy="manual-upload-modal-title">
+        <h3 id="manual-upload-modal-title" className="heading text-lg font-semibold mb-1">Enviar vídeo do PC</h3>
         <p className="text-xs text-text-muted mb-4">
           O sistema analisa o vídeo, gera título/descrição e o coloca em Aprovações pra você revisar antes de publicar.
         </p>
         <div className="space-y-3">
           <div>
-            <label className="text-xs text-text-muted">Arquivo de vídeo</label>
+            <label htmlFor="manual-upload-file" className="text-xs text-text-muted">Arquivo de vídeo</label>
             <input
+              id="manual-upload-file"
               type="file"
               accept="video/mp4,video/quicktime,video/webm,video/x-matroska,.mp4,.mov,.webm,.mkv"
               className="input mt-1"
@@ -64,8 +54,9 @@ export default function ManualUploadModal({ open, onClose, accountId }) {
             {file && <p className="text-[11px] text-text-muted mt-1">{file.name} ({(file.size / (1024 * 1024)).toFixed(1)} MB)</p>}
           </div>
           <div>
-            <label className="text-xs text-text-muted">Dica de contexto (opcional)</label>
+            <label htmlFor="manual-upload-hint" className="text-xs text-text-muted">Dica de contexto (opcional)</label>
             <input
+              id="manual-upload-hint"
               type="text"
               className="input mt-1"
               placeholder="Ex: sobre motociclista fugindo da polícia"
@@ -104,8 +95,6 @@ export default function ManualUploadModal({ open, onClose, accountId }) {
             {busy ? 'Enviando...' : 'Enviar'}
           </button>
         </div>
-      </div>
-    </div>,
-    document.body
+    </Modal>
   )
 }

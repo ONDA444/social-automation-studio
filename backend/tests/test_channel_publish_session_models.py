@@ -52,6 +52,9 @@ class ChannelModelTests(unittest.TestCase):
         self.assertEqual(channel.daily_limit_long, 1)
         self.assertEqual(channel.daily_limit_short, 3)
         self.assertEqual(channel.posting_window_start, "08:00")
+        # Default is "mixed", not "tts" -- the whole point of the intro_mode
+        # mitigation is that it applies automatically, not opt-in per channel.
+        self.assertEqual(channel.intro_mode, "mixed")
         self.assertTrue(channel.active)
 
     def test_second_channel_for_the_same_account_is_rejected(self) -> None:

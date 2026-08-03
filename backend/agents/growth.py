@@ -52,10 +52,20 @@ class HookOptimizerAgent(BaseAgent):
 
         original = scenes[0].get("narration", "")
         facts = (self.ctx_get("research") or {}).get("facts", "")
+        # Also ask for the mid-video rehook + closing CTA in this SAME call when
+        # RetentionEngineerAgent will run right after us on the same script/perf
+        # context (len(scenes)>=3 mirrors its own guard) — one LLM round-trip
+        # instead of two. It reads this back via ctx and skips its own call.
+        include_retention = len(scenes) >= 3
         try:
-            data = await self._via_llm(script, original, facts)
+            data = await self._via_llm(script, original, facts, include_retention)
             hook = (data.get("hook") or "").strip()
             overlay = (data.get("overlay") or "").strip()
+            if include_retention:
+                self.ctx_set("_retention_precomputed", {
+                    "rehook": (data.get("rehook") or "").strip(),
+                    "cta": (data.get("cta") or "").strip(),
+                })
         except llm.LLMUnavailable:
             hook, overlay = self._offline(script, original)
 
@@ -69,7 +79,7 @@ class HookOptimizerAgent(BaseAgent):
         self.ctx_set("script", script)
         return script
 
-    async def _via_llm(self, script, original, facts) -> dict:
+    async def _via_llm(self, script, original, facts, include_retention: bool = False) -> dict:
         fact_note = f"\nFATOS REAIS (não contradiga, não invente):\n{facts[:800]}" if facts else ""
         # Live learning signal — which hook mechanism already worked on THIS
         # channel (real views/CTR/retention), same source scriptwriter.py:625
@@ -78,6 +88,18 @@ class HookOptimizerAgent(BaseAgent):
         perf_block = self.ctx_get("performance_insights") or ""
         video_format = script.get("format", "long")
         word_limit = "até 8 palavras" if video_format == "short" else "8-14 palavras"
+        retention_ask = ""
+        retention_fields = ""
+        if include_retention:
+            retention_ask = """
+
+Além do gancho, projete a RETENÇÃO do resto do vídeo:
+- "rehook": frase curta de RE-GANCHO (open loop) para injetar no MEIO do vídeo,
+  prometendo algo que vem a seguir ("mas o que vem agora muda tudo...").
+- "cta": a fala final de CTA — chamada à ação forte + gancho de loop (faz querer
+  rever/seguir) — SERÁ ACRESCENTADA depois do clímax que o roteiro já escreveu,
+  então não repita nem resuma o clímax, só a chamada à ação. 1 frase, em português."""
+            retention_fields = ', "rehook": "<re-gancho do meio>", "cta": "<CTA final>"'
         prompt = f"""Você é um editor viral especialista em gancho de abertura.
 Refine o GANCHO da 1ª cena do vídeo abaixo — SOMENTE se melhorar; preserve o mecanismo original.
 
@@ -90,12 +112,13 @@ REGRAS (não viole — são duras):
 - Use UM mecanismo (curiosity_gap|bold_claim|high_stakes|negation|numbered|in_medias_res).
 - O overlay NUNCA repete a fala; é 2-5 PALAVRAS MAIÚSCULAS com dado/curiosidade.
 - PROIBIDO: 'olá pessoal', 'você não vai acreditar', 'prepare-se', 'segura essa',
-  'presta atenção', 'hoje eu vou te mostrar', 'você já parou para pensar'.{fact_note}{perf_block}
+  'presta atenção', 'hoje eu vou te mostrar', 'você já parou para pensar'.{fact_note}{perf_block}{retention_ask}
 
-Responda SÓ JSON: {{"hook": "<narração nova da 1ª cena>", "overlay": "<2-5 PALAVRAS MAIÚSCULAS>"}}"""
+Responda SÓ JSON: {{"hook": "<narração nova da 1ª cena>", "overlay": "<2-5 PALAVRAS MAIÚSCULAS>"{retention_fields}}}"""
         # Context-dependent rewrite (needs the channel's facts/identity) — use the
         # stronger tier, not the 3B 'fast' models that emit generic/invalid JSON.
-        return await llm.complete_json(prompt, system=with_style("Responda só com JSON válido."), max_tokens=400)
+        return await llm.complete_json(prompt, system=with_style("Responda só com JSON válido."),
+                                        max_tokens=600 if include_retention else 400)
 
     @staticmethod
     def _offline(script: dict, original: str) -> tuple[str, str]:
@@ -114,18 +137,31 @@ class RetentionEngineerAgent(BaseAgent):
             return script
         self.emit("progress", "Engenharia de retenção (re-gancho + CTA)", progress=25)
 
-        try:
-            data = await self._via_llm(script)
-            rehook = (data.get("rehook") or "").strip()
-            cta = (data.get("cta") or "").strip()
-        except llm.LLMUnavailable:
-            rehook, cta = self._offline(script)
+        # HookOptimizerAgent (runs right before us on the same script) already asks
+        # for rehook/cta in its own call when it sees len(scenes)>=3 — reuse that
+        # instead of a second LLM round-trip. Falls back to our own call if it
+        # wasn't set (e.g. this agent invoked standalone, as in tests).
+        precomputed = self.ctx_get("_retention_precomputed")
+        if precomputed is not None:
+            self.ctx_set("_retention_precomputed", None)
+            rehook, cta = precomputed.get("rehook", ""), precomputed.get("cta", "")
+        else:
+            try:
+                data = await self._via_llm(script)
+                rehook = (data.get("rehook") or "").strip()
+                cta = (data.get("cta") or "").strip()
+            except llm.LLMUnavailable:
+                rehook, cta = self._offline(script)
 
         mid = len(scenes) // 2
         if rehook:
             scenes[mid]["narration"] = f"{rehook} {scenes[mid].get('narration', '')}".strip()
         if cta:
-            scenes[-1]["narration"] = cta
+            # ACRESCENTA o CTA depois do clímax que o roteirista já escreveu para a
+            # última cena (onde o [LOOP-PAY] fecha o [LOOP-OPEN] do gancho — ver
+            # scriptwriter.py). Sobrescrever apagaria o payoff do loop e deixaria o
+            # gancho de abertura sem resposta no áudio final.
+            scenes[-1]["narration"] = f"{scenes[-1].get('narration', '')} {cta}".strip()
         script["retention_notes"] = {"rehook_at_scene": mid, "cta": cta}
         _recompute_narration(script)
         self.ctx_set("script", script)
@@ -264,20 +300,28 @@ JSON EXATO:
 class ShortsHookAgent(BaseAgent):
     name = "shorts_hook"
 
-    async def run(self, shorts: list | None = None, script: dict | None = None, **_) -> dict:
+    async def run(self, shorts: list | None = None, script: dict | None = None,
+                  target_platforms: list | None = None, **_) -> dict:
         shorts = shorts if shorts is not None else (self.ctx_get("shorts") or [])
         script = script or self.ctx_get("script") or {}
+        platforms = target_platforms or self.ctx_get("target_platforms") or ["youtube", "tiktok", "instagram"]
         if not shorts:
             return {"shorts": shorts}
         self.emit("progress", "Gancho dos Shorts (primeiro frame)", progress=83)
 
+        # Also asks for the ShortsStrategistAgent's captions/hashtags in this SAME
+        # call (runs right after us on the same shorts/script/platforms) — one LLM
+        # round-trip instead of two. It reads the result back via ctx.
         try:
-            data = await self._via_llm(script)
+            data = await self._via_llm(script, platforms)
             overlay = (data.get("overlay") or "").strip().upper()
             best = data.get("best_format")
+            captions = data.get("captions") or {}
+            hashtags = data.get("hashtags") or []
         except llm.LLMUnavailable:
             overlay = (script.get("hook_overlay") or "VOCÊ PRECISA VER ISSO").upper()[:40]
             best = None
+            captions, hashtags = {}, []
 
         for s in shorts:
             s["hook_overlay"] = overlay
@@ -285,18 +329,27 @@ class ShortsHookAgent(BaseAgent):
         rec = best if best in {f.get("name") for f in shorts} else "standard"
         for s in shorts:
             s["recommended"] = (s.get("name") == rec)
+        if captions or hashtags:
+            self.ctx_set("_shorts_strategy_precomputed", {"captions": captions, "hashtags": hashtags})
         self.ctx_set("shorts", shorts)
         self.emit("progress", "Shorts: gancho e formato recomendado", progress=84)
         return {"shorts": shorts}
 
-    async def _via_llm(self, script) -> dict:
+    async def _via_llm(self, script, platforms) -> dict:
         perf_block = self.ctx_get("performance_insights") or ""
-        prompt = f"""Vídeo vertical (Short/TikTok/Reels) sobre "{script.get('title')}".
+        prompt = f"""Vídeo vertical (Short/TikTok/Reels) sobre "{script.get('title')}" ({script.get('content_type')}),
+plataformas: {platforms}.
 Os 3 primeiros segundos definem se a pessoa para de rolar.{perf_block}
-Responda SÓ JSON:
+JSON EXATO:
 {{"overlay": "<2-5 PALAVRAS gigantes p/ o 1o frame, em MAIÚSCULAS>",
-  "best_format": "<hook|standard|medium|long|mini — o tamanho que mais viraliza p/ este tema>"}}"""
-        return await llm.complete_json(prompt, system=with_style("Responda só com JSON válido."), max_tokens=200)
+  "best_format": "<hook|standard|medium|long|mini — o tamanho que mais viraliza p/ este tema>",
+  "captions": {{
+    "tiktok": "<gancho + CTA curto, <=150 chars>",
+    "instagram": "<caption envolvente <=300 chars>",
+    "youtube_shorts": "<título <=80 chars com #Shorts>"
+  }},
+  "hashtags": ["8-12 hashtags de nicho + alcance (sem espaços)"]}}"""
+        return await llm.complete_json(prompt, system=with_style("Responda só com JSON válido."), max_tokens=600)
 
 
 class ShortsStrategistAgent(BaseAgent):
@@ -311,10 +364,19 @@ class ShortsStrategistAgent(BaseAgent):
             return {"shorts_strategy": {}}
         self.emit("progress", "Estratégia de Shorts (captions por plataforma)", progress=85)
 
-        try:
-            strat = await self._via_llm(script, platforms)
-        except llm.LLMUnavailable:
-            strat = self._offline(script)
+        # ShortsHookAgent (runs right before us on the same shorts/script) already
+        # asks for captions/hashtags in its own call — reuse that instead of a
+        # second LLM round-trip. Falls back to our own call if it wasn't set (e.g.
+        # this agent invoked standalone, as in tests).
+        precomputed = self.ctx_get("_shorts_strategy_precomputed")
+        if precomputed is not None:
+            self.ctx_set("_shorts_strategy_precomputed", None)
+            strat = precomputed
+        else:
+            try:
+                strat = await self._via_llm(script, platforms)
+            except llm.LLMUnavailable:
+                strat = self._offline(script)
 
         for s in shorts:
             s["captions"] = strat.get("captions", {})
@@ -352,3 +414,46 @@ JSON EXATO:
             "hashtags": ["#fyp", "#viral", "#shorts", "#reels", "#foryou", "#brasil",
                          "#trending", "#tiktok", "#explore", "#viralvideo"],
         }
+
+
+# --- standalone test: python -m backend.agents.growth ---
+if __name__ == "__main__":
+    from backend.agents.base_agent import run_agent_cli
+
+    _script = {
+        "title": "O mistério do farol abandonado",
+        "content_type": "film_recap_ai_images",
+        "format": "long",
+        "scenes": [
+            {"index": 0, "narration": "Um farol foi abandonado em 1987.", "is_highlight": True},
+            {"index": 1, "narration": "Ninguém sabe o que houve com o guarda.", "is_highlight": False},
+            {"index": 2, "narration": "Anos depois, encontraram um diário.", "is_highlight": False},
+            {"index": 3, "narration": "O que estava escrito mudou tudo.", "is_highlight": True},
+        ],
+    }
+    _ctx: dict = {"target_platforms": ["youtube", "tiktok"]}
+
+    _script = run_agent_cli(lambda: HookOptimizerAgent(job_id=0, context=_ctx, emit=False), script=_script)
+    print("hook:", _script.get("hook_text"))
+
+    _script = run_agent_cli(lambda: RetentionEngineerAgent(job_id=0, context=_ctx, emit=False), script=_script)
+    print("retention_notes:", _script.get("retention_notes"))
+
+    _pkg = run_agent_cli(
+        lambda: PackagingStrategistAgent(job_id=0, context=_ctx, emit=False),
+        script=_script, target_platforms=_ctx["target_platforms"],
+    )
+    print("youtube_titles:", _pkg.get("youtube_titles"))
+
+    _shorts = [{"name": "standard"}, {"name": "hook"}]
+    _result = run_agent_cli(
+        lambda: ShortsHookAgent(job_id=0, context=_ctx, emit=False),
+        shorts=_shorts, script=_script, target_platforms=_ctx["target_platforms"],
+    )
+    print("shorts hook_overlay:", [s.get("hook_overlay") for s in _result["shorts"]])
+
+    _strat = run_agent_cli(
+        lambda: ShortsStrategistAgent(job_id=0, context=_ctx, emit=False),
+        shorts=_result["shorts"], script=_script, target_platforms=_ctx["target_platforms"],
+    )
+    print("shorts_strategy:", _strat)

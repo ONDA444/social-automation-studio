@@ -1,5 +1,5 @@
 """Fase 6 -- end-to-end validation of the channels/agenda/session/refresh
-layer built in Fases 2-5. Covers exactly the four checks the spec asked for:
+layer built in Fases 2-5. Covers exactly these four checks:
 
   1. Two channels operating at once never mix queue, visual theme, or TTS voice.
   2. A refresh never creates a second job for the same video (mutates in place).

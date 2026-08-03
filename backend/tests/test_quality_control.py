@@ -28,8 +28,7 @@ def test_missing_short_produces_warning_not_silent_pass(tmp_path):
         return None  # simulates missing/corrupt short file
 
     with patch.object(QualityControlAgent, "_probe", side_effect=fake_probe), \
-         patch.object(QualityControlAgent, "_mean_volume", return_value=-10.0), \
-         patch.object(QualityControlAgent, "_has_long_blackframes", return_value=False), \
+         patch.object(QualityControlAgent, "_analyze_audio_video", return_value=(-10.0, False)), \
          patch("backend.agents.quality_control.Path.exists", return_value=True):
         report = agent._check(
             path=str(main_path),

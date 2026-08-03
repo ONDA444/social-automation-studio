@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 import unittest
 from datetime import datetime, timedelta
 from unittest.mock import patch
@@ -105,6 +106,41 @@ class StuckYoutubeProcessingSweepTests(unittest.TestCase):
             scheduler._job_check_stuck_youtube_processing()
 
         fake_check.assert_not_called()
+
+    def test_stalled_call_times_out_without_hanging_the_sweep(self) -> None:
+        """A stalled googleapiclient call must never hang the sweep forever —
+        it should give up after _STUCK_YT_CHECK_CALL_TIMEOUT_S and leave the
+        job unmarked so a later tick tries again."""
+        db, Session = _make_session()
+        job_id = self._account_and_job(db, video_id="vid_hangs", hours_ago=30)
+
+        def _hangs(video_id, credentials):
+            time.sleep(0.3)
+            return {"found": True, "upload_status": "processed"}
+
+        with patch.object(scheduler, "SessionLocal", Session), \
+             patch.object(scheduler, "_STUCK_YT_CHECK_CALL_TIMEOUT_S", 0.05), \
+             patch.object(AccountProfileService, "get_credentials", return_value={"access_token": "x"}), \
+             patch("backend.uploaders.youtube.get_video_processing_status", side_effect=_hangs):
+            scheduler._job_check_stuck_youtube_processing()
+
+        refreshed = Session().get(VideoJob, job_id)
+        yt = refreshed.publish_status["youtube"]
+        self.assertNotIn("processing_checked", yt)
+
+    def test_checks_per_tick_are_capped(self) -> None:
+        db, Session = _make_session()
+        total = scheduler._STUCK_YT_CHECK_BATCH_LIMIT + 5
+        for i in range(total):
+            self._account_and_job(db, video_id=f"vid_{i}", hours_ago=30)
+
+        with patch.object(scheduler, "SessionLocal", Session), \
+             patch.object(AccountProfileService, "get_credentials", return_value={"access_token": "x"}), \
+             patch("backend.uploaders.youtube.get_video_processing_status",
+                   return_value={"found": True, "upload_status": "processed"}) as fake_check:
+            scheduler._job_check_stuck_youtube_processing()
+
+        self.assertEqual(fake_check.call_count, scheduler._STUCK_YT_CHECK_BATCH_LIMIT)
 
 
 if __name__ == "__main__":

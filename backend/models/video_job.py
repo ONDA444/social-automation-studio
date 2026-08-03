@@ -54,8 +54,12 @@ class VideoJob(Base):
     )
 
     # --- Pipeline state ---
+    # No index=True here: status is the leading column of ix_jobs_status_sched
+    # (status, scheduled_at) in database.ensure_indexes, which already serves any
+    # WHERE status = X on its own. A second single-column index would just double
+    # the write cost of every status transition for no read benefit.
     status: Mapped[JobStatus] = mapped_column(
-        Enum(JobStatus, native_enum=False, length=40), default=JobStatus.QUEUED, index=True
+        Enum(JobStatus, native_enum=False, length=40), default=JobStatus.QUEUED
     )
     current_agent: Mapped[str | None] = mapped_column(String(60), default=None)
     progress: Mapped[int] = mapped_column(Integer, default=0)  # 0..100
@@ -65,6 +69,16 @@ class VideoJob(Base):
     # counter could exhaust the one-time orphan-resume allowance before the job
     # ever actually died mid-render. See backend.main._apply_orphan_transition.
     orphan_resume_count: Mapped[int] = mapped_column(Integer, default=0)
+    # Same reasoning as orphan_resume_count above, for the `from_ready_video`
+    # Drive-download attempt budget (scheduler._finalize_ready_video_job,
+    # capped by _READY_VIDEO_MAX_ATTEMPTS). retry_count is ALSO bumped by
+    # scheduler._job_retry_errored's unrelated LLM-failure resurrection sweep
+    # (every ERROR job, including a from_ready_video one, is eligible for
+    # that) and by the manual Retry button — sharing retry_count would let
+    # those unrelated bumps exhaust the Drive-download budget before the job
+    # ever actually made 2 real download attempts, and would inflate the
+    # "desistindo apos N tentativas" message with attempts that never happened.
+    ready_video_attempt_count: Mapped[int] = mapped_column(Integer, default=0)
     error_message: Mapped[str | None] = mapped_column(Text, default=None)
 
     # --- Shared context + per-agent artifacts (JSON blobs) ---
@@ -99,6 +113,13 @@ class VideoJob(Base):
 
     # Cross-platform mirror bookkeeping
     is_mirror: Mapped[bool] = mapped_column(default=False)
+    # Indexed via ix_jobs_mirror_source in database.ensure_indexes (not index=True
+    # here -- ensure_indexes runs on every boot, fresh DB or old, so a second
+    # model-level index would just create a duplicate on fresh installs).
+    # agents/cross_platform_linker.mirror_after_publish queries
+    # WHERE mirror_source_id == source_job.id on every successful publish for
+    # accounts with mirror_to_linked on -- without an index this full-scans
+    # video_jobs, the table that grows fastest and is never purged.
     mirror_source_id: Mapped[int | None] = mapped_column(
         ForeignKey("video_jobs.id", ondelete="SET NULL"), default=None
     )

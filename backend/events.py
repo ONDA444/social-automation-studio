@@ -105,8 +105,8 @@ def publish_event(event: dict) -> None:
         try:
             r.publish(EVENT_CHANNEL, json.dumps(event))
             return
-        except Exception:
-            pass  # fall through to in-process
+        except Exception as exc:
+            logger.debug("redis publish failed: %s", exc)  # fall through to in-process
 
     # In-process fallback.
     _broadcast_threadsafe(event)
@@ -143,7 +143,8 @@ async def redis_listener() -> None:
                 continue
             try:
                 await manager.broadcast(json.loads(msg["data"]))
-            except Exception:
+            except Exception as exc:
+                logger.debug("redis relay failed: %s", exc)
                 continue
     except asyncio.CancelledError:
         await pubsub.unsubscribe(EVENT_CHANNEL)

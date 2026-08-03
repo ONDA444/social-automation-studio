@@ -1,19 +1,17 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { api } from '../api'
+import { useAccounts } from '../AccountsContext.jsx'
 import PlatformCard, { remainingUploads } from '../components/PlatformCard.jsx'
-import { PageHeader, SectionCard, EmptyState } from '../components/ui.jsx'
+import { PageHeader, SectionCard, EmptyState, ErrorBanner } from '../components/ui.jsx'
 import { PLATFORM_META } from '../lib'
 
 const PLATFORMS = ['youtube', 'tiktok', 'instagram']
 
 export default function Platforms() {
-  const [accounts, setAccounts] = useState([])
+  const { accounts, loading, error: loadError, refresh: load } = useAccounts()
   const [adding, setAdding] = useState(false)
   const [creating, setCreating] = useState(false)
   const [form, setForm] = useState({ platform: 'youtube', display_name: '', niche: '' })
-
-  const load = () => api.get('/accounts').then((d) => setAccounts(d.accounts || [])).catch(() => {})
-  useEffect(() => { load() }, [])
 
   const totals = useMemo(() => ({
     all: accounts.length,
@@ -44,6 +42,10 @@ export default function Platforms() {
           {adding ? 'Fechar' : 'Conectar canal'}
         </button>
       </PageHeader>
+
+      {loadError && (
+        <ErrorBanner message="Backend offline — não foi possível carregar os canais." onRetry={load} />
+      )}
 
       <div className="grid grid-cols-3 gap-2 sm:gap-3">
         <div className="card p-3 sm:p-4">
@@ -82,57 +84,72 @@ export default function Platforms() {
         </SectionCard>
       )}
 
-      {PLATFORMS.map((plat) => {
-        const list = accounts.filter((a) => a.platform === plat)
-        if (list.length === 0) return null
-        const meta = PLATFORM_META[plat] || { label: plat, icon: plat.slice(0, 2).toUpperCase() }
-        return (
-          <section key={plat} className="space-y-3">
-            <div className="flex items-center gap-2 sm:gap-3">
-              <span className="data text-sm font-black px-2 py-1 rounded-btn" style={{ background: 'var(--bg-elevated)', color: meta.color }}>
-                {meta.icon}
-              </span>
-              <h3 className="heading text-base sm:text-lg font-bold">{meta.label}</h3>
-              <span className="badge" style={{ background: 'var(--accent-dim)', color: 'var(--accent)' }}>{list.length}</span>
-              <div className="flex-1 h-px" style={{ background: 'var(--border-glass)' }} />
-            </div>
-            <div className="grid lg:grid-cols-2 gap-3">
-              {list.map((a) => <PlatformCard key={a.id} account={a} onChange={load} />)}
-            </div>
-          </section>
-        )
-      })}
-
-      {(() => {
-        const others = accounts.filter((a) => !PLATFORMS.includes(a.platform))
-        if (others.length === 0) return null
-        const meta = { label: 'Outras plataformas', icon: '?', color: 'var(--text-muted)' }
-        return (
-          <section className="space-y-3">
-            <div className="flex items-center gap-2 sm:gap-3">
-              <span className="data text-sm font-black px-2 py-1 rounded-btn" style={{ background: 'var(--bg-elevated)', color: meta.color }}>
-                {meta.icon}
-              </span>
-              <h3 className="heading text-base sm:text-lg font-bold">{meta.label}</h3>
-              <span className="badge" style={{ background: 'var(--accent-dim)', color: 'var(--accent)' }}>{others.length}</span>
-              <div className="flex-1 h-px" style={{ background: 'var(--border-glass)' }} />
-            </div>
-            <div className="grid lg:grid-cols-2 gap-3">
-              {others.map((a) => <PlatformCard key={a.id} account={a} onChange={load} />)}
-            </div>
-          </section>
-        )
-      })()}
-
-      {accounts.length === 0 && (
-        <div className="rounded-card" style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)' }}>
-          <EmptyState
-            icon="CH"
-            title="Nenhum canal conectado"
-            hint="Conecte um canal para comecar a publicar."
-            action={<button className="btn btn-primary" onClick={() => setAdding(true)}>Conectar canal</button>}
-          />
+      {loading ? (
+        <div className="space-y-3">
+          {Array.from({ length: 2 }).map((_, i) => <div key={i} className="skeleton h-32 rounded-card" />)}
         </div>
+      ) : (
+        <>
+          {PLATFORMS.map((plat) => {
+            const list = accounts.filter((a) => a.platform === plat)
+            if (list.length === 0) return null
+            const meta = PLATFORM_META[plat] || { label: plat, icon: plat.slice(0, 2).toUpperCase() }
+            return (
+              <section key={plat} className="space-y-3">
+                <div className="flex items-center gap-2 sm:gap-3">
+                  <span className="data text-sm font-black px-2 py-1 rounded-btn" style={{ background: 'var(--bg-elevated)', color: meta.color }}>
+                    {meta.icon}
+                  </span>
+                  <h3 className="heading text-base sm:text-lg font-bold">{meta.label}</h3>
+                  <span className="badge" style={{ background: 'var(--accent-dim)', color: 'var(--accent)' }}>{list.length}</span>
+                  <div className="flex-1 h-px" style={{ background: 'var(--border-glass)' }} />
+                </div>
+                <div className="grid lg:grid-cols-2 gap-3">
+                  {list.map((a) => <PlatformCard key={a.id} account={a} onChange={load} />)}
+                </div>
+              </section>
+            )
+          })}
+
+          {(() => {
+            const others = accounts.filter((a) => !PLATFORMS.includes(a.platform))
+            if (others.length === 0) return null
+            const meta = { label: 'Outras plataformas', icon: '?', color: 'var(--text-muted)' }
+            return (
+              <section className="space-y-3">
+                <div className="flex items-center gap-2 sm:gap-3">
+                  <span className="data text-sm font-black px-2 py-1 rounded-btn" style={{ background: 'var(--bg-elevated)', color: meta.color }}>
+                    {meta.icon}
+                  </span>
+                  <h3 className="heading text-base sm:text-lg font-bold">{meta.label}</h3>
+                  <span className="badge" style={{ background: 'var(--accent-dim)', color: 'var(--accent)' }}>{others.length}</span>
+                  <div className="flex-1 h-px" style={{ background: 'var(--border-glass)' }} />
+                </div>
+                <div className="grid lg:grid-cols-2 gap-3">
+                  {others.map((a) => <PlatformCard key={a.id} account={a} onChange={load} />)}
+                </div>
+              </section>
+            )
+          })()}
+
+          {accounts.length === 0 && (
+            <div className="rounded-card" style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)' }}>
+              {loadError
+                ? <EmptyState
+                    icon="⚠"
+                    title="Não foi possível carregar os canais."
+                    hint="Verifique se o backend está no ar e tente novamente."
+                    action={<button className="btn btn-primary" onClick={load}>↻ Tentar novamente</button>}
+                  />
+                : <EmptyState
+                    icon="CH"
+                    title="Nenhum canal conectado"
+                    hint="Conecte um canal para comecar a publicar."
+                    action={<button className="btn btn-primary" onClick={() => setAdding(true)}>Conectar canal</button>}
+                  />}
+            </div>
+          )}
+        </>
       )}
     </div>
   )

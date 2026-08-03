@@ -56,6 +56,12 @@ class ChannelCrudTests(unittest.TestCase):
         listed = list_channels(db=db)
         self.assertEqual(len(listed["channels"]), 1)
 
+    def test_invalid_intro_mode_is_rejected(self) -> None:
+        from pydantic import ValidationError
+
+        with self.assertRaises(ValidationError):
+            ChannelCreate(account_id=1, name="Canal", intro_mode="voz_robo_fixa")
+
     def test_second_channel_for_same_account_is_rejected(self) -> None:
         db = _make_session()
         account = _account(db)
@@ -116,17 +122,17 @@ class AgendaEndpointTests(unittest.TestCase):
 
 
 class RefreshEndpointTests(unittest.TestCase):
-    def test_refresh_without_job_id_refreshes_the_whole_channel(self) -> None:
+    def test_refresh_without_job_id_starts_a_background_thread_and_returns_immediately(self) -> None:
         db = _make_session()
         account = _account(db)
         created = create_channel(ChannelCreate(account_id=account.id, name="Canal"), db=db)
 
-        with patch("backend.agents.channel_refresh.refresh_channel",
-                   return_value=[{"job_id": 1, "action": "refreshed"}]) as fake:
+        with patch("backend.routers.channels.threading.Thread") as fake_thread:
             result = refresh_channel(created["id"], job_id=None, db=db)
 
-        fake.assert_called_once()
-        self.assertEqual(result["results"], [{"job_id": 1, "action": "refreshed"}])
+        self.assertEqual(result, {"status": "started", "channel_id": created["id"]})
+        fake_thread.assert_called_once()
+        fake_thread.return_value.start.assert_called_once()
 
     def test_refresh_with_job_id_targets_just_that_job(self) -> None:
         db = _make_session()

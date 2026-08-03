@@ -46,6 +46,7 @@ def _fingerprint(job: VideoJob, channel: Channel) -> str:
         "analysis_topics": analysis.get("topics"),
         "visual_theme": channel.resolved_visual_theme(),
         "tts_voice": channel.tts_voice,
+        "intro_mode": channel.intro_mode,
     }
     raw = json.dumps(payload, sort_keys=True, ensure_ascii=False, default=str)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
@@ -98,6 +99,8 @@ def refresh_job(db, channel: Channel, job: VideoJob) -> dict:
         video_format=job.video_format,
         visual_theme=channel.resolved_visual_theme(),
         voice=channel.tts_voice,
+        intro_mode=channel.intro_mode,
+        channel_id=channel.id,
     )
 
     if new_path == source_path:

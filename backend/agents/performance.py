@@ -20,7 +20,7 @@ import logging
 from collections import defaultdict
 
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from backend.models import VideoJob
 
@@ -41,7 +41,9 @@ class PerformanceInsights:
         if not account_id:
             return []
         jobs = self.db.execute(
-            select(VideoJob).where(VideoJob.account_id == account_id)
+            select(VideoJob)
+            .options(selectinload(VideoJob.analytics))
+            .where(VideoJob.account_id == account_id)
         ).scalars().all()
         out: list[dict] = []
         for job in jobs:

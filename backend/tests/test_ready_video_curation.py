@@ -364,5 +364,133 @@ class RenderPreviewTests(unittest.TestCase):
         fake_run.assert_not_called()
 
 
+class IntroModeResolutionTests(unittest.TestCase):
+    """Fase de mitigacao (video 'Claude Code + YouTube = Monetizado'): a
+    intro nao pode ser sempre o mesmo TTS no mesmo formato -- padrao
+    detectavel. _resolve_intro_mode decide entre tts/voice_bank/text_only,
+    com 'mixed' sorteando entre os tres."""
+
+    def test_none_or_unknown_falls_back_to_tts(self) -> None:
+        self.assertEqual(curation._resolve_intro_mode(None, None), "tts")
+        self.assertEqual(curation._resolve_intro_mode("nao existe", None), "tts")
+        self.assertEqual(curation._resolve_intro_mode("", 1), "tts")
+
+    def test_explicit_text_only_is_honoured(self) -> None:
+        self.assertEqual(curation._resolve_intro_mode("text_only", None), "text_only")
+
+    def test_voice_bank_falls_back_to_tts_when_bank_is_empty(self) -> None:
+        with patch.object(curation, "_voice_bank_files", return_value=[]):
+            self.assertEqual(curation._resolve_intro_mode("voice_bank", 999), "tts")
+
+    def test_voice_bank_is_honoured_when_bank_has_files(self) -> None:
+        with patch.object(curation, "_voice_bank_files", return_value=[Path("a.mp3")]):
+            self.assertEqual(curation._resolve_intro_mode("voice_bank", 1), "voice_bank")
+
+    def test_mixed_only_ever_resolves_to_a_real_mode(self) -> None:
+        with patch.object(curation, "_voice_bank_files", return_value=[Path("a.mp3")]):
+            seen = {curation._resolve_intro_mode("mixed", 1) for _ in range(60)}
+        # With enough draws we should see more than one outcome (proves it's
+        # actually sampling, not silently collapsing to a single branch).
+        self.assertTrue(seen.issubset({"tts", "voice_bank", "text_only"}))
+        self.assertGreater(len(seen), 1)
+
+    def test_mixed_respects_configured_weights_over_many_draws(self) -> None:
+        counts = {"tts": 0, "voice_bank": 0, "text_only": 0}
+        with patch.object(curation, "_voice_bank_files", return_value=[Path("a.mp3")]):
+            for _ in range(2000):
+                counts[curation._resolve_intro_mode("mixed", 1)] += 1
+        total = sum(counts.values())
+        # Generous tolerance -- this only needs to prove the weighting is
+        # roughly right (60/25/15), not pin an exact RNG distribution.
+        self.assertAlmostEqual(counts["tts"] / total, 0.60, delta=0.08)
+        self.assertAlmostEqual(counts["text_only"] / total, 0.25, delta=0.08)
+        self.assertAlmostEqual(counts["voice_bank"] / total, 0.15, delta=0.08)
+
+    def test_voice_bank_files_reads_only_mp3s_from_the_channel_dir(self) -> None:
+        work = Path(settings.abs_path(settings.temp_dir)) / "test_voice_bank_dir"
+        bank_dir = work / "voice_bank" / "42"
+        bank_dir.mkdir(parents=True, exist_ok=True)
+        (bank_dir / "linha1.mp3").write_bytes(b"fake")
+        (bank_dir / "linha2.mp3").write_bytes(b"fake")
+        (bank_dir / "notas.txt").write_bytes(b"nao e audio")
+        try:
+            with patch.object(settings, "assets_dir", str(work)):
+                files = curation._voice_bank_files(42)
+            self.assertEqual({f.name for f in files}, {"linha1.mp3", "linha2.mp3"})
+            self.assertEqual(curation._voice_bank_files(None), [])
+            self.assertEqual(curation._voice_bank_files(9999), [])  # no dir for this channel
+        finally:
+            import shutil
+            shutil.rmtree(work, ignore_errors=True)
+
+
+@unittest.skipUnless(_ffmpeg_available(), "ffmpeg/ffprobe not installed")
+class IntroModeRenderTests(unittest.TestCase):
+    """Real ffmpeg end-to-end per mode -- text_only (no narration audio) and
+    voice_bank (uses the operator's own recording, not TTS) are new; tts is
+    already covered by RealFfmpegCurationTests and re-checked here only for
+    the explicit intro_mode="tts" pass-through."""
+
+    def setUp(self) -> None:
+        self.work = Path(settings.abs_path(settings.temp_dir)) / "test_intro_mode_render"
+        self.work.mkdir(parents=True, exist_ok=True)
+        self.src = self.work / "source_clip.mp4"
+        subprocess.run(
+            ["ffmpeg", "-y", "-f", "lavfi", "-i", "testsrc2=size=640x360:rate=24:duration=4",
+             "-f", "lavfi", "-i", "sine=frequency=440:duration=4",
+             "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", str(self.src)],
+            capture_output=True, timeout=60,
+        )
+        self.orig = _probe(self.src)
+        self.analysis = {"width": 640, "height": 360, "duration": self.orig["duration"], "has_audio": True}
+
+    def tearDown(self) -> None:
+        import shutil
+        shutil.rmtree(self.work, ignore_errors=True)
+        for job_id in (30001, 30002, 30003):
+            shutil.rmtree(
+                Path(settings.abs_path(settings.temp_dir)) / "ready_video_curation" / f"job_{job_id}",
+                ignore_errors=True,
+            )
+
+    def test_text_only_mode_adds_no_narration_and_stays_a_valid_video(self) -> None:
+        take = {"line": "so uma legenda, sem narracao"}
+        out = curation._apply_long_intro(
+            30001, str(self.src), take, self.analysis, intro_mode="text_only",
+        )
+        self.assertIsNotNone(out)
+        result = _probe(out)
+        self.assertTrue(result["has_video"])
+        self.assertTrue(result["has_audio"])  # silent track, but still a valid stream
+        # Card (~4.5s) + original (4s) -- longer than the original alone.
+        self.assertGreater(result["duration"], self.orig["duration"] + 2)
+
+    def test_text_only_mode_never_calls_tts(self) -> None:
+        take = {"line": "so uma legenda"}
+        with patch.object(curation, "_synthesize") as fake_synth:
+            curation._apply_long_intro(30003, str(self.src), take, self.analysis, intro_mode="text_only")
+        fake_synth.assert_not_called()
+
+    def test_voice_bank_mode_uses_the_operators_recording_not_tts(self) -> None:
+        bank_dir = self.work / "voice_bank" / "7"
+        bank_dir.mkdir(parents=True, exist_ok=True)
+        recording = bank_dir / "linha1.mp3"
+        subprocess.run(
+            ["ffmpeg", "-y", "-f", "lavfi", "-i", "sine=frequency=250:duration=2.5", str(recording)],
+            capture_output=True, timeout=30,
+        )
+        take = {"line": "aqui vai minha visao sobre isso"}
+        with patch.object(settings, "assets_dir", str(self.work)), \
+             patch.object(curation, "_synthesize") as fake_synth:
+            out = curation._apply_long_intro(
+                30002, str(self.src), take, self.analysis, intro_mode="voice_bank", channel_id=7,
+            )
+        fake_synth.assert_not_called()  # human recording used -- no TTS call at all
+        self.assertIsNotNone(out)
+        result = _probe(out)
+        self.assertTrue(result["has_audio"])
+        self.assertGreater(result["duration"], self.orig["duration"] + 1.5)
+
+
 if __name__ == "__main__":
     unittest.main()

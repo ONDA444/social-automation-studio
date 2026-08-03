@@ -177,7 +177,7 @@ def _job_heartbeat() -> None:
         heartbeat()
         _last_heartbeat_at = datetime.utcnow()
     except Exception as exc:  # noqa: BLE001
-        logger.debug("heartbeat failed: %s", exc)
+        logger.warning("heartbeat failed: %s", exc)
 
 
 def _job_quota_reset() -> None:
@@ -241,12 +241,24 @@ _NO_AUTO_RETRY_MARKERS = (
     "desistindo apos",
 )
 
+# Dispatches per tick, capped for the same reason _STUCK_QUEUED_BATCH_LIMIT
+# caps _job_recover_stuck_queued: the in-process render pool has only 1-2
+# slots (pipeline/dispatch.py's _MAX_RENDER). A provider-wide LLM outage can
+# park dozens of jobs in the same evening, whose exponential backoffs then
+# align and reopen on the SAME tick — dispatching all of them at once would
+# be the same overload pattern that motivated _STUCK_QUEUED_BATCH_LIMIT,
+# just via a different trigger.
+_RETRY_ERRORED_BATCH_LIMIT = 5
+
+
 def _job_retry_errored() -> None:
     """Resurrect videos that died on a transient LLM failure (free-tier 429 / daily
     quota window) so a scheduled post isn't lost forever. Resets them to QUEUED and
     re-dispatches; per-provider pacing + a reopened quota window usually let them
     through next time. Capped by retry_count (settings.llm_retry_max) so a genuinely
     broken job doesn't loop, and bounded to the last 24h so we never wake old ghosts.
+    Dispatches are also capped per tick (_RETRY_ERRORED_BATCH_LIMIT) so a mass LLM
+    failure can't dump dozens of jobs on the render pool the moment backoffs align.
     """
     from sqlalchemy import select, update
 
@@ -264,15 +276,23 @@ def _job_retry_errored() -> None:
     cutoff = now - timedelta(hours=72)
 
     db = SessionLocal()
+    dispatched = 0
     try:
+        # Over-fetch a bit: most candidates get filtered out below by the
+        # marker exclusion or the backoff window, neither of which counts
+        # toward the dispatch batch limit.
         rows = db.execute(
             select(VideoJob).where(
                 VideoJob.status == JobStatus.ERROR,
                 VideoJob.retry_count < cap,
                 VideoJob.updated_at >= cutoff,
             )
+            .order_by(VideoJob.updated_at.asc())
+            .limit(_RETRY_ERRORED_BATCH_LIMIT * 6)
         ).scalars().all()
         for job in rows:
+            if dispatched >= _RETRY_ERRORED_BATCH_LIMIT:
+                break
             msg = job.error_message or ""
             # Auto-resurrect EVERY failed video back into production (user wants no
             # error left sitting), not only transient-LLM ones — EXCEPT a publish
@@ -312,12 +332,16 @@ def _job_retry_errored() -> None:
             if not claimed:
                 continue  # someone else owns this retry — do not double-dispatch
             job.retry_count = new_retry_count
+            dispatched += 1
             logger.info("Retry LLM-falho: job %s (tentativa %s/%s).", job.id, job.retry_count, cap)
             publish_event({
                 "type": "job_update", "job_id": job.id, "status": "retry",
                 "message": f"Reprocessando após falha de LLM (tentativa {job.retry_count}/{cap})",
             })
-            dispatch_job(job.id)
+            try:
+                dispatch_job(job.id)
+            except Exception as exc:  # noqa: BLE001 — isolate per job
+                logger.warning("retry_errored: dispatch failed for job %s: %s", job.id, exc)
     except Exception as exc:  # noqa: BLE001 — never let the scheduler die
         db.rollback()
         logger.warning("retry_errored job failed: %s", exc)
@@ -379,7 +403,7 @@ def _job_recover_stuck_publishing() -> None:
 
     from backend.main import _apply_orphan_transition, _safe_boot
     from backend.models import JobStatus, VideoJob
-    from backend.pipeline.dispatch import dispatch_job, dispatch_publish, is_inflight
+    from backend.pipeline.dispatch import celery_inflight_ids, dispatch_job, dispatch_publish, is_inflight
 
     cutoff = datetime.utcnow() - timedelta(minutes=_STUCK_JOB_MINUTES)
     db = SessionLocal()
@@ -390,7 +414,11 @@ def _job_recover_stuck_publishing() -> None:
                 VideoJob.updated_at < cutoff,
             )
         ).scalars().all()
-        stuck = [job for job in stuck if not is_inflight(job.id)]
+        # One broker round-trip for the whole batch instead of one per
+        # candidate — celery_inflight_ids() doesn't change mid-sweep, so
+        # there's no reason to re-ask Celery for each job.
+        celery_ids = celery_inflight_ids()
+        stuck = [job for job in stuck if not is_inflight(job.id, celery_ids)]
         if not stuck:
             return
         safe = _safe_boot()
@@ -508,7 +536,7 @@ def _job_recover_stuck_queued() -> None:
     from sqlalchemy import select, update
 
     from backend.models import JobStatus, ReadyVideo, VideoJob
-    from backend.pipeline.dispatch import dispatch_job, is_inflight
+    from backend.pipeline.dispatch import celery_inflight_ids, dispatch_job, is_inflight
 
     cutoff = datetime.utcnow() - timedelta(minutes=_STUCK_QUEUED_MINUTES)
     max_age_cutoff = datetime.utcnow() - timedelta(hours=_STUCK_QUEUED_MAX_AGE_HOURS)
@@ -524,8 +552,12 @@ def _job_recover_stuck_queued() -> None:
             .order_by(VideoJob.updated_at.asc())
             .limit(_STUCK_QUEUED_BATCH_LIMIT * 4)
         ).scalars().all()
+        # One broker round-trip for the whole batch instead of one per
+        # candidate (up to _STUCK_QUEUED_BATCH_LIMIT*4) — see the matching
+        # comment in _job_recover_stuck_publishing above.
+        celery_ids = celery_inflight_ids()
         for job in candidates:
-            if is_inflight(job.id):
+            if is_inflight(job.id, celery_ids):
                 continue
             if job.scheduled_at and job.scheduled_at < max_age_cutoff:
                 ctx = job.video_context or {}
@@ -542,22 +574,29 @@ def _job_recover_stuck_queued() -> None:
                     "republicado automaticamente para não postar conteúdo atrasado "
                     "em lote. Reagende ou exclua."
                 )[:500]
+                db.commit()
                 expired += 1
                 continue
             if len(to_dispatch) >= _STUCK_QUEUED_BATCH_LIMIT:
                 continue
-            # Atomic claim: bump updated_at NOW so a slower-ticking sibling
-            # replica (or next tick, if dispatch_job below is itself slow)
-            # can't also pick this job up before the dispatch below lands.
+            # ATOMIC claim: flip QUEUED -> PROCESSING only if STILL QUEUED, and
+            # commit PER JOB (not batched at the end) — same pattern as every
+            # other claim in this file (_job_quota_reset, _job_retry_errored,
+            # _job_recover_stuck_publishing, _create_theme_job). Bumping only
+            # updated_at (the previous behavior) never actually changed status,
+            # so a concurrent claim's WHERE status==QUEUED kept matching
+            # indefinitely and two racing ticks/replicas could both "claim" and
+            # dispatch the same job. Flipping status is what makes rowcount==0
+            # for whoever loses the race.
             claimed = db.execute(
                 update(VideoJob)
                 .where(VideoJob.id == job.id, VideoJob.status == JobStatus.QUEUED)
-                .values(updated_at=datetime.utcnow())
+                .values(status=JobStatus.PROCESSING, updated_at=datetime.utcnow())
                 .execution_options(synchronize_session=False)
             ).rowcount
+            db.commit()
             if claimed:
                 to_dispatch.append(job.id)
-        db.commit()
         if expired or to_dispatch:
             logger.info(
                 "Varredura de QUEUED presos: %d expirado(s) (slot > %dh vencido, "
@@ -591,7 +630,7 @@ def _job_trending() -> None:
             result = asyncio.run(TrendingAgent(job_id=None, emit=False).execute(niche=niche))
             publish_event({"type": "trending", "niche": niche, "suggestions": result["suggestions"]})
     except Exception as exc:  # noqa: BLE001
-        logger.debug("trending job failed: %s", exc)
+        logger.warning("trending job failed: %s", exc)
     finally:
         db.close()
 
@@ -607,8 +646,20 @@ def _job_collect_analytics() -> None:
     try:
         now = datetime.utcnow()
         windows = {"2h": (2, 0.5), "24h": (24, 2), "7d": (168, 12)}
+        # PUBLISHED is a terminal status (nothing transitions out of it), so
+        # without a date filter this SELECT re-fetches every published job
+        # EVER, in full — including the heavy JSON columns (script,
+        # editing_plan, seo_metadata, style_dna; ~30-80KB each per
+        # models/video_job.py) — every 15 min for the life of the deployment.
+        # Bounded to the widest window + tolerance (168h + 12h = 180h) with a
+        # margin: the same class of unbounded-growth OOM risk that
+        # _job_refresh_live was capped for below.
+        stale_cutoff = now - timedelta(hours=192)
         published = db.execute(
-            select(VideoJob).where(VideoJob.status == JobStatus.PUBLISHED)
+            select(VideoJob).where(
+                VideoJob.status == JobStatus.PUBLISHED,
+                VideoJob.updated_at >= stale_cutoff,
+            )
         ).scalars().all()
         agent = AnalyticsAgent(db)
         collected = 0
@@ -632,7 +683,7 @@ def _job_collect_analytics() -> None:
         # when no new snapshot was due this tick.
         publish_event({"type": "analytics_tick", "collected": collected})
     except Exception as exc:  # noqa: BLE001
-        logger.debug("analytics job failed: %s", exc)
+        logger.warning("analytics job failed: %s", exc)
     finally:
         db.close()
 
@@ -674,18 +725,25 @@ def _job_refresh_live() -> None:
             .limit(_REFRESH_LIVE_BATCH_LIMIT)
         ).scalars().all()
         agent = AnalyticsAgent(db)
+        # Batched: one videos().list/reports().query call per chunk of up to 50
+        # video IDs (grouped by owning account) instead of one call per job —
+        # see AnalyticsAgent.refresh_live_batch. Same quota per chunk as per
+        # single ID, so this is what actually cuts the HTTP-call volume behind
+        # the OOM burst _REFRESH_LIVE_BATCH_LIMIT above caps the symptom of.
+        try:
+            results = agent.refresh_live_batch([job.id for job in published])
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("live refresh batch failed: %s", exc)
+            results = {}
         refreshed = 0
         for job in published:
-            try:
-                if agent.refresh_live(job.id):
-                    refreshed += 1
-                    publish_event({"type": "analytics_collected", "job_id": job.id,
-                                   "account_id": job.account_id, "snapshot_type": "live"})
-            except Exception as exc:  # noqa: BLE001
-                logger.debug("live refresh for job %s failed: %s", job.id, exc)
+            if results.get(job.id):
+                refreshed += 1
+                publish_event({"type": "analytics_collected", "job_id": job.id,
+                               "account_id": job.account_id, "snapshot_type": "live"})
         publish_event({"type": "analytics_tick", "collected": refreshed, "live": True})
     except Exception as exc:  # noqa: BLE001
-        logger.debug("live refresh job failed: %s", exc)
+        logger.warning("live refresh job failed: %s", exc)
     finally:
         db.close()
 
@@ -746,6 +804,17 @@ def _create_trending_job(db, acct, moment) -> int:
 # Real transcodes finish in minutes to a couple hours even for long videos;
 # this is deliberately generous to never flag a merely-slow one.
 _STUCK_PROCESSING_HOURS = 24
+# Real HTTP calls per tick, capped for the same reason _REFRESH_LIVE_BATCH_LIMIT
+# caps _job_refresh_live: this loop makes synchronous googleapiclient calls in
+# series, so a heavy publishing day (dozens of candidates in the recency
+# window) could otherwise chain that many blocking requests on a single tick.
+_STUCK_YT_CHECK_BATCH_LIMIT = 25
+# Hard ceiling on a SINGLE status check, mirroring publisher.py's
+# _UPLOAD_TIMEOUT_S. uploaders.youtube._service() already gives httplib2 a 30s
+# per-socket-op timeout, but that bounds one connect/read, not the call as a
+# whole (retries/slow multi-packet reads can still add up) — this is the outer
+# backstop so one bad video can never hang the scheduler thread.
+_STUCK_YT_CHECK_CALL_TIMEOUT_S = 45
 
 
 def _job_check_stuck_youtube_processing() -> None:
@@ -766,6 +835,11 @@ def _job_check_stuck_youtube_processing() -> None:
     machinery into re-rendering and re-uploading ANOTHER copy, the exact bug
     this sweep exists to catch) but the flag itself is what a human — or a
     future UI surface — uses to know it needs a manual look.
+
+    Bounded to _STUCK_YT_CHECK_BATCH_LIMIT real API calls per tick (hourly, so
+    the rest simply get picked up on a later run) and each call is bounded to
+    _STUCK_YT_CHECK_CALL_TIMEOUT_S so a single stalled connection can never
+    hang this sweep for the rest of the tick.
     """
     from sqlalchemy import select
 
@@ -782,18 +856,27 @@ def _job_check_stuck_youtube_processing() -> None:
 
     db = SessionLocal()
     try:
+        # Over-fetch a bit: candidates already `processing_checked` or missing
+        # credentials are skipped for free (no HTTP call) and don't count
+        # toward the batch limit below.
         candidates = db.execute(
-            select(VideoJob).where(
+            select(VideoJob)
+            .where(
                 VideoJob.status == JobStatus.PUBLISHED,
                 VideoJob.account_id.is_not(None),
                 VideoJob.updated_at >= window_start,
                 VideoJob.updated_at <= window_end,
             )
+            .order_by(VideoJob.updated_at.asc())
+            .limit(_STUCK_YT_CHECK_BATCH_LIMIT * 3)
         ).scalars().all()
         svc = AccountProfileService(db)
         checked = 0
         stuck = 0
+        attempts = 0
         for job in candidates:
+            if attempts >= _STUCK_YT_CHECK_BATCH_LIMIT:
+                break
             pub = job.publish_status or {}
             yt = pub.get("youtube") or {}
             video_id = yt.get("video_id")
@@ -802,7 +885,18 @@ def _job_check_stuck_youtube_processing() -> None:
             creds = svc.get_credentials(job.account_id)
             if not creds:
                 continue
-            info = get_video_processing_status(video_id, creds)
+            attempts += 1
+            try:
+                info = asyncio.run(asyncio.wait_for(
+                    asyncio.to_thread(get_video_processing_status, video_id, creds),
+                    timeout=_STUCK_YT_CHECK_CALL_TIMEOUT_S,
+                ))
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "check_stuck_youtube_processing: timeout (>%ss) checando video %s (job %s).",
+                    _STUCK_YT_CHECK_CALL_TIMEOUT_S, video_id, job.id,
+                )
+                continue  # try again next hour
             if info.get("found") is not True:
                 continue  # API error or video not found — try again next hour
             checked += 1
@@ -902,7 +996,7 @@ def _job_ride_trends() -> None:
                 db.rollback()
                 logger.debug("ride_trends account %s failed: %s", acct.id, exc)
     except Exception as exc:  # noqa: BLE001
-        logger.debug("ride_trends job failed: %s", exc)
+        logger.warning("ride_trends job failed: %s", exc)
     finally:
         db.close()
 
@@ -1108,8 +1202,8 @@ def _finalize_ready_video_job(
 
     Shared by `_try_create_ready_video_job` (first attempt) and
     `retry_ready_video_job` (the only safe retry path for a `from_ready_video`
-    job — see dispatch.py's `_is_ready_video_job` guard) so the two paths
-    can't silently drift apart."""
+    job — see dispatch.py's `_job_mode` routing in dispatch_job) so the two
+    paths can't silently drift apart."""
     from backend.agents.ready_video_curation import apply_curation_layer
     from backend.agents.ready_video_seo import build_ready_video_package, is_audio_ready, render_audio_track_as_video
     from backend.config import settings
@@ -1210,6 +1304,8 @@ def _finalize_ready_video_job(
                 video_format=curation_format,
                 visual_theme=channel.resolved_visual_theme() if channel else None,
                 voice=channel.tts_voice if channel else None,
+                intro_mode=channel.intro_mode if channel else None,
+                channel_id=channel.id if channel else None,
             )
             if curated_path != local_path:
                 local_path = curated_path
@@ -1245,7 +1341,15 @@ def _finalize_ready_video_job(
             dispatch_publish(job.id)
     except Exception as exc:  # noqa: BLE001
         job.status = JobStatus.ERROR
-        job.retry_count = (job.retry_count or 0) + 1
+        # Dedicated counter, NOT retry_count: retry_count is also bumped by
+        # scheduler._job_retry_errored's unrelated LLM-failure resurrection
+        # sweep (which treats every ERROR job, including this one, as
+        # eligible) and by the manual Retry button — sharing it would let
+        # those unrelated bumps exhaust this budget before the job ever made
+        # _READY_VIDEO_MAX_ATTEMPTS real download attempts. See
+        # models/video_job.py's ready_video_attempt_count for the same
+        # reasoning that split off orphan_resume_count from retry_count.
+        job.ready_video_attempt_count = (job.ready_video_attempt_count or 0) + 1
         # Confirmed in production: releasing the ready_video back to
         # "available" on EVERY failure let a totally different theme/job grab
         # the SAME Drive file minutes later via _try_create_ready_video_job,
@@ -1258,12 +1362,12 @@ def _finalize_ready_video_job(
         # for a fresh attempt once this job has genuinely given up, and mark
         # it with a phrase in _NO_AUTO_RETRY_MARKERS so this exhausted job is
         # never ALSO auto-resurrected alongside that fresh attempt.
-        if job.retry_count >= _READY_VIDEO_MAX_ATTEMPTS:
+        if job.ready_video_attempt_count >= _READY_VIDEO_MAX_ATTEMPTS:
             ready.status = "available"
             ready.reserved_job_id = None
             ready.reserved_at = None
             job.error_message = (
-                f"Falha ao {stage}, desistindo apos {job.retry_count} "
+                f"Falha ao {stage}, desistindo apos {job.ready_video_attempt_count} "
                 f"tentativas: {exc}"
             )[:500]
         else:
@@ -1282,8 +1386,8 @@ def retry_ready_video_job(job_id: int) -> None:
     (TTS narration + generated images) into a job whose whole point was to
     publish the user's own pre-made Drive file, keyed only by coincidentally
     reusing the job's title/topic as the AI's topic. `dispatch.py`'s
-    `_is_ready_video_job` guard redirects every re-dispatch path for a
-    `from_ready_video` job here instead of `dispatch_job`.
+    `_job_mode` routing in dispatch_job redirects every re-dispatch path for
+    a `from_ready_video` job here instead of the full orchestrator.
     """
     from backend.agents.drive_library import DriveLibraryService
     from backend.models import JobStatus, PlatformAccount, ReadyVideo, VideoJob

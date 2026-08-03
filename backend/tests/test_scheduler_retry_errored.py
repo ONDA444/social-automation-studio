@@ -131,6 +131,54 @@ class RetryErroredRaceConditionTests(unittest.TestCase):
         verify_session.close()
 
 
+class RetryErroredBatchLimitTests(unittest.TestCase):
+    """A mass LLM outage can park dozens of jobs in ERROR whose backoffs then
+    reopen on the same tick — _job_retry_errored must cap how many it
+    dispatches per tick instead of resurrecting the whole batch at once."""
+
+    def _make_engine(self):
+        tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        tmp.close()
+        db_url = f"sqlite:///{tmp.name}"
+        engine = create_engine(db_url, connect_args={"timeout": 30})
+        Base.metadata.create_all(bind=engine)
+        return engine
+
+    def test_dispatches_are_capped_per_tick(self) -> None:
+        engine = self._make_engine()
+        Session_ = sessionmaker(bind=engine)
+        setup = Session_()
+        account = PlatformAccount(platform="youtube", display_name="Canal Teste", niche="geral")
+        setup.add(account)
+        setup.flush()
+
+        total = scheduler._RETRY_ERRORED_BATCH_LIMIT + 4
+        for i in range(total):
+            setup.add(VideoJob(
+                title=f"Falha {i}", mode="from_title", content_type="film_recap_ai_images",
+                video_format="long", account_id=account.id, status=JobStatus.ERROR,
+                retry_count=0, error_message="429 rate limit",
+                updated_at=datetime.utcnow() - timedelta(hours=2),
+            ))
+        setup.commit()
+        setup.close()
+
+        dispatched: list[int] = []
+        settings_mock = type("S", (), {"llm_retry_max": 5})()
+
+        with patch.object(scheduler, "SessionLocal", sessionmaker(bind=engine)), \
+             patch("backend.config.settings", settings_mock), \
+             patch("backend.pipeline.dispatch.dispatch_job", side_effect=dispatched.append):
+            scheduler._job_retry_errored()
+
+        self.assertEqual(len(dispatched), scheduler._RETRY_ERRORED_BATCH_LIMIT)
+
+        verify = Session_()
+        still_errored = verify.query(VideoJob).filter(VideoJob.status == JobStatus.ERROR).count()
+        verify.close()
+        self.assertEqual(still_errored, total - scheduler._RETRY_ERRORED_BATCH_LIMIT)
+
+
 class RetryErroredMarkerExclusionTests(unittest.TestCase):
     """Verifies _job_retry_errored() actually excludes jobs whose error_message
     matches a _NO_AUTO_RETRY_MARKERS entry, and still resurrects eligible ones.
