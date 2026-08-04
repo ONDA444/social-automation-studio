@@ -244,6 +244,76 @@ class FallbackTemplateDiversificationTests(unittest.TestCase):
         self.assertGreater(len(tag_sets), 1)
 
 
+class TitleSeedEqualsNicheCollapseTests(unittest.TestCase):
+    """Regression guard for a production bug on an "academia" channel: every
+    Drive file there is named "Academia (N).mp4", so title_seed (after
+    scheduler.py's _clean_ready_title strips the "(N)" counter) is always the
+    literal string "Academia" -- identical to the channel's niche. _best_topic
+    used to accept that as the video's `topic` before ever looking at the
+    vision analysis's per-video hook/summary (analysis_source=vision_llm),
+    which collapsed every video's `topic` onto the same value and, since the
+    title-template variant is a deterministic hash of `topic`, produced the
+    exact same literal Shorts title for dozens of unrelated uploads even
+    though each one had a distinct Gemini vision summary/hook."""
+
+    def _seo_for(self, n: int) -> dict:
+        return build_drive_seo(
+            context={
+                "title_seed": "Academia",
+                "drive_name": f"Academia ({n}).mp4",
+                "folder_path": "ACADEMIA",
+                "niche": "Academia",
+                "account_niche": "Academia",
+                "content_type": "film_recap_ai_images",
+                "video_format": "short",
+            },
+            analysis={
+                "analysis_source": "vision_llm",
+                "summary": f"Um treino de peito com uma tecnica especifica mostrada no video {n}.",
+                "topics": [f"treino {n}", "musculacao", "academia"],
+                "entities": [f"exercicio {n}"],
+                "title_options": [],
+                "hook": f"Esse treino {n} tem um detalhe de execucao que muita gente erra.",
+            },
+        )
+
+    def test_titles_no_longer_collapse_to_the_same_literal_string(self) -> None:
+        titles = {self._seo_for(n)["youtube"]["title"] for n in range(1, 12)}
+        # Before the fix every one of these collapsed to the exact same
+        # literal title ("Academia: o resumo direto do que aconteceu
+        # #Shorts") because `topic` was always "Academia". Assert real
+        # per-video variety instead.
+        self.assertGreater(len(titles), 1)
+
+    def test_title_reflects_the_specific_vision_hook_not_the_bare_niche(self) -> None:
+        seo = self._seo_for(7)
+        title = seo["youtube"]["title"]
+        self.assertIn("treino 7", title.lower())
+        self.assertNotEqual(title, "Academia: o resumo direto do que aconteceu #Shorts")
+
+    def test_title_seed_still_wins_when_it_is_not_just_the_niche(self) -> None:
+        # Sanity check that the fix is scoped: a title_seed that carries real
+        # information (not equal to the niche) must still outrank hook/summary,
+        # preserving the existing priority order documented in _best_topic.
+        seo = build_drive_seo(
+            context={
+                "title_seed": "Treino de peito avancado",
+                "drive_name": "Academia (99).mp4",
+                "folder_path": "ACADEMIA",
+                "niche": "Academia",
+                "account_niche": "Academia",
+                "content_type": "film_recap_ai_images",
+                "video_format": "short",
+            },
+            analysis={
+                "analysis_source": "vision_llm",
+                "summary": "Um resumo totalmente diferente do titulo.",
+                "hook": "Um gancho totalmente diferente do titulo.",
+            },
+        )
+        self.assertIn("treino de peito avancado", seo["youtube"]["title"].lower())
+
+
 class GeminiVisionRetryTests(unittest.TestCase):
     """A 429 (rate limit) from Gemini must be retried with backoff instead of
     immediately falling back to the fixed title template — several channels

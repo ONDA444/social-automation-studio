@@ -56,6 +56,163 @@ CONFLICT_WORDS = (
     "descobre", "descobriu", "tenta", "tentou",
 )
 
+# Single source of truth for per-content_type title variants, used by BOTH
+# `_title_from_analysis` ("standard" variants) and `_apply_viral_shorts_title`
+# ("short" variants, punchier/shorter phrasing for the Shorts feed). These
+# used to be two separate, hand-maintained dicts that drifted apart: the
+# Shorts one was missing film_recap_ai_images/quote_viral/top_list_ranking
+# entirely, so a Short of one of those content_types silently fell through to
+# the generic default_variants in the Shorts path while the long-form path
+# had dedicated, specific phrasing for it -- producing a different,
+# disconnected title for the exact same video depending on whether the
+# vision_llm path or the fallback path ran. Keeping both variant sets under
+# the same content_type key here means the two paths can never have a
+# different key set again. Each entry is a template string with a "{base}"
+# placeholder, filled in with the compacted topic at call time.
+_TITLE_TEMPLATE_VARIANTS: dict[str, dict[str, tuple[str, ...]]] = {
+    "sports_highlights": {
+        "standard": (
+            "{base}: o lance que mudou o jogo",
+            "{base}: o lance decisivo da partida",
+            "{base}: a jogada que ninguem esperava",
+            "{base}: o momento que definiu tudo",
+        ),
+        "short": (
+            "{base}: o lance decisivo",
+            "{base}: o momento chave",
+            "{base}: a jogada que decidiu",
+            "{base}: o lance que viralizou",
+        ),
+    },
+    "motivational_speech": {
+        "standard": (
+            "{base}: a virada comeca aqui",
+            "{base}: o ponto de virada",
+            "{base}: a mensagem que muda o dia",
+            "{base}: comeca a mudanca agora",
+        ),
+        "short": (
+            "{base}: a virada de chave",
+            "{base}: o momento decisivo",
+            "{base}: a mensagem que fica",
+            "{base}: o instante que muda tudo",
+        ),
+    },
+    "reddit_story": {
+        "standard": (
+            "{base}: eu devia ter percebido antes",
+            "{base}: o relato completo",
+            "{base}: ninguem esperava esse desfecho",
+            "{base}: a historia que todo mundo comenta",
+        ),
+        "short": (
+            "{base}: o relato completo",
+            "{base}: a historia real",
+            "{base}: o que aconteceu de verdade",
+            "{base}: o relato direto",
+        ),
+    },
+    "true_crime_mystery": {
+        "standard": (
+            "{base}: o detalhe que ninguem explicou",
+            "{base}: o detalhe do caso",
+            "{base}: a parte que intriga todo mundo",
+            "{base}: o que ainda intriga",
+        ),
+        "short": (
+            "{base}: o detalhe do caso",
+            "{base}: o que ainda intriga",
+            "{base}: a parte que ninguem viu",
+            "{base}: o misterio por tras disso",
+        ),
+    },
+    "explainer_curiosity": {
+        "standard": (
+            "{base}: por que isso acontece?",
+            "{base}: o que aconteceu",
+            "{base}: a explicacao que faltava",
+            "{base}: entenda o motivo",
+        ),
+        "short": (
+            "{base}: o que aconteceu",
+            "{base}: a explicacao direta",
+            "{base}: entenda em poucos segundos",
+            "{base}: o motivo por tras disso",
+        ),
+    },
+    "reaction_commentary": {
+        "standard": (
+            "{base}: o detalhe que chamou atencao",
+            "{base}: o momento da cena",
+            "{base}: a reacao que ninguem esperava",
+            "{base}: o que chamou atencao",
+        ),
+        "short": (
+            "{base}: o momento da cena",
+            "{base}: a reacao ao vivo",
+            "{base}: o que rolou na hora",
+            "{base}: o detalhe da cena",
+        ),
+    },
+    "film_recap_ai_images": {
+        "standard": (
+            "{base}: o resumo que voce precisa ver",
+            "{base}: o resumo direto do que aconteceu",
+            "{base}: veja o que rolou",
+            "{base}: o corte que resume tudo",
+        ),
+        # No dedicated Shorts phrasing existed for this content_type before
+        # (see module comment above); reuse the standard variants verbatim
+        # rather than inventing new copy.
+        "short": (
+            "{base}: o resumo que voce precisa ver",
+            "{base}: o resumo direto do que aconteceu",
+            "{base}: veja o que rolou",
+            "{base}: o corte que resume tudo",
+        ),
+    },
+    # "music" is the internal marker scheduler.py sets on jobs whose
+    # reserved Drive file is audio-only (see _finalize_ready_video_job) —
+    # without a dedicated entry here, music tracks inherited
+    # "recap de filme" wording and got published under category 24
+    # (Entertainment) instead of 10 (Music); confirmed in production.
+    "music": {
+        "standard": (
+            "{base}",
+            "{base} (audio)",
+            "{base} | trilha sonora",
+            "{base} - musica completa",
+        ),
+        "short": (
+            "{base}: ouca agora",
+            "{base}: essa e boa",
+            "{base} pra hoje",
+            "{base}: bate essa",
+        ),
+    },
+    "quote_viral": {
+        "standard": ("{base}",),
+        "short": ("{base}",),
+    },
+    "top_list_ranking": {
+        "standard": (
+            "{base}: o numero 1 vai te surpreender",
+            "{base}: o top que vale a pena ver",
+            "{base}: o ranking completo",
+            "{base}: qual ficou em primeiro?",
+        ),
+        # No dedicated Shorts phrasing existed for this content_type before
+        # (see module comment above); reuse the standard variants verbatim
+        # rather than inventing new copy.
+        "short": (
+            "{base}: o numero 1 vai te surpreender",
+            "{base}: o top que vale a pena ver",
+            "{base}: o ranking completo",
+            "{base}: qual ficou em primeiro?",
+        ),
+    },
+}
+
 
 def build_ready_video_package(
     *,
@@ -621,21 +778,47 @@ def _fallback_analysis(context: dict) -> dict:
 
 
 def _best_topic(context: dict, analysis: dict) -> str:
+    # A title_seed/drive_name that, once cleaned, is nothing but the channel's
+    # own niche (e.g. Drive files named "Academia (35).mp4" -> cleaned
+    # title_seed "Academia" == niche "Academia") is just the folder/nicho
+    # label, not real per-video content. Accepting it as `topic` made every
+    # video on that channel share the exact same topic (and therefore, via
+    # the deterministic topic-hash variant pick below, the exact same
+    # literal title) even though the vision analysis had a distinct
+    # summary/hook per video — confirmed in production on an "academia"
+    # channel where every Short got the identical title. Treat such a value
+    # as non-informative and fall through to the next option in the chain
+    # instead of accepting it.
+    niche_values = {
+        v for v in (
+            _clean_text(context.get("niche") or "").strip().lower(),
+            _clean_text(context.get("account_niche") or "").strip().lower(),
+        )
+        if v
+    }
+
+    def _is_just_the_niche(cleaned: str) -> bool:
+        return bool(niche_values) and cleaned.strip().lower() in niche_values
+
+    # title_seed/drive_name must outrank hook/summary: the deterministic
+    # fallback path derives analysis["hook"] from title_seed and writes it
+    # back into `analysis`, so checking hook first would feed that
+    # generated hook back in as the topic on the next _best_topic call.
     for value in (
-        # title_seed/drive_name must outrank hook/summary: the deterministic
-        # fallback path derives analysis["hook"] from title_seed and writes it
-        # back into `analysis`, so checking hook first would feed that
-        # generated hook back in as the topic on the next _best_topic call.
         context.get("title_seed"),
         _clean_filename(context.get("drive_name")),
+    ):
+        cleaned = _strip_shorts(_clean_text(value or ""))
+        if cleaned and not _is_operational(cleaned) and not _is_just_the_niche(cleaned):
+            return cleaned[:90]
+    for value in (
         analysis.get("hook"),
         (analysis.get("title_options") or [None])[0],
         analysis.get("summary"),
         context.get("niche"),
         context.get("account_niche"),
     ):
-        cleaned = _clean_text(value or "")
-        cleaned = _strip_shorts(cleaned)
+        cleaned = _strip_shorts(_clean_text(value or ""))
         if cleaned and not _is_operational(cleaned):
             return cleaned[:90]
     return "Conteudo em destaque"
@@ -659,69 +842,11 @@ def _title_from_analysis(topic: str, analysis: dict, content_type: str, video_fo
         if option and not _bad_title(option):
             return _truncate_title_safely(option, 82 if video_format == "short" else 95)
     base = _compact_topic(topic)
-    templates = {
-        "sports_highlights": (
-            f"{base}: o lance que mudou o jogo",
-            f"{base}: o lance decisivo da partida",
-            f"{base}: a jogada que ninguem esperava",
-            f"{base}: o momento que definiu tudo",
-        ),
-        "motivational_speech": (
-            f"{base}: a virada comeca aqui",
-            f"{base}: o ponto de virada",
-            f"{base}: a mensagem que muda o dia",
-            f"{base}: comeca a mudanca agora",
-        ),
-        "reddit_story": (
-            f"{base}: eu devia ter percebido antes",
-            f"{base}: o relato completo",
-            f"{base}: ninguem esperava esse desfecho",
-            f"{base}: a historia que todo mundo comenta",
-        ),
-        "true_crime_mystery": (
-            f"{base}: o detalhe que ninguem explicou",
-            f"{base}: o detalhe do caso",
-            f"{base}: a parte que intriga todo mundo",
-            f"{base}: o que ainda intriga",
-        ),
-        "explainer_curiosity": (
-            f"{base}: por que isso acontece?",
-            f"{base}: o que aconteceu",
-            f"{base}: a explicacao que faltava",
-            f"{base}: entenda o motivo",
-        ),
-        "reaction_commentary": (
-            f"{base}: o detalhe que chamou atencao",
-            f"{base}: o momento da cena",
-            f"{base}: a reacao que ninguem esperava",
-            f"{base}: o que chamou atencao",
-        ),
-        "film_recap_ai_images": (
-            f"{base}: o resumo que voce precisa ver",
-            f"{base}: o resumo direto do que aconteceu",
-            f"{base}: veja o que rolou",
-            f"{base}: o corte que resume tudo",
-        ),
-        # "music" is the internal marker scheduler.py sets on jobs whose
-        # reserved Drive file is audio-only (see _finalize_ready_video_job) —
-        # without a dedicated entry here, music tracks inherited
-        # "recap de filme" wording and got published under category 24
-        # (Entertainment) instead of 10 (Music); confirmed in production.
-        "music": (
-            base,
-            f"{base} (audio)",
-            f"{base} | trilha sonora",
-            f"{base} - musica completa",
-        ),
-        "quote_viral": (base,),
-        "top_list_ranking": (
-            f"{base}: o numero 1 vai te surpreender",
-            f"{base}: o top que vale a pena ver",
-            f"{base}: o ranking completo",
-            f"{base}: qual ficou em primeiro?",
-        ),
-    }
-    variants = templates.get(content_type)
+    variant_group = _TITLE_TEMPLATE_VARIANTS.get(content_type)
+    variants = (
+        tuple(t.format(base=base) for t in variant_group["standard"])
+        if variant_group else None
+    )
     title = _pick_variant(topic or base, variants) if variants else _varied_fallback_title(base, topic)
     if video_format == "short":
         return _shorten_title(title)
@@ -731,9 +856,9 @@ def _title_from_analysis(topic: str, analysis: dict, content_type: str, video_fo
 # `_generic_viral_title` below already blocklists a handful of literal phrases
 # ("espera o final", "detalhe que prende ate o fim") — those USED to be this
 # function's own hardcoded fallback, which meant every Drive video whose
-# content_type fell through (the common case: default is
-# "film_recap_ai_images", not covered by `templates` above) got the exact
-# same generic title/hook, and the description then echoed the title verbatim
+# content_type fell through (historically, before "film_recap_ai_images" had
+# its own entry) got the exact same generic title/hook, and the description
+# then echoed the title verbatim
 # (see `_viral_shorts_profile`'s first_line logic) — a templated, repetitive
 # pattern across the whole channel that reads as low-effort/spam to viewers
 # and to YouTube's own distribution signals. Rotate through distinct,
@@ -799,57 +924,16 @@ def _apply_viral_shorts_title(title: str, topic: str, analysis: dict, content_ty
     if analysis.get("analysis_source") == "vision_llm" and len(_title_terms(title)) >= 3:
         return _shorten_title(title)
 
-    templates = {
-        "sports_highlights": (
-            f"{base}: o lance decisivo",
-            f"{base}: o momento chave",
-            f"{base}: a jogada que decidiu",
-            f"{base}: o lance que viralizou",
-        ),
-        "motivational_speech": (
-            f"{base}: a virada de chave",
-            f"{base}: o momento decisivo",
-            f"{base}: a mensagem que fica",
-            f"{base}: o instante que muda tudo",
-        ),
-        "reddit_story": (
-            f"{base}: o relato completo",
-            f"{base}: a historia real",
-            f"{base}: o que aconteceu de verdade",
-            f"{base}: o relato direto",
-        ),
-        "true_crime_mystery": (
-            f"{base}: o detalhe do caso",
-            f"{base}: o que ainda intriga",
-            f"{base}: a parte que ninguem viu",
-            f"{base}: o misterio por tras disso",
-        ),
-        "explainer_curiosity": (
-            f"{base}: o que aconteceu",
-            f"{base}: a explicacao direta",
-            f"{base}: entenda em poucos segundos",
-            f"{base}: o motivo por tras disso",
-        ),
-        "reaction_commentary": (
-            f"{base}: o momento da cena",
-            f"{base}: a reacao ao vivo",
-            f"{base}: o que rolou na hora",
-            f"{base}: o detalhe da cena",
-        ),
-        "music": (
-            f"{base}: ouca agora",
-            f"{base}: essa e boa",
-            f"{base} pra hoje",
-            f"{base}: bate essa",
-        ),
-    }
-    default_variants = (
-        f"{base}: o momento principal",
-        f"{base}: o ponto alto",
-        f"{base}: o que voce precisa ver",
-        f"{base}: o destaque do video",
-    )
-    variants = templates.get(content_type, default_variants)
+    variant_group = _TITLE_TEMPLATE_VARIANTS.get(content_type)
+    if variant_group:
+        variants = tuple(t.format(base=base) for t in variant_group["short"])
+    else:
+        variants = (
+            f"{base}: o momento principal",
+            f"{base}: o ponto alto",
+            f"{base}: o que voce precisa ver",
+            f"{base}: o destaque do video",
+        )
     return _shorten_title(_pick_variant(topic or base, variants))
 
 
