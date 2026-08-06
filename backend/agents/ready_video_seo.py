@@ -8,6 +8,7 @@ back to deterministic editorial packaging so publishing keeps moving.
 from __future__ import annotations
 
 import base64
+import difflib
 import json
 import logging
 import re
@@ -796,9 +797,37 @@ def _best_topic(context: dict, analysis: dict) -> str:
         )
         if v
     }
+    # Accounts without a configured niche (e.g. RexZone: niche="") never hit
+    # the check above, but a title_seed that collapses to the Drive folder's
+    # own name (e.g. every file in "Organização" cleaning down to
+    # "Organização") is exactly as non-informative as collapsing to the
+    # niche -- fold the folder path's segments into the same guard.
+    folder_values = {
+        v for v in (
+            _clean_text(part).strip().lower() for part in _folder_terms(context.get("folder_path"))
+        )
+        if v
+    }
 
     def _is_just_the_niche(cleaned: str) -> bool:
-        return bool(niche_values) and cleaned.strip().lower() in niche_values
+        low = cleaned.strip().lower()
+        candidates = niche_values | folder_values
+        if not low or not candidates:
+            return False
+        if low in candidates:
+            return True
+        # Fuzzy match guards against a Drive folder correctly named
+        # "Organização" whose files are literally misspelled "Orgainzação"
+        # (confirmed in production on RexZone): once "Monetize" is filtered
+        # out as an operational word, the remaining candidate is a near-typo
+        # of the folder name rather than an exact match, so a plain `in`
+        # check above misses it and every file in the folder still collapses
+        # onto the same one-word "topic". Require both a minimum length and
+        # a high similarity ratio to avoid flagging genuinely distinct short
+        # topics that merely share some letters with the niche/folder.
+        return len(low) >= 4 and any(
+            difflib.SequenceMatcher(None, low, cand).ratio() >= 0.82 for cand in candidates
+        )
 
     # title_seed/drive_name must outrank hook/summary: the deterministic
     # fallback path derives analysis["hook"] from title_seed and writes it
@@ -1312,11 +1341,61 @@ def _hook(topic: str, content_type: str) -> str:
 
 
 def _first_comment(topic: str, content_type: str) -> str:
-    if content_type == "sports_highlights":
-        return "Voce viu esse detalhe na primeira vez ou so no replay?"
-    if content_type == "motivational_speech":
-        return "Essa frase fez sentido para voce hoje?"
-    return "Voce percebeu esse detalhe de primeira?"
+    # 8 of 10 content_types used to fall through to the same literal string
+    # below, with no variation at all -- confirmed in production as the
+    # pinned_comment/comment_play on 240 of 240 sampled Drive-video jobs
+    # across every channel/niche. A pinned comment that never changes reads
+    # as automation to anyone who watches more than one video from the
+    # system, and defeats the genuine-curiosity purpose the question is
+    # meant to serve. Rotate through distinct phrasings per content_type,
+    # same _pick_variant-by-topic-hash pattern _hook()/_summary() already use.
+    comments = {
+        "sports_highlights": (
+            "Voce viu esse detalhe na primeira vez ou so no replay?",
+            "Reparou nesse lance de cara ou precisou rever?",
+        ),
+        "motivational_speech": (
+            "Essa frase fez sentido para voce hoje?",
+            "Precisava ouvir isso hoje?",
+        ),
+        "reddit_story": (
+            "Voce ja passou por algo parecido?",
+            "Qual parte dessa historia te pegou mais?",
+        ),
+        "true_crime_mystery": (
+            "Voce ja conhecia esse caso ou foi novidade?",
+            "Qual detalhe desse caso ainda te intriga mais?",
+        ),
+        "explainer_curiosity": (
+            "Voce ja sabia disso ou foi novidade agora?",
+            "Isso mudou algo no que voce pensava sobre o assunto?",
+        ),
+        "reaction_commentary": (
+            "Voce reagiria igual se visse isso ao vivo?",
+            "Qual foi sua reacao ao ver esse momento?",
+        ),
+        "film_recap_ai_images": (
+            "Voce percebeu esse detalhe de primeira?",
+            "Ja tinha reparado nisso ou passou batido?",
+        ),
+        "music": (
+            "Essa entrou na sua playlist?",
+            "Qual parte dessa musica te pegou mais?",
+        ),
+        "quote_viral": (
+            "Essa frase fez sentido pra voce?",
+            "Guardou essa frase ou ja conhecia?",
+        ),
+        "top_list_ranking": (
+            "Voce concorda com essa ordem ou trocaria alguma posicao?",
+            "Qual posicao te surpreendeu mais nessa lista?",
+        ),
+    }
+    variants = comments.get(content_type) or (
+        "Voce percebeu esse detalhe de primeira?",
+        "Ja tinha reparado nisso antes?",
+    )
+    return _pick_variant(topic, variants)
 
 
 def _long_tail(primary: str, topic: str) -> list[str]:
@@ -1403,10 +1482,19 @@ def _folder_terms(path_or_niche: str | None) -> list[str]:
 
 
 def _is_operational(text: str) -> bool:
-    terms = [t.lower() for t in _title_terms(text)]
-    if not terms:
+    # Must scan the RAW terms, not _title_terms(text): that helper already
+    # strips OPERATIONAL_WORDS out of its result, so counting "how many of
+    # _title_terms' terms are operational" against that pre-filtered list can
+    # structurally never find any -- it always evaluates to 0, making this
+    # function only ever true for a fully-empty text. That let mixed seeds
+    # like "Monetize Orgainzação" (one operational word + one real one) sail
+    # through as non-operational and become the fixed `topic` for every file
+    # in a Drive folder named that way, confirmed in production on RexZone
+    # (id=2): 21 of the last 40 uploads got the exact same literal title.
+    raw_terms = [w.lower() for w in re.findall(r"[A-Za-zÀ-ÿ0-9]{3,}", text or "")]
+    if not raw_terms:
         return True
-    return bool(terms) and sum(1 for t in terms if t in OPERATIONAL_WORDS) >= max(1, len(terms) - 1)
+    return sum(1 for t in raw_terms if t in OPERATIONAL_WORDS) >= max(1, len(raw_terms) - 1)
 
 
 def _bad_title(title: str) -> bool:

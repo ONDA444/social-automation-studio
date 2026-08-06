@@ -173,6 +173,12 @@ class ReadyVideoSeoTests(unittest.TestCase):
         self.assertIn("credenciais conectadas", markers)
 
     def test_legacy_scheduler_helper_applies_monetization_cta_once(self) -> None:
+        # Regression guard: the CTA used to be PREPENDED, making it the first
+        # line of the description -- the only part visible in YouTube's
+        # search/suggested preview -- and burying the actual hook. Confirmed
+        # in production (VideoJob.seo_metadata): 65% of published
+        # descriptions had a bare CTA link as their first line. It must now
+        # be appended at the end instead, exactly once regardless of retries.
         ready = SimpleNamespace(name="Academia (1).mp4", folder_path="ACADEMIA", niche="Academia")
         account = SimpleNamespace(
             display_name="Canal Fitness",
@@ -187,7 +193,8 @@ class ReadyVideoSeoTests(unittest.TestCase):
             seo = _ready_video_seo("Academia", ready, account, "motivational_speech", "short")
             seo_again = _ready_video_seo("Academia", ready, account, "motivational_speech", "short")
 
-        self.assertTrue(seo["youtube"]["description"].startswith(cta))
+        self.assertFalse(seo["youtube"]["description"].startswith(cta))
+        self.assertTrue(seo["youtube"]["description"].strip().endswith(cta))
         self.assertEqual(seo["youtube"]["description"].count(cta), 1)
         self.assertEqual(seo_again["youtube"]["description"].count(cta), 1)
 
@@ -242,6 +249,20 @@ class FallbackTemplateDiversificationTests(unittest.TestCase):
             seo = self._seo_for(ctx, "quote_viral")
             tag_sets.add(tuple(seo["youtube"]["tags"]))
         self.assertGreater(len(tag_sets), 1)
+
+    def test_pinned_comment_varies_across_topics_and_content_types(self) -> None:
+        # Regression guard: _first_comment() used to return the exact same
+        # literal string ("Voce percebeu esse detalhe de primeira?") for 8 of
+        # 10 content_types, with zero variation by topic. Confirmed in
+        # production: 240 of 240 sampled pinned_comment/comment_play values
+        # across every channel/niche were identical -- reads as automation to
+        # anyone who watches more than one video from the system.
+        for content_type in ("film_recap_ai_images", "reaction_commentary", "reddit_story"):
+            comments = {
+                self._seo_for(ctx, content_type)["youtube"]["pinned_comment"]
+                for ctx in self._TOPICS
+            }
+            self.assertGreater(len(comments), 1, content_type)
 
 
 class TitleSeedEqualsNicheCollapseTests(unittest.TestCase):
@@ -312,6 +333,84 @@ class TitleSeedEqualsNicheCollapseTests(unittest.TestCase):
             },
         )
         self.assertIn("treino de peito avancado", seo["youtube"]["title"].lower())
+
+
+class TitleSeedOperationalPlusRealWordCollapseTests(unittest.TestCase):
+    """Regression guard for a production bug on RexZone (platform_accounts
+    id=2, niche=""): its two Drive folders ("Organização" and "Limpeza") are
+    both filled with files named "Monetize - Orgainzação (N).mp4" (typo is
+    literal, from the Drive file itself). scheduler.py's _clean_ready_title
+    strips the "(N)" counter, so title_seed becomes the constant string
+    "Monetize Orgainzação" for every file in the folder. _is_operational used
+    to test _title_terms(text)'s output -- which already has OPERATIONAL_WORDS
+    filtered out of it -- against OPERATIONAL_WORDS, a check that can
+    structurally never match anything but a fully-operational/empty text. That
+    let the mixed seed "Monetize Orgainzação" ("monetize" is operational,
+    "orgainzação" is not) through as non-operational, and because RexZone has
+    no niche configured the "just the niche" guard never fired either, so
+    `topic` collapsed to that one literal string for every video in the
+    folder -- confirmed in production: 21 of the last 40 uploads got the
+    exact same literal title even with distinct vision analysis per video."""
+
+    def _seo_for(self, n: int, folder: str = "Organização") -> dict:
+        return build_drive_seo(
+            context={
+                "title_seed": "Monetize Orgainzação",
+                "drive_name": f"Monetize - Orgainzação ({n}).mp4",
+                "folder_path": folder,
+                "niche": "",
+                "account_niche": "",
+                "content_type": "film_recap_ai_images",
+                "video_format": "short",
+            },
+            analysis={
+                "analysis_source": "vision_llm",
+                "summary": f"Um corte especifico numero {n} sobre um caso real mostrado no video.",
+                "topics": [f"caso {n}", "monetizacao", "corte viral"],
+                "entities": [f"detalhe {n}"],
+                "title_options": [],
+                "hook": f"O detalhe {n} desse corte e o que ninguem esperava ver.",
+            },
+        )
+
+    def test_titles_no_longer_collapse_to_the_same_literal_string(self) -> None:
+        titles = {self._seo_for(n)["youtube"]["title"] for n in range(1, 12)}
+        self.assertGreater(len(titles), 1)
+
+    def test_title_reflects_the_specific_vision_hook_not_the_operational_seed(self) -> None:
+        seo = self._seo_for(7)
+        title = seo["youtube"]["title"]
+        self.assertIn("detalhe 7", title.lower())
+        self.assertNotIn("orgainzação", title.lower())
+
+    def test_is_operational_flags_mixed_operational_plus_real_word_seed(self) -> None:
+        from backend.agents.ready_video_seo import _is_operational
+
+        self.assertTrue(_is_operational("Monetize Orgainzação"))
+
+    def test_folder_name_alone_is_treated_as_non_informative_without_niche(self) -> None:
+        # Even a channel with no niche configured must not accept a
+        # title_seed that is just the Drive folder's own name.
+        seo = build_drive_seo(
+            context={
+                "title_seed": "Limpeza",
+                "drive_name": "Limpeza (3).mp4",
+                "folder_path": "Limpeza",
+                "niche": "",
+                "account_niche": "",
+                "content_type": "film_recap_ai_images",
+                "video_format": "short",
+            },
+            analysis={
+                "analysis_source": "vision_llm",
+                "summary": "Uma limpeza profunda em um espaco completamente destruido antes.",
+                "topics": ["organizacao", "antes e depois"],
+                "entities": ["quarto"],
+                "title_options": [],
+                "hook": "Esse espaco parecia impossivel de organizar antes disso.",
+            },
+        )
+        self.assertNotIn("Limpeza:", seo["youtube"]["title"])
 
 
 class GeminiVisionRetryTests(unittest.TestCase):

@@ -48,6 +48,26 @@ YT_CATEGORY = {
 }
 
 
+def _append_cta(description: str, cta: str) -> str:
+    """Add the monetization CTA to the END of the description, not the start.
+
+    This used to PREPEND the CTA, so it became the first line of the
+    description -- which is also the only part visible in YouTube's search/
+    suggested preview before "...more". Checked against real production data
+    (VideoJob.seo_metadata): 65% of published Drive-video descriptions had a
+    bare CTA link as their literal first line instead of the hook that
+    _description()/_hook() build specifically to earn the click. Appending
+    instead keeps the CTA (still required, still present once) out of the
+    way of the part actually meant to persuade."""
+    desc = (description or "").strip()
+    cta = cta.strip()
+    if cta in desc:
+        return desc
+    reserve = len(cta) + 2  # "\n\n" + cta
+    desc = desc[: max(0, YT_DESCRIPTION_LIMIT - reserve)].rstrip()
+    return f"{desc}\n\n{cta}" if desc else cta
+
+
 async def apply_runtime_youtube_enrichment(seo: dict) -> dict:
     """Apply runtime YouTube settings to an existing SEO package."""
     seo.setdefault("youtube", {})
@@ -55,9 +75,7 @@ async def apply_runtime_youtube_enrichment(seo: dict) -> dict:
 
     cta = runtime_settings.effective_cta()
     if cta:
-        desc = yt.get("description") or ""
-        if not desc.strip().startswith(cta.strip()):
-            yt["description"] = cta + "\n\n" + desc
+        yt["description"] = _append_cta(yt.get("description") or "", cta)
     yt["description"] = (yt.get("description") or "")[:YT_DESCRIPTION_LIMIT]
 
     await localize_youtube_metadata(seo)
@@ -75,9 +93,7 @@ def apply_runtime_youtube_enrichment_sync(seo: dict) -> dict:
         cta = runtime_settings.effective_cta()
         if cta:
             seo.setdefault("youtube", {})
-            desc = seo["youtube"].get("description") or ""
-            if not desc.strip().startswith(cta.strip()):
-                seo["youtube"]["description"] = cta + "\n\n" + desc
+            seo["youtube"]["description"] = _append_cta(seo["youtube"].get("description") or "", cta)
         if "youtube" in seo:
             seo["youtube"]["description"] = (seo["youtube"].get("description") or "")[:YT_DESCRIPTION_LIMIT]
         return seo
