@@ -74,6 +74,15 @@ class PlatformAccount(Base):
     status: Mapped[str] = mapped_column(String(20), default="active")
     # active | paused | quota_exceeded | auth_error
 
+    # --- Copyright compliance (manually logged by the operator) ---
+    # There is no reliable YouTube API for copyright strikes/claims -- this has
+    # to be checked by hand in YouTube Studio. Without a place to record what
+    # was seen there, that knowledge only lived in the operator's head (real
+    # incident: "Anime fut" sitting at 2 of 3 active strikes -- one more means
+    # permanent channel termination -- with nothing in the system surfacing it).
+    copyright_strikes: Mapped[int] = mapped_column(Integer, default=0)
+    copyright_notes: Mapped[str | None] = mapped_column(Text, default=None)
+
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
@@ -115,6 +124,8 @@ class PlatformAccount(Base):
             "quota_used_today": self.quota_used_today,
             "quota_limit": self.quota_limit,
             "status": self.status,
+            "copyright_strikes": int(getattr(self, "copyright_strikes", 0) or 0),
+            "copyright_notes": getattr(self, "copyright_notes", None),
             "has_credentials": bool(self.credentials_encrypted),
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,

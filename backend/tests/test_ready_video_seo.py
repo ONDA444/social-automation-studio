@@ -481,5 +481,126 @@ class GeminiVisionRetryTests(unittest.TestCase):
         self.assertIsNone(result)
 
 
+class NicheTrendsFillerFallbackTests(unittest.TestCase):
+    """Regression guard for the near-zero-competitiveness investigation: when
+    entities/topics come back empty (AI analysis failed or a generic
+    filename), `_tags` used to top up straight to a fixed, static
+    filler_pool ("cortes", "viral", "video", ...) with zero real search
+    value -- confirmed by simulation as 30-40% of published tags. It must now
+    try real Google Trends queries for the channel's NICHE first (there's no
+    specific video term left to search by that point), only falling back to
+    the static pool if Trends is unavailable/empty -- same best-effort
+    contract keyword_research.py's own docstring documents."""
+
+    def test_niche_trends_fallback_is_tried_before_static_filler(self) -> None:
+        from backend.agents.ready_video_seo import _tags_with_filler_count
+
+        calls: list[tuple[str, str, str]] = []
+
+        def fake_related_search_queries(seed, language, region):
+            calls.append((seed, language, region))
+            if seed == "Nicho Teste":
+                return ["nicho query um", "nicho query dois"]
+            return []
+
+        with patch(
+            "backend.agents.keyword_research.related_search_queries",
+            side_effect=fake_related_search_queries,
+        ):
+            tags, filler_count = _tags_with_filler_count(
+                "xyz", "abc", [], [], "Nicho Teste", "quote_viral", "long",
+            )
+
+        # The niche (not a video-specific term, since none is left at this
+        # point) must be what gets searched.
+        self.assertTrue(any(seed == "Nicho Teste" for seed, _, _ in calls))
+        self.assertIn("nicho query um", tags)
+        self.assertIn("nicho query dois", tags)
+        # The real Trends-grounded queries must have been used INSTEAD of the
+        # static filler_pool, not merely alongside it.
+        static_filler_pool = {
+            "cortes", "entretenimento", "viral", "video", "conteudo", "destaque",
+            "melhores momentos", "assista", "em alta", "recomendado", "para voce", "trending",
+        }
+        self.assertEqual(set(t.lower() for t in tags) & static_filler_pool, set())
+        self.assertGreaterEqual(len(tags), 8)
+
+    def test_static_filler_still_used_when_trends_comes_back_empty(self) -> None:
+        from backend.agents.ready_video_seo import _tags_with_filler_count
+
+        with patch(
+            "backend.agents.keyword_research.related_search_queries",
+            return_value=[],
+        ):
+            tags, filler_count = _tags_with_filler_count(
+                "xyz", "abc", [], [], "Nicho Teste", "quote_viral", "long",
+            )
+
+        # Trends unavailable/blocked (the common case per keyword_research.py's
+        # own docstring) must still guarantee >=8 tags via the static pool.
+        self.assertGreaterEqual(len(tags), 8)
+        self.assertGreater(filler_count, 0)
+
+
+class TagsQualityScoreRealVsFillerTests(unittest.TestCase):
+    """Regression guard: `tags_quality` used to give full credit (16) purely
+    for `len(tags) >= 8`, without checking whether those tags carried any
+    real search value. That let a 100% templated/generic package (title AND
+    tags both from the fixed fallback pools) still self-report as
+    "drive_video_strong" (84-90/95), hiding the problem from both auditors
+    and the pipeline itself. A filler-majority tag package must now score
+    lower than an otherwise-identical real-tag package."""
+
+    def test_score_is_lower_when_most_tags_are_filler(self) -> None:
+        from backend.agents.ready_video_seo import _score
+
+        real_tags = [f"tag real {i}" for i in range(8)]
+        filler_tags = [f"tag filler {i}" for i in range(8)]
+
+        real_score = _score("Titulo especifico com detalhe", "x" * 150, real_tags, ["#a", "#b"], {}, tags_filler_count=1)
+        filler_score = _score("Titulo especifico com detalhe", "x" * 150, filler_tags, ["#a", "#b"], {}, tags_filler_count=6)
+
+        self.assertEqual(real_score["breakdown"]["tags_quality"], 16)
+        self.assertLess(filler_score["breakdown"]["tags_quality"], real_score["breakdown"]["tags_quality"])
+        self.assertLess(filler_score["value"], real_score["value"])
+
+    def test_build_drive_seo_scores_real_tag_package_higher_than_filler_heavy_one(self) -> None:
+        # Deterministic: never let real Trends network calls influence which
+        # package "wins" -- both must be compared purely on their own
+        # entities/topics vs the generic/filler fallback pools.
+        with patch("backend.agents.keyword_research.related_search_queries", return_value=[]):
+            real_seo = build_drive_seo(
+                context={
+                    "drive_name": "abc.mp4",
+                    "folder_path": "NICHO REAL",
+                    "niche": "Nicho Real",
+                    "content_type": "true_crime_mystery",
+                    "video_format": "long",
+                },
+                analysis={
+                    "analysis_source": "vision_llm",
+                    "summary": "Um caso especifico sobre um roubo em um museu de arte europeu.",
+                    "topics": ["roubo de arte", "museu europeu", "investigacao policial", "seguranca"],
+                    "entities": ["detetive marco", "museu de arte"],
+                    "hook": "O detetive Marco encontrou uma pista que ninguem esperava.",
+                },
+            )
+            filler_seo = build_drive_seo(
+                context={
+                    "drive_name": "Legendado (1).mp4",
+                    "folder_path": "PASTA GENERICA",
+                    "niche": "",
+                    "content_type": "quote_viral",
+                    "video_format": "long",
+                },
+                analysis={},
+            )
+
+        real_quality = real_seo["seo_score"]["breakdown"]["tags_quality"]
+        filler_quality = filler_seo["seo_score"]["breakdown"]["tags_quality"]
+        self.assertGreater(real_quality, filler_quality)
+        self.assertEqual(real_quality, 16)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -475,14 +475,19 @@ def build_drive_seo(context: dict, analysis: dict | None = None) -> dict:
     title = title[:100]
 
     primary = _primary_keyword(topic, entities, topics, niche)
-    tags = _tags(primary, topic, entities, topics, niche, content_type, video_format)
-    # Real search-behavior grounding (see keyword_research.py docstring): top up
-    # with actual Google Trends queries related to this video's own primary
-    # keyword, same "LLM/analysis picks stay first" top-up pattern as the rest
-    # of _tags — best-effort, never blocks SEO on failure.
+    # Real search-behavior grounding (see keyword_research.py docstring):
+    # resolve the language/region up front so it can also ground the
+    # niche-level filler fallback inside _tags_with_filler_count below, not
+    # just the video-primary top-up further down.
     from backend.agents.keyword_research import region_for_language, related_search_queries
 
     lang_code = context.get("language") or "pt-BR"
+    tags, tags_filler_count = _tags_with_filler_count(
+        primary, topic, entities, topics, niche, content_type, video_format, lang_code
+    )
+    # Top up with actual Google Trends queries related to this video's own
+    # primary keyword, same "LLM/analysis picks stay first" top-up pattern as
+    # the rest of _tags — best-effort, never blocks SEO on failure.
     real_queries = related_search_queries(primary or topic, lang_code, region_for_language(lang_code))
     if real_queries:
         lowered = {t.lower() for t in tags}
@@ -500,7 +505,7 @@ def build_drive_seo(context: dict, analysis: dict | None = None) -> dict:
         summary = _summary(topic, niche, content_type)
     viral_profile = _viral_shorts_profile(title, topic, hook, summary, tags, video_format)
     description = _description(hook, summary, yt_hashtags, viral_profile)
-    score = _score(title, description, tags, yt_hashtags, analysis)
+    score = _score(title, description, tags, yt_hashtags, analysis, tags_filler_count=tags_filler_count)
 
     return {
         "search": {
@@ -1015,7 +1020,53 @@ def _clean_terms(values: list | tuple | set) -> list[str]:
     return out
 
 
+def _clean_terms_tracked(items: list[tuple[Any, bool]]) -> tuple[list[str], set[str]]:
+    """Same cleaning/dedup algorithm as `_clean_terms`, but each input is a
+    `(value, is_filler_source)` pair and the return also carries the
+    lowercase keys of every output term whose surviving (first) occurrence
+    came from a filler-flagged source. Exists so `_tags_with_filler_count`
+    can report how much of the final tag list is genuinely grounded
+    (entities/topics/primary/niche/real Trends queries) vs generic filler
+    (content-type generic pool + the static filler_pool), for `_score` --
+    without a second network round-trip and without changing `_tags`'s
+    public signature/order/output."""
+    out: list[str] = []
+    seen: set[str] = set()
+    filler_keys: set[str] = set()
+    for value, is_filler in items:
+        for piece in re.split(r"[,/|;]+", str(value or "")):
+            piece = _clean_text(piece).strip("#")
+            if not piece:
+                continue
+            key = piece.lower()
+            if key not in seen and len(piece) <= 60 and not _is_operational(piece):
+                out.append(piece)
+                seen.add(key)
+                if is_filler:
+                    filler_keys.add(key)
+    return out, filler_keys
+
+
 def _tags(primary: str, topic: str, entities: list[str], topics: list[str], niche: str, content_type: str, video_format: str) -> list[str]:
+    tags, _filler_count = _tags_with_filler_count(primary, topic, entities, topics, niche, content_type, video_format)
+    return tags
+
+
+def _tags_with_filler_count(
+    primary: str,
+    topic: str,
+    entities: list[str],
+    topics: list[str],
+    niche: str,
+    content_type: str,
+    video_format: str,
+    language: str | None = None,
+) -> tuple[list[str], int]:
+    """Same tag-building logic `_tags` exposes, plus a count of how many of
+    the *final* tags are generic filler rather than real per-video/niche
+    signal. `_score` uses this to grade `tags_quality` by how competitive the
+    package actually is instead of just its length (see `_score` docstring
+    for why that mattered)."""
     generic_by_type = {
         "sports_highlights": (
             ["melhores momentos", "lance decisivo", "futebol"],
@@ -1067,26 +1118,56 @@ def _tags(primary: str, topic: str, entities: list[str], topics: list[str], nich
         ["destaque", "video viral", "cena marcante"],
     )
     type_variants = generic_by_type.get(content_type, default_variants)
+    # `generic_tags` (the content-type generic pool, e.g. "recap de filme",
+    # "reacao") reads competitive-ish but is still a fixed, shared-across-
+    # every-video-of-that-type phrase -- not grounded in this specific
+    # video/niche. Flag it `is_filler=True` in the tracked list below so
+    # `_score` can tell it apart from real per-video/niche signal, even
+    # though it's still included in the tag list itself unchanged.
     generic_tags = type_variants[_hash_index(topic or primary, len(type_variants))]
-    raw = [
-        primary,
-        topic,
-        *entities,
-        *topics,
-        niche,
-        *(_folder_terms(niche)),
-        *generic_tags,
+    tagged: list[tuple[Any, bool]] = [
+        (primary, False),
+        (topic, False),
+        *((e, False) for e in entities),
+        *((t, False) for t in topics),
+        (niche, False),
+        *((f, False) for f in _folder_terms(niche)),
+        *((g, True) for g in generic_tags),
     ]
     if video_format == "short":
-        raw.extend(["shorts", "cortes virais"])
-    out = _clean_terms(raw)
+        tagged.extend([("shorts", False), ("cortes virais", False)])
+    out, filler_keys = _clean_terms_tracked(tagged)
     if len(out) >= 8:
-        return out[:18]
+        capped = out[:18]
+        filler_count = sum(1 for t in capped if t.lower() in filler_keys)
+        return capped, filler_count
     # Guarantee >=8 tags (tags_quality scoring assumes it): keep adding filler
     # until the threshold is met. Rotated by topic hash instead of always
     # starting from the same first term, so different videos don't all end up
     # with the exact same filler tags in the exact same order.
+    #
+    # Prefer real Google Trends queries for the channel's NICHE (not this
+    # specific video -- there's no specific term left to search by this
+    # point) over the static filler_pool below: those are grounded in actual
+    # search behavior instead of being purely invented, so they're counted
+    # as real signal, not filler, for `_score`. Same best-effort contract as
+    # keyword_research.py's own docstring -- Trends is flaky from datacenter
+    # IPs, so this silently falls through to the static pool on any failure
+    # or empty result.
     seen = {t.lower() for t in out}
+    if niche:
+        from backend.agents.keyword_research import region_for_language, related_search_queries
+
+        lang = language or "pt-BR"
+        trends_filler = related_search_queries(niche, lang, region_for_language(lang))
+        for term in trends_filler:
+            if len(out) >= 8:
+                break
+            term = (term or "").strip()
+            key = term.lower()
+            if term and key not in seen:
+                out.append(term)
+                seen.add(key)
     filler_pool = [
         "cortes", "entretenimento", "viral", "video", "conteudo", "destaque",
         "melhores momentos", "assista", "em alta", "recomendado", "para voce", "trending",
@@ -1099,7 +1180,10 @@ def _tags(primary: str, topic: str, entities: list[str], topics: list[str], nich
         if term.lower() not in seen:
             out.append(term)
             seen.add(term.lower())
-    return out[:12]
+            filler_keys.add(term.lower())
+    capped = out[:12]
+    filler_count = sum(1 for t in capped if t.lower() in filler_keys)
+    return capped, filler_count
 
 
 def _yt_hashtags(tags: list[str], video_format: str) -> list[str]:
@@ -1173,7 +1257,33 @@ def _remove_internal_words(text: str) -> str:
     return "\n".join(lines)
 
 
-def _score(title: str, description: str, tags: list[str], hashtags: list[str], analysis: dict) -> dict:
+def _tags_quality_score(tag_count: int, filler_count: int) -> int:
+    """`tags_quality` used to give full credit (16) purely for `len(tags) >=
+    8`, with zero regard for whether those tags were real per-video/niche
+    signal or generic filler (see `_tags_with_filler_count`) -- so a package
+    whose title/tags were 100% templated/generic still self-graded as
+    "drive_video_strong" (84-90/95), masking exactly the problem this score
+    exists to surface. Full credit now also requires most of the tags to be
+    real; a filler-majority package earns a reduced score in the same 8-10
+    range the old "<8 tags" case already used, so the rest of the scoring
+    system (which treats that range as "weak but present") doesn't need to
+    change."""
+    if tag_count < 8:
+        return 8
+    filler_fraction = filler_count / tag_count
+    if filler_fraction > 0.5:
+        return 9
+    return 16
+
+
+def _score(
+    title: str,
+    description: str,
+    tags: list[str],
+    hashtags: list[str],
+    analysis: dict,
+    tags_filler_count: int = 0,
+) -> dict:
     # text_llm is unverified (no frames to ground it, just filename/folder/niche),
     # so it earns partial credit between genuine vision_llm grounding and the bare
     # deterministic fallback, instead of being trusted as much as vision analysis.
@@ -1188,7 +1298,7 @@ def _score(title: str, description: str, tags: list[str], hashtags: list[str], a
         "analysis": analysis_points,
         "title_specificity": 18 if len(_title_terms(title)) >= 3 else 10,
         "description_quality": 16 if len(description) >= 120 and "biblioteca" not in description.lower() else 8,
-        "tags_quality": 16 if len(tags) >= 8 else 8,
+        "tags_quality": _tags_quality_score(len(tags), tags_filler_count),
         "hashtag_quality": 10 if len(hashtags) >= 2 else 5,
         # NOTE: hashtags only ever contains "#Shorts" when video_format == "short",
         # and in that same case the title always gets "#Shorts" appended too

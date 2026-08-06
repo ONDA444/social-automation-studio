@@ -61,6 +61,9 @@ class AccountUpdate(BaseModel):
     trends_per_cycle: int | None = None      # 1..2
     preferred_templates: list[str] | None = None
     avoid_topics: list[str] | None = None
+    # --- Copyright compliance (manual log, no reliable YouTube API for this) ---
+    copyright_strikes: int | None = None  # 0..3 as seen in YouTube Studio
+    copyright_notes: str | None = None
     # NOTE: no `schedule` field here on purpose — it's a denormalised leftover
     # on PlatformAccount that the real pipeline doesn't read for the publish
     # decision (that's ScheduleConfig, see routers/schedule.py). Exposing it
@@ -162,6 +165,8 @@ def update_account(account_id: int, payload: AccountUpdate, db: Session = Depend
             v = max(1, min(2, int(v)))  # never let a channel flood: cap at 2/cycle
         if k == "video_source_mode":
             v = v if v in {"ai", "drive", "mixed"} else "ai"
+        if k == "copyright_strikes":
+            v = max(0, int(v))  # never negative; no upper cap (Studio can show >3 in edge cases)
         setattr(acct, k, v)
     if "drive_folder_url" in data:
         acct.drive_folder_id = extract_folder_id(acct.drive_folder_url)

@@ -61,7 +61,18 @@ def related_search_queries(seed: str, language: str = "pt-BR", region: str | Non
             if q and low not in seen:
                 seen.add(low)
                 deduped.append(q)
-        return deduped[:12]
+        deduped = deduped[:12]
+        if deduped:
+            logger.info(
+                "related_search_queries seed=%s region=%s found=%d terms",
+                seed, region, len(deduped),
+            )
+        else:
+            logger.info(
+                "related_search_queries seed=%s region=%s found=0 terms (empty response from Trends)",
+                seed, region,
+            )
+        return deduped
     except Exception as exc:  # noqa: BLE001 — flaky from datacenter IPs, never block SEO
-        logger.debug("related_search_queries failed for %r: %s", seed, exc)
+        logger.info("related_search_queries seed=%s region=%s failed: %s", seed, region, exc)
         return []

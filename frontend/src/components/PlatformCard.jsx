@@ -42,6 +42,14 @@ export default function PlatformCard({ account, onChange, onChanged, onDone }) {
   const toast = useToast()
   const confirmDialog = useConfirm()
 
+  // Copyright strikes: no reliable YouTube API for this, the operator checks
+  // YouTube Studio by hand and logs it here — see backend/models/platform_account.py.
+  const [strikes, setStrikes] = useState(account.copyright_strikes || 0)
+  const [savingStrikes, setSavingStrikes] = useState(false)
+  const [notes, setNotes] = useState(account.copyright_notes || '')
+  const [savingNotes, setSavingNotes] = useState(false)
+  const [notesMsg, setNotesMsg] = useState('')
+
   // account is not remounted (keyed by stable account.id in Platforms.jsx), so when the
   // parent refetches and passes a new account object, resync local fields from it here.
   useEffect(() => {
@@ -49,7 +57,10 @@ export default function PlatformCard({ account, onChange, onChanged, onDone }) {
     setVoice(account.preferred_voice?.startsWith('v_') ? '' : (account.preferred_voice || ''))
     setMusic(account.music_style || 'balanced')
     setRide(account.ride_trends || false)
-  }, [account.content_language, account.preferred_voice, account.music_style, account.ride_trends])
+    setStrikes(account.copyright_strikes || 0)
+    setNotes(account.copyright_notes || '')
+  }, [account.content_language, account.preferred_voice, account.music_style, account.ride_trends,
+      account.copyright_strikes, account.copyright_notes])
 
   const m = PLATFORM_META[account.platform] || { label: account.platform, color: 'var(--accent)', icon: 'CH' }
   const quotaPct = account.quota_limit ? Math.min(100, Math.round((account.quota_used_today / account.quota_limit) * 100)) : 0
@@ -130,6 +141,27 @@ export default function PlatformCard({ account, onChange, onChanged, onDone }) {
     finally { setSavingRide(false) }
   }
 
+  const changeStrikes = async (n) => {
+    const next = Math.max(0, n)
+    setStrikes(next); setSavingStrikes(true)
+    try { await api.patch(`/accounts/${account.id}`, { copyright_strikes: next }); refresh?.() }
+    catch (e) { toast.error('Falha ao salvar advertências: ' + e.message); setStrikes(account.copyright_strikes || 0) }
+    finally { setSavingStrikes(false) }
+  }
+
+  const saveNotes = async () => {
+    setSavingNotes(true); setNotesMsg('')
+    try {
+      await api.patch(`/accounts/${account.id}`, { copyright_notes: notes })
+      setNotesMsg('Salvo.')
+      refresh?.()
+    } catch (e) {
+      setNotesMsg(e.message || 'Falha ao salvar.')
+    } finally {
+      setSavingNotes(false)
+    }
+  }
+
   return (
     <div className="card card-hover p-3 sm:p-3.5" style={{ borderColor: blocked ? 'rgba(217,154,61,0.46)' : 'var(--border-glass)' }}>
       <div className="flex items-start gap-3">
@@ -155,6 +187,26 @@ export default function PlatformCard({ account, onChange, onChanged, onDone }) {
               {STATUS_LABEL[account.status] || account.status}
             </span>
           </div>
+
+          {account.copyright_strikes > 0 && (
+            <div
+              className="mt-2 rounded-btn px-3 py-1.5 flex items-center gap-2"
+              style={{
+                background: account.copyright_strikes >= 2 ? 'rgba(194,65,58,0.14)' : 'var(--accent-dim)',
+                border: `1px solid ${account.copyright_strikes >= 2 ? 'var(--error)' : 'var(--warning)'}`,
+              }}
+              title="Advertências de copyright registradas manualmente pelo operador (sem API confiável do YouTube para isso)."
+            >
+              <span className="text-sm">⚠️</span>
+              <span
+                className="text-xs font-bold"
+                style={{ color: account.copyright_strikes >= 2 ? 'var(--error)' : 'var(--warning)' }}
+              >
+                {account.copyright_strikes}/3 advertências de copyright
+                {account.copyright_strikes >= 3 && ' — risco de banimento'}
+              </span>
+            </div>
+          )}
 
           <div className="mt-3 rounded-btn px-3 py-2" style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border-glass)' }}>
             <div className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-3">
@@ -246,6 +298,50 @@ export default function PlatformCard({ account, onChange, onChanged, onDone }) {
                 <span>{ride ? 'Ativado no nicho' : 'Desativado'}</span>
                 <span className="badge" style={ride ? { color: 'var(--warning)' } : { color: 'var(--text-muted)' }}>{ride ? 'ON' : 'OFF'}</span>
               </button>
+            </div>
+          </div>
+
+          <div className="space-y-2 pt-4" style={{ borderTop: '1px solid var(--border-glass)' }}>
+            <p className="text-xs font-semibold uppercase" style={{ color: 'var(--text-muted)', letterSpacing: '.06em' }}>
+              Copyright (checagem manual no YouTube Studio)
+            </p>
+            <p className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+              Não há API confiável do YouTube para advertências/reivindicações — registre aqui o que
+              você viu no Studio. A 3ª advertência ativa costuma resultar em banimento permanente do canal.
+            </p>
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-semibold" style={{ color: 'var(--text-muted)' }}>Advertências ativas</span>
+              <div className="flex items-center gap-1">
+                <button
+                  type="button" className="btn-ghost btn-sm px-2" disabled={savingStrikes || strikes <= 0}
+                  onClick={() => changeStrikes(strikes - 1)}
+                >-</button>
+                <input
+                  type="number" min="0" className="input w-16 text-center" value={strikes}
+                  disabled={savingStrikes}
+                  onChange={(e) => setStrikes(Math.max(0, Number(e.target.value) || 0))}
+                  onBlur={(e) => changeStrikes(Math.max(0, Number(e.target.value) || 0))}
+                />
+                <button
+                  type="button" className="btn-ghost btn-sm px-2" disabled={savingStrikes}
+                  onClick={() => changeStrikes(strikes + 1)}
+                >+</button>
+              </div>
+              {savingStrikes && <span className="text-[11px]" style={{ color: 'var(--text-muted)' }}>salvando...</span>}
+            </div>
+            <label className="space-y-1 block">
+              <span className="text-xs font-semibold" style={{ color: 'var(--text-muted)' }}>Notas (data, motivo, link do vídeo reclamado, etc.)</span>
+              <textarea
+                className="input" rows={2} value={notes}
+                onChange={(e) => setNotes(e.target.value)}
+                placeholder="Ex.: 2/3 em 06/08 -- claim de música em 'Melhores momentos #12', disputa aberta."
+              />
+            </label>
+            <div className="flex items-center gap-3">
+              <button className="btn-ghost btn-sm" disabled={savingNotes} onClick={saveNotes}>
+                {savingNotes ? 'Salvando...' : 'Salvar notas'}
+              </button>
+              {notesMsg && <span className="text-[11px]" style={{ color: notesMsg === 'Salvo.' ? 'var(--success)' : 'var(--warning)' }}>{notesMsg}</span>}
             </div>
           </div>
 

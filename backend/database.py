@@ -97,6 +97,10 @@ def ensure_columns() -> None:
         ("channels", "intro_mode", "VARCHAR(20) DEFAULT 'mixed'"),
         ("platform_accounts", "channel_optimization",
          "JSON DEFAULT '{}'" if not settings.sqlalchemy_url.startswith("sqlite") else "TEXT DEFAULT '{}'"),
+        # Manually-logged YouTube copyright strikes -- no reliable API for this,
+        # the operator checks YouTube Studio by hand and records it here.
+        ("platform_accounts", "copyright_strikes", "INTEGER DEFAULT 0"),
+        ("platform_accounts", "copyright_notes", "TEXT"),
     ]
     try:
         with engine.begin() as conn:

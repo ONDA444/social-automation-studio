@@ -137,6 +137,16 @@ export default function ApprovalCard({ job, onDone }) {
                     <span className="text-text-primary">Instagram:</span> {ig.caption} {(ig.hashtags || []).map((h) => `#${h}`).join(' ')}
                   </p>
                 )}
+                {(yt.tags || []).length > 0 && (
+                  <div className="flex flex-wrap items-center gap-1 pt-1">
+                    {yt.tags.slice(0, 5).map((t) => (
+                      <span key={t} className="badge text-[9px] normal-case font-medium" style={{ background: 'var(--bg-elevated)', color: 'var(--text-muted)' }}>{t}</span>
+                    ))}
+                    {yt.tags.length > 5 && (
+                      <span className="text-[10px] text-text-muted">+{yt.tags.length - 5}</span>
+                    )}
+                  </div>
+                )}
               </div>
             )}
 
