@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -20,6 +20,69 @@ from backend.routers.jobs import fix_errors
 logger = logging.getLogger("studio")
 
 router = APIRouter(prefix="/system", tags=["system"])
+
+
+_SEVERITY_BY_STATUS = {
+    "error": "ERROR",
+    "retry": "WARNING",
+    "started": "INFO",
+    "progress": "INFO",
+    "completed": "SUCCESS",
+}
+
+
+@router.get("/logs")
+def agent_logs(
+    level: str | None = Query(None),
+    agent: str | None = Query(None),
+    job_id: int | None = Query(None),
+    limit: int = Query(200, le=1000),
+):
+    """Structured, filterable view over logs/agents.log (one JSON event per line).
+
+    Reads the file TAIL-first so a huge log never gets parsed in full: only the
+    last ~256KB are scanned, which covers hundreds of recent events. Newest first.
+    """
+    import json
+
+    from backend.config import ROOT_DIR
+
+    path = ROOT_DIR / "logs" / "agents.log"
+    if not path.is_file():
+        return {"events": [], "note": "nenhum log de agente registrado ainda"}
+
+    try:
+        size = path.stat().st_size
+        with path.open("rb") as fh:
+            fh.seek(max(0, size - 256 * 1024))
+            raw = fh.read().decode("utf-8", errors="replace")
+    except OSError as exc:
+        return {"events": [], "note": f"falha ao ler o log: {exc}"}
+
+    lines = raw.splitlines()
+    if size > 256 * 1024 and lines:
+        lines = lines[1:]  # first line is likely truncated mid-JSON — drop it
+
+    events: list[dict] = []
+    for line in reversed(lines):
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            ev = json.loads(line)
+        except ValueError:
+            continue
+        ev["severity"] = _SEVERITY_BY_STATUS.get(ev.get("status", ""), "INFO")
+        if level and ev["severity"] != level.upper():
+            continue
+        if agent and ev.get("agent") != agent:
+            continue
+        if job_id is not None and ev.get("job_id") != job_id:
+            continue
+        events.append(ev)
+        if len(events) >= limit:
+            break
+    return {"events": events}
 
 
 @router.get("/health-detail")

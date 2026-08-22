@@ -1,0 +1,23 @@
+# Lint config only (no [build-system]/[project] table -- this repo is not
+# packaged; Railway installs backend/requirements.txt directly, see
+# nixpacks.toml). Scoped to backend/, which is the only Python code here.
+#
+# Rule selection matches what the codebase already silences via `# noqa: <code>`
+# comments (grep backend for `# noqa` to see them) -- this makes that existing
+# convention checkable instead of just decorative. Install with
+# `pip install -r backend/requirements-dev.txt`, then run `ruff check backend`.
+[tool.ruff]
+target-version = "py312"
+line-length = 120
+extend-include = ["backend/**/*.py"]
+
+[tool.ruff.lint]
+select = [
+    "F",       # pyflakes -- unused imports/names (F401), undefined names, etc.
+    "E4",      # pycodestyle -- import placement (E401/E402)
+    "E7",      # pycodestyle -- statements (E731 lambda-assignment, etc.)
+    "E9",      # pycodestyle -- runtime/syntax errors
+    "E501",    # line too long
+    "BLE001",  # flake8-blind-except -- bare `except Exception`
+    "D401",    # pydocstyle -- first line of docstring should be imperative mood
+]

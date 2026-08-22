@@ -328,7 +328,8 @@ def _apply_long_intro(
         if not spoken:
             return None
         narration_path = work / "intro_narration.mp3"
-        resolved_voice = voice or settings.default_tts_voice or "pt-BR-AntonioNeural"
+        from backend import runtime_settings
+        resolved_voice = voice or runtime_settings.effective_voice()
         asyncio.run(_synthesize(spoken, resolved_voice, narration_path))
         if not narration_path.exists() or narration_path.stat().st_size < 1024:
             return None
@@ -357,7 +358,8 @@ async def _synthesize(text: str, voice: str, dst: Path) -> None:
     import edge_tts
 
     try:
-        communicate = edge_tts.Communicate(text, voice, rate=settings.tts_rate or "+8%")
+        from backend import runtime_settings
+        communicate = edge_tts.Communicate(text, voice, rate=runtime_settings.effective_tts_rate())
         await communicate.save(str(dst))
         if dst.exists() and dst.stat().st_size >= 1024:
             return

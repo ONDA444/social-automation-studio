@@ -35,6 +35,8 @@ export default function PlatformCard({ account, onChange, onChanged, onDone }) {
   const [savingVoice, setSavingVoice] = useState(false)
   const [music, setMusic] = useState(account.music_style || 'balanced')
   const [savingMusic, setSavingMusic] = useState(false)
+  const [stage, setStage] = useState(account.channel_stage || 'growing')
+  const [savingStage, setSavingStage] = useState(false)
   const [ride, setRide] = useState(account.ride_trends || false)
   const [savingRide, setSavingRide] = useState(false)
   const [toggling, setToggling] = useState(false)
@@ -56,10 +58,11 @@ export default function PlatformCard({ account, onChange, onChanged, onDone }) {
     setLang(account.content_language || 'pt-BR')
     setVoice(account.preferred_voice?.startsWith('v_') ? '' : (account.preferred_voice || ''))
     setMusic(account.music_style || 'balanced')
+    setStage(account.channel_stage || 'growing')
     setRide(account.ride_trends || false)
     setStrikes(account.copyright_strikes || 0)
     setNotes(account.copyright_notes || '')
-  }, [account.content_language, account.preferred_voice, account.music_style, account.ride_trends,
+  }, [account.content_language, account.preferred_voice, account.music_style, account.channel_stage, account.ride_trends,
       account.copyright_strikes, account.copyright_notes])
 
   const m = PLATFORM_META[account.platform] || { label: account.platform, color: 'var(--accent)', icon: 'CH' }
@@ -132,6 +135,13 @@ export default function PlatformCard({ account, onChange, onChanged, onDone }) {
     try { await api.patch(`/accounts/${account.id}`, { music_style: style }); refresh?.() }
     catch (e) { toast.error('Falha ao salvar musica: ' + e.message); setMusic(account.music_style || 'balanced') }
     finally { setSavingMusic(false) }
+  }
+
+  const changeStage = async (stage) => {
+    setStage(stage); setSavingStage(true)
+    try { await api.patch(`/accounts/${account.id}`, { channel_stage: stage }); refresh?.() }
+    catch (e) { toast.error('Falha ao salvar estágio: ' + e.message); setStage(account.channel_stage || 'growing') }
+    finally { setSavingStage(false) }
   }
 
   const changeRide = async (on) => {
@@ -289,6 +299,18 @@ export default function PlatformCard({ account, onChange, onChanged, onDone }) {
                 <option value="energetic">Highlight - batida forte</option>
                 <option value="balanced">Equilibrado</option>
                 <option value="calm">Calmo - fundo suave</option>
+              </select>
+            </label>
+
+            <label className="space-y-1">
+              <span className="text-xs font-semibold" style={{ color: 'var(--text-muted)' }}>
+                Estágio do canal {savingStage && '(salvando)'}
+              </span>
+              <select className="input" value={stage} disabled={savingStage} onChange={(e) => changeStage(e.target.value)}
+                title="Canal novo: roteiros com SEO de descoberta e CTA de inscrição. Estabelecido: mais profundidade e comunidade.">
+                <option value="new">Novo — foco em descoberta</option>
+                <option value="growing">Em crescimento</option>
+                <option value="established">Estabelecido</option>
               </select>
             </label>
 

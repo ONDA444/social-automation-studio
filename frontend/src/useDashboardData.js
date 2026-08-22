@@ -11,6 +11,7 @@ import { api } from './api'
 export function useDashboardData(count) {
   const [data, setData] = useState(null)
   const [health, setHealth] = useState('green')
+  const [healthDetail, setHealthDetail] = useState(null)
   const [stale, setStale] = useState(false)
 
   const load = useCallback(() => Promise.all([
@@ -19,6 +20,7 @@ export function useDashboardData(count) {
   ]).then(([d, h]) => {
     setData(d)
     setHealth(h.status)
+    setHealthDetail(h)
     setStale(false)
   }).catch(() => {
     setStale(true)
@@ -36,5 +38,5 @@ export function useDashboardData(count) {
   // Refresh sooner when pipeline events arrive instead of waiting for the next tick.
   useEffect(() => { const t = setTimeout(load, 800); return () => clearTimeout(t) }, [count, load])
 
-  return { data, health, stale, refresh: load }
+  return { data, health, healthDetail, stale, refresh: load }
 }

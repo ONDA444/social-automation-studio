@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import asyncio
 import re
-from pathlib import Path
 
 from backend.agents.base_agent import BaseAgent
 from backend.config import ROOT_DIR
@@ -83,7 +82,11 @@ class ComplianceAgent(BaseAgent):
                 blocks.append(f"Instagram: hashtags restritas: {', '.join(hit)}")
 
         status = "blocked" if blocks else "approved"
-        return {"status": status, "blocks": blocks, "suggestions": suggestions}
+        # Risk score determinístico: cada bloqueio pesa 40, cada sugestão 10.
+        # blocked => no máximo 60 (há pelo menos 1 block); sem nada => 100.
+        risk = max(0, 100 - 40 * len(blocks) - 10 * len(suggestions))
+        return {"status": status, "blocks": blocks, "suggestions": suggestions,
+                "risk_score": risk}
 
     @staticmethod
     def _banned() -> set[str]:

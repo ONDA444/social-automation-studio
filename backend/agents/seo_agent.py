@@ -12,7 +12,6 @@ import re
 
 from backend.agents.base_agent import BaseAgent
 from backend.agents.keyword_research import region_for_language, related_search_queries
-from backend.config import settings
 from backend import llm
 from backend import runtime_settings
 from backend.uploaders.youtube import cap_tags_to_budget
@@ -145,7 +144,7 @@ class SEOAgent(BaseAgent):
         script = script or self.ctx_get("script") or {}
         narration = narration or self.ctx_get("narration") or {}
         content_type = script.get("content_type", content_type)
-        language = language or settings.default_language
+        language = language or runtime_settings.effective_language()
 
         # Real search-behavior grounding: today every keyword/tag is pure LLM
         # invention. Pull actual Google Trends "top"/"rising" queries related to

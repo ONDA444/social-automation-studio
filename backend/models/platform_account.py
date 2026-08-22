@@ -33,6 +33,10 @@ class PlatformAccount(Base):
     # "energetic" = punchy highlight beats (TikTok/Reels style); "calm" = mellow
     # beds. Applied on top of the per-content-type mood in EditingDirector.
     music_style: Mapped[str] = mapped_column(String(20), default="balanced")
+    # Estágio de maturidade do canal: new | growing | established. O roteirista
+    # usa isso para adaptar estratégia (canal novo precisa de SEO de descoberta e
+    # CTA de inscrição; canal estabelecido prioriza comunidade/retenção).
+    channel_stage: Mapped[str] = mapped_column(String(20), default="growing")
 
     # --- Ready videos from Google Drive ---
     # ai = current generator only; drive = ready videos only; mixed = Drive first,
@@ -109,6 +113,7 @@ class PlatformAccount(Base):
             "avoid_topics": self.avoid_topics or [],
             "content_language": self.content_language,
             "music_style": getattr(self, "music_style", None) or "balanced",
+            "channel_stage": getattr(self, "channel_stage", None) or "growing",
             "channel_optimization": getattr(self, "channel_optimization", None) or {},
             "video_source_mode": getattr(self, "video_source_mode", None) or "ai",
             "drive_folder_id": getattr(self, "drive_folder_id", None),

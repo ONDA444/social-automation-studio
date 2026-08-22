@@ -16,7 +16,6 @@ import os
 import threading
 from datetime import datetime
 
-from backend.config import settings
 from backend.database import SessionLocal
 from backend.events import publish_event
 from backend.models import JobStatus, VideoJob
@@ -383,6 +382,15 @@ async def run_publish(job_id: int, platforms: list | None = None) -> dict:
         db.commit()
         _emit(job_id, status=job.status.value, results=results)
 
+        # Regras de automação (§27): publicação concluída → notify/collect_analytics.
+        if job.status == JobStatus.PUBLISHED:
+            try:
+                from backend.agents.automation_engine import evaluate
+
+                evaluate("job_published", job_id)
+            except Exception as exc:  # noqa: BLE001 — automação nunca derruba o publish
+                logger.debug("automação job_published (job %s) ignorada: %s", job_id, exc)
+
         # Cross-platform mirror after a successful YouTube publish.
         if results.get("youtube", {}).get("ok"):
             try:
@@ -525,8 +533,9 @@ async def publish_youtube(job, seo, creds, publish_at, shorts, privacy="private"
             locs = ((seo.get("youtube") or {}).get("localizations")) or {}
             vid = main.get("video_id")
             if locs and vid:
+                from backend import runtime_settings
                 await asyncio.to_thread(yt.set_localizations, creds, vid,
-                                        settings.default_language, locs,
+                                        runtime_settings.effective_language(), locs,
                                         service_pair=service_pair)
         except Exception as exc:  # noqa: BLE001
             logger.warning("localization apply failed for job %s: %s", getattr(job, "id", "?"), exc)
@@ -608,15 +617,14 @@ def _resolve_privacy(job) -> str:
     """
     import os
 
-    from backend.config import settings
+    from backend import runtime_settings
 
     if os.getenv("STUDIO_TEST_MODE") == "1":
         return "private"
     choice = getattr(job, "privacy", None)
     if choice in {"public", "unlisted", "private"}:
         return choice
-    default = (settings.default_privacy or "private").lower()
-    return default if default in {"public", "unlisted", "private"} else "private"
+    return runtime_settings.effective_privacy()
 
 
 def _pick_short(shorts: list[str], prefer: int) -> str | None:

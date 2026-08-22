@@ -52,6 +52,14 @@ class AccountUpdate(BaseModel):
     content_tone: str | None = None
     content_language: str | None = None
     music_style: str | None = None  # calm | balanced | energetic
+    channel_stage: str | None = None  # new | growing | established
+
+    @field_validator("channel_stage")
+    @classmethod
+    def _validate_channel_stage(cls, v: str | None) -> str | None:
+        if v is not None and v not in {"new", "growing", "established"}:
+            raise ValueError("channel_stage deve ser new, growing ou established")
+        return v
     video_source_mode: str | None = None  # ai | drive | mixed
     drive_folder_id: str | None = None
     drive_folder_url: str | None = None

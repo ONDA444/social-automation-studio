@@ -15,6 +15,15 @@ const NAV_GROUPS = [
     items: [
       { to: '/shorts', icon: 'phone', label: 'Shorts' },
       { to: '/remix', icon: 'spark', label: 'Remix' },
+      { to: '/trends', icon: 'chart', label: 'Tendencias' },
+      { to: '/media', icon: 'film', label: 'Midia' },
+    ],
+  },
+  {
+    label: 'Inteligencia',
+    items: [
+      { to: '/copilot', icon: 'bot', label: 'AI Copilot' },
+      { to: '/rules', icon: 'zap', label: 'Automacoes' },
     ],
   },
   {
@@ -23,6 +32,7 @@ const NAV_GROUPS = [
       { to: '/channels', icon: 'tv', label: 'Canais' },
       { to: '/platforms', icon: 'link', label: 'Plataformas' },
       { to: '/analytics', icon: 'chart', label: 'Analytics' },
+      { to: '/system', icon: 'pulse', label: 'Sistema' },
       { to: '/settings', icon: 'gear', label: 'Config' },
     ],
   },
@@ -41,6 +51,9 @@ function NavIcon({ name }) {
     tv: <><rect x="3" y="7" width="18" height="13" rx="2" /><path d="m8 7 4-4 4 4" /></>,
     chart: <><path d="M4 19V5" /><path d="M4 19h17" /><path d="m7 15 4-4 3 3 5-7" /></>,
     gear: <><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2 3-.2-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5v.2h-3.4v-.2a1.7 1.7 0 0 0-1-1.5 1.7 1.7 0 0 0-1.9.3l-.2.1-2-3 .1-.1A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.5-1H3v-3.4h.1a1.7 1.7 0 0 0 1.5-1 1.7 1.7 0 0 0-.3-1.9l-.1-.1 2-3 .2.1a1.7 1.7 0 0 0 1.9.3 1.7 1.7 0 0 0 1-1.5V3h3.4v.2a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.2-.1 2 3-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.5 1h.1V14h-.1a1.7 1.7 0 0 0-1.5 1Z" /></>,
+    bot: <><rect x="4" y="8" width="16" height="11" rx="2.5" /><path d="M12 4v4M9 16h6" /><circle cx="12" cy="3.5" r="1" /><circle cx="8.7" cy="12.5" r="0.6" fill="currentColor" /><circle cx="15.3" cy="12.5" r="0.6" fill="currentColor" /></>,
+    pulse: <><path d="M3 12h4l2.5-6 4 12 2.5-6h5" /></>,
+    zap: <><path d="M13 2 4.5 13.5H11L10 22l8.5-11.5H13L13 2Z" /></>,
   }
   return <svg width="18" height="18" viewBox="0 0 24 24" {...common}>{paths[name]}</svg>
 }
@@ -56,7 +69,7 @@ function SidebarContent({ onItemClick, showCloseBtn, onClose }) {
       <div className="px-4 pt-5 pb-4 shrink-0">
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-btn flex items-center justify-center border"
-            style={{ background: 'var(--sidebar-soft)', borderColor: 'rgba(255,255,255,0.12)', color: 'var(--text-inverse)' }}>
+            style={{ background: 'var(--grad-accent)', borderColor: 'rgba(255,255,255,0.18)', color: '#fff', boxShadow: '0 4px 14px var(--accent-glow)' }}>
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
               <path d="M5 17V7l7-4 7 4v10l-7 4-7-4Z" stroke="currentColor" strokeWidth="1.8" />
               <path d="M8 12h8M12 8v8" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
@@ -64,7 +77,7 @@ function SidebarContent({ onItemClick, showCloseBtn, onClose }) {
           </div>
           <div className="min-w-0 flex-1">
             <p className="m-0 text-sm font-bold leading-tight" style={{ color: 'var(--text-inverse)' }}>Social Studio</p>
-            <p className="m-0 mt-0.5 text-[11px]" style={{ color: 'rgba(246,250,245,0.58)' }}>producao automatica</p>
+            <p className="m-0 mt-0.5 text-[11px]" style={{ color: 'rgba(240,241,255,0.60)' }}>producao automatica</p>
           </div>
           {showCloseBtn && (
             <button className="shell-icon-button" onClick={onClose} aria-label="Fechar menu">
@@ -79,7 +92,7 @@ function SidebarContent({ onItemClick, showCloseBtn, onClose }) {
       <nav className="flex-1 overflow-y-auto px-3 pb-3">
         {NAV_GROUPS.map((group) => (
           <div key={group.label} className="mb-4">
-            <p className="px-3 mb-1.5 text-[10px] font-bold uppercase" style={{ color: 'rgba(246,250,245,0.42)', letterSpacing: '.08em' }}>
+            <p className="px-3 mb-1.5 text-[10px] font-bold uppercase" style={{ color: 'rgba(240,241,255,0.44)', letterSpacing: '.08em' }}>
               {group.label}
             </p>
             <div className="space-y-1">
@@ -106,7 +119,7 @@ function SidebarContent({ onItemClick, showCloseBtn, onClose }) {
             <span className="w-2 h-2 rounded-full" style={{ background: 'var(--success)' }} />
             <span className="text-xs font-semibold" style={{ color: 'var(--text-inverse)' }}>Sistema ativo</span>
           </div>
-          <p className="mt-1 text-[11px]" style={{ color: 'rgba(246,250,245,0.52)' }}>agenda, fila e publicacao</p>
+          <p className="mt-1 text-[11px]" style={{ color: 'rgba(240,241,255,0.55)' }}>agenda, fila e publicacao</p>
         </div>
       </div>
     </>

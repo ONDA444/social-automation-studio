@@ -1,61 +1,66 @@
+/* ===== Design Tokens — "On Air" =====
+   Identidade: sala de controle de um estúdio de transmissão. Noite azul-violeta,
+   sinais luminosos (violeta elétrico + âmbar "no ar" + ciano de monitor).
+   Tipografia: Sora (display geométrica), Inter (texto), JetBrains Mono (dados).
+*/
 :root {
-  /* Cloud Studio Editorial: light production desk with a calm dark shell. */
-  --bg-base:       #F5F7F2;
+  --bg-base:       #F4F4FB;
   --bg-surface:    #FFFFFF;
-  --bg-elevated:   #EEF3EC;
-  --bg-panel:      #E7EEE5;
+  --bg-elevated:   #ECEDF8;
+  --bg-panel:      #E6E7F5;
   --bg-glass:      rgba(255, 255, 255, 0.92);
 
-  --sidebar-base:  #111814;
-  --sidebar-soft:  #17231D;
+  --sidebar-base:  #0E1022;
+  --sidebar-soft:  #161936;
   --topbar-base:   rgba(255,255,255,0.88);
 
-  --border:        #D7E0D4;
-  --border-glow:   rgba(31, 138, 91, 0.34);
-  --border-glass:  rgba(23, 32, 26, 0.10);
-  --surface-hover: #F0F5EE;
+  --border:        #DBDCF0;
+  --border-glow:   rgba(109, 94, 240, 0.36);
+  --border-glass:  rgba(24, 26, 54, 0.10);
+  --surface-hover: #EFEFFC;
 
-  --accent:        #1F8A5B;
-  --accent-strong: #176B47;
-  --accent-blue:   #2F6FED;
-  --accent-dim:    rgba(31, 138, 91, 0.12);
-  --accent-glow:   rgba(31, 138, 91, 0.28);
+  --accent:        #6D5EF0;
+  --accent-strong: #5747D6;
+  --accent-blue:   #2F7DE1;
+  --accent-dim:    rgba(109, 94, 240, 0.12);
+  --accent-glow:   rgba(109, 94, 240, 0.28);
 
   --accent-yt:     #E53935;
-  --accent-tk:     #111827;
+  --accent-tk:     #1B1B2E;
   --accent-ig:     #C13584;
 
-  --text-primary:  #17201A;
-  --text-muted:    #647067;
-  --text-dim:      #8A978D;
-  --text-inverse:  #F6FAF5;
+  --text-primary:  #1B1D33;
+  --text-muted:    #62647F;
+  --text-dim:      #8C8EA8;
+  --text-inverse:  #F6F6FD;
 
-  --success:       #1F8A5B;
-  --warning:       #D9822B;
-  --error:         #C2413A;
+  --success:       #1E9E6A;
+  --warning:       #C77F1F;
+  --error:         #D0485A;
 
-  --radius-card:   10px;
-  --radius-btn:    8px;
+  --radius-card:   12px;
+  --radius-btn:    9px;
   --radius-badge:  7px;
   --radius-pill:   999px;
 
-  --shadow-xs:     0 1px 2px rgba(20, 32, 24, 0.05);
-  --shadow-sm:     0 1px 3px rgba(20, 32, 24, 0.08);
-  --shadow-md:     0 8px 24px rgba(20, 32, 24, 0.10);
-  --shadow-lg:     0 18px 50px rgba(20, 32, 24, 0.14);
-  --shadow-card:   0 1px 2px rgba(20, 32, 24, 0.05), 0 10px 30px rgba(20, 32, 24, 0.06);
-  --shadow-glow:   0 0 0 1px rgba(31,138,91,0.18), 0 8px 22px rgba(31,138,91,0.12);
-  --shadow-glow-lg: 0 0 0 1px rgba(31,138,91,0.22), 0 12px 30px rgba(31,138,91,0.16);
+  --shadow-xs:     0 1px 2px rgba(27, 29, 51, 0.05);
+  --shadow-sm:     0 1px 3px rgba(27, 29, 51, 0.08);
+  --shadow-md:     0 8px 24px rgba(27, 29, 51, 0.11);
+  --shadow-lg:     0 18px 50px rgba(27, 29, 51, 0.15);
+  --shadow-card:   0 1px 2px rgba(27, 29, 51, 0.05), 0 10px 30px rgba(27, 29, 51, 0.06);
+  --shadow-glow:   0 0 0 1px rgba(109,94,240,0.20), 0 8px 22px rgba(109,94,240,0.14);
+  --shadow-glow-lg: 0 0 0 1px rgba(109,94,240,0.26), 0 12px 30px rgba(109,94,240,0.18);
 
-  --grad-accent:   linear-gradient(135deg, #1F8A5B 0%, #176B47 100%);
-  --grad-success:  linear-gradient(135deg, #2E9F6B 0%, #1F8A5B 100%);
-  --grad-danger:   linear-gradient(135deg, #D4564D 0%, #C2413A 100%);
+  --grad-accent:   linear-gradient(135deg, #6D5EF0 0%, #8B5CF6 55%, #A855F7 100%);
+  --grad-success:  linear-gradient(135deg, #2BB583 0%, #1E9E6A 100%);
+  --grad-danger:   linear-gradient(135deg, #E05A6D 0%, #D0485A 100%);
   --grad-surface:  linear-gradient(180deg, rgba(255,255,255,0.82) 0%, rgba(255,255,255,0) 100%);
-  --grad-glass:    linear-gradient(135deg, rgba(255,255,255,0.9) 0%, rgba(247,250,245,0.72) 100%);
-  --grad-nebula:   radial-gradient(ellipse 900px 480px at 8% -18%, rgba(31,138,91,0.12), transparent 58%),
-                   radial-gradient(ellipse 760px 420px at 96% 0%, rgba(47,111,237,0.08), transparent 58%);
+  --grad-glass:    linear-gradient(135deg, rgba(255,255,255,0.9) 0%, rgba(247,247,253,0.72) 100%);
+  --grad-nebula:   radial-gradient(ellipse 900px 480px at 8% -18%, rgba(109,94,240,0.14), transparent 58%),
+                   radial-gradient(ellipse 760px 420px at 96% 0%, rgba(56,189,248,0.09), transparent 58%),
+                   radial-gradient(ellipse 620px 380px at 50% 110%, rgba(245,184,61,0.06), transparent 60%);
 
-  --font-display:  'Manrope', sans-serif;
+  --font-display:  'Sora', sans-serif;
   --font-ui:       'Inter', sans-serif;
   --font-mono:     'JetBrains Mono', monospace;
 
@@ -65,53 +70,54 @@
 }
 
 [data-theme="dark"] {
-  --bg-base:       #0D1110;
-  --bg-surface:    #141A17;
-  --bg-elevated:   #1B231F;
-  --bg-panel:      #101612;
-  --bg-glass:      rgba(20, 26, 23, 0.92);
+  --bg-base:       #0B0D1C;
+  --bg-surface:    #141733;
+  --bg-elevated:   #1D2148;
+  --bg-panel:      #0F1226;
+  --bg-glass:      rgba(20, 23, 51, 0.92);
 
-  --sidebar-base:  #090D0B;
-  --sidebar-soft:  #111A15;
-  --topbar-base:   rgba(13,17,16,0.88);
+  --sidebar-base:  #080A16;
+  --sidebar-soft:  #121531;
+  --topbar-base:   rgba(11,13,28,0.88);
 
-  --border:        #2A342F;
-  --border-glow:   rgba(34, 160, 107, 0.42);
-  --border-glass:  rgba(238, 245, 239, 0.10);
-  --surface-hover: #202A25;
+  --border:        #2D3160;
+  --border-glow:   rgba(139, 124, 246, 0.48);
+  --border-glass:  rgba(238, 239, 255, 0.10);
+  --surface-hover: #232752;
 
-  --accent:        #22A06B;
-  --accent-strong: #39C37B;
-  --accent-blue:   #5B8DEF;
-  --accent-dim:    rgba(34, 160, 107, 0.16);
-  --accent-glow:   rgba(34, 160, 107, 0.28);
+  --accent:        #8B7CF6;
+  --accent-strong: #A99CF9;
+  --accent-blue:   #38BDF8;
+  --accent-dim:    rgba(139, 124, 246, 0.16);
+  --accent-glow:   rgba(139, 124, 246, 0.30);
 
   --accent-yt:     #FF5D56;
-  --accent-tk:     #EEF5EF;
-  --accent-ig:     #D66BB0;
+  --accent-tk:     #EFEFFF;
+  --accent-ig:     #E272C0;
 
-  --text-primary:  #EEF5EF;
-  --text-muted:    #A8B5AD;
-  --text-dim:      #728078;
-  --text-inverse:  #07100C;
+  --text-primary:  #EFF0FE;
+  --text-muted:    #A9ACCE;
+  --text-dim:      #74789E;
+  --text-inverse:  #0B0D1C;
 
-  --success:       #39C37B;
-  --warning:       #D99A3D;
-  --error:         #D85C55;
+  --success:       #3ED598;
+  --warning:       #F5B83D;
+  --error:         #F26D7A;
 
-  --shadow-xs:     0 1px 2px rgba(0,0,0,0.20);
-  --shadow-sm:     0 1px 3px rgba(0,0,0,0.24);
-  --shadow-md:     0 12px 32px rgba(0,0,0,0.28);
-  --shadow-lg:     0 22px 60px rgba(0,0,0,0.34);
-  --shadow-card:   0 1px 2px rgba(0,0,0,0.20), 0 16px 34px rgba(0,0,0,0.24);
-  --shadow-glow:   0 0 0 1px rgba(34,160,107,0.22), 0 12px 28px rgba(34,160,107,0.12);
-  --shadow-glow-lg: 0 0 0 1px rgba(34,160,107,0.28), 0 16px 34px rgba(34,160,107,0.16);
+  --shadow-xs:     0 1px 2px rgba(0,0,0,0.22);
+  --shadow-sm:     0 1px 3px rgba(0,0,0,0.26);
+  --shadow-md:     0 12px 32px rgba(0,0,0,0.30);
+  --shadow-lg:     0 22px 60px rgba(0,0,0,0.36);
+  --shadow-card:   0 1px 2px rgba(0,0,0,0.22), 0 16px 34px rgba(0,0,0,0.26);
+  --shadow-glow:   0 0 0 1px rgba(139,124,246,0.26), 0 12px 28px rgba(139,124,246,0.14);
+  --shadow-glow-lg: 0 0 0 1px rgba(139,124,246,0.32), 0 16px 34px rgba(139,124,246,0.18);
 
-  --grad-accent:   linear-gradient(135deg, #22A06B 0%, #176B47 100%);
-  --grad-success:  linear-gradient(135deg, #39C37B 0%, #22A06B 100%);
-  --grad-danger:   linear-gradient(135deg, #D85C55 0%, #A33A34 100%);
-  --grad-surface:  linear-gradient(180deg, rgba(255,255,255,0.035) 0%, rgba(255,255,255,0) 100%);
-  --grad-glass:    linear-gradient(135deg, rgba(27,35,31,0.94) 0%, rgba(20,26,23,0.78) 100%);
-  --grad-nebula:   radial-gradient(ellipse 900px 480px at 8% -18%, rgba(34,160,107,0.10), transparent 58%),
-                   radial-gradient(ellipse 760px 420px at 96% 0%, rgba(91,141,239,0.08), transparent 58%);
+  --grad-accent:   linear-gradient(135deg, #7C6CF0 0%, #9D6BF5 55%, #C084FC 100%);
+  --grad-success:  linear-gradient(135deg, #3ED598 0%, #2BB583 100%);
+  --grad-danger:   linear-gradient(135deg, #F26D7A 0%, #C94657 100%);
+  --grad-surface:  linear-gradient(180deg, rgba(255,255,255,0.04) 0%, rgba(255,255,255,0) 100%);
+  --grad-glass:    linear-gradient(135deg, rgba(29,33,72,0.94) 0%, rgba(20,23,51,0.78) 100%);
+  --grad-nebula:   radial-gradient(ellipse 900px 480px at 8% -18%, rgba(139,124,246,0.13), transparent 58%),
+                   radial-gradient(ellipse 760px 420px at 96% 0%, rgba(56,189,248,0.10), transparent 58%),
+                   radial-gradient(ellipse 620px 380px at 50% 110%, rgba(245,184,61,0.05), transparent 60%);
 }

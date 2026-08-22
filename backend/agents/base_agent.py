@@ -16,7 +16,7 @@ import asyncio
 import json
 import logging
 import os
-import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -84,6 +84,9 @@ class BaseAgent:
             "status": status,  # started | progress | completed | retry | error
             "message": message,
             "progress": progress,
+            # Timestamp ISO UTC — alimenta a linha do tempo do pipeline na UI
+            # (duração por etapa) e a ordenação/filtragem do viewer de logs.
+            "at": datetime.now(timezone.utc).isoformat(),
             **extra,
         }
         try:

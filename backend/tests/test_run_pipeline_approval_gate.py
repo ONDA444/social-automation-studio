@@ -123,7 +123,7 @@ class RunPipelineApprovalGateTests(unittest.TestCase):
             p.start()
         try:
             with patch("backend.agents.orchestrator.SessionLocal", Session), \
-                 patch("backend.agents.orchestrator.settings.auto_publish", True):
+                 patch("backend.runtime_settings.effective_auto_publish", return_value=True):
                 result = asyncio.run(run_pipeline(job_id))
         finally:
             for p in patchers:
@@ -151,7 +151,7 @@ class RunPipelineApprovalGateTests(unittest.TestCase):
             p.start()
         try:
             with patch("backend.agents.orchestrator.SessionLocal", Session), \
-                 patch("backend.agents.orchestrator.settings.auto_publish", True), \
+                 patch("backend.runtime_settings.effective_auto_publish", return_value=True), \
                  patch("backend.pipeline.dispatch.dispatch_publish", return_value={"ok": True}):
                 result = asyncio.run(run_pipeline(job_id))
         finally:
@@ -177,7 +177,7 @@ class RunPipelineApprovalGateTests(unittest.TestCase):
             p.start()
         try:
             with patch("backend.agents.orchestrator.SessionLocal", Session), \
-                 patch("backend.agents.orchestrator.settings.auto_publish", True):
+                 patch("backend.runtime_settings.effective_auto_publish", return_value=True):
                 result = asyncio.run(run_pipeline(job_id))
         finally:
             for p in patchers:

@@ -1,5 +1,6 @@
 import { useLocation } from 'react-router-dom'
 import { useDashboardStatus } from '../App.jsx'
+import NotificationBell from './NotificationBell.jsx'
 
 const PAGE_TITLES = {
   '/': 'Dashboard',
@@ -10,6 +11,11 @@ const PAGE_TITLES = {
   '/remix': 'Remix',
   '/platforms': 'Plataformas',
   '/analytics': 'Analytics',
+  '/copilot': 'AI Copilot',
+  '/rules': 'Automacoes',
+  '/system': 'Saude do Sistema',
+  '/media': 'Midia',
+  '/trends': 'Tendencias',
   '/settings': 'Configuracoes',
 }
 
@@ -31,7 +37,7 @@ const topBarStyle = {
 
 function StatusChip({ tone = 'neutral', dot, children }) {
   const tones = {
-    ok: ['rgba(31,138,91,0.10)', 'rgba(31,138,91,0.22)', 'var(--success)'],
+    ok: ['rgba(62,213,152,0.10)', 'rgba(62,213,152,0.24)', 'var(--success)'],
     warn: ['rgba(217,130,43,0.12)', 'rgba(217,130,43,0.24)', 'var(--warning)'],
     bad: ['rgba(194,65,58,0.12)', 'rgba(194,65,58,0.24)', 'var(--error)'],
     neutral: ['rgba(23,32,26,0.05)', 'var(--border)', 'var(--text-muted)'],
@@ -72,6 +78,7 @@ export default function TopBar({ connected, onMenuClick = () => {}, theme = 'dar
       </div>
 
       <div className="flex items-center gap-2">
+        <NotificationBell />
         <button
           type="button"
           className="btn-ghost btn-sm hidden sm:inline-flex"

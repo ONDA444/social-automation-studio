@@ -41,8 +41,8 @@ if !errorlevel! == 0 (
   echo [INFO] Docker ausente - rodando SEM Redis/Celery ^(modo in-process^). Funcional para uso local.
 )
 
-echo [..] Iniciando backend (http://localhost:8000)...
-start "Backend API" cmd /k ".venv\Scripts\activate.bat && uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload"
+echo [..] Iniciando backend (http://localhost:8000) com watchdog anti-queda...
+start "Backend API" cmd /k ".venv\Scripts\activate.bat && python -m backend.watchdog"
 timeout /t 4 /nobreak >nul
 
 echo [..] Iniciando frontend (http://localhost:5173)...

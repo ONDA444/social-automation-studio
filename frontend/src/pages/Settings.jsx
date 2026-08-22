@@ -160,6 +160,159 @@ function MonetizationCard() {
   )
 }
 
+function ProductionCard() {
+  const VOICES = [
+    'pt-BR-AntonioNeural', 'pt-BR-FranciscaNeural', 'pt-BR-ThalitaMultilingualNeural',
+    'en-US-GuyNeural', 'en-US-JennyNeural', 'es-ES-AlvaroNeural', 'es-ES-ElviraNeural',
+  ]
+  const [cfg, setCfg] = useState(null)
+  const [saving, setSaving] = useState(false)
+  const [msg, setMsg] = useState(null)
+
+  useEffect(() => {
+    api.get('/settings/production').then(setCfg).catch((e) => setMsg({ ok: false, text: e.message }))
+  }, [])
+
+  const save = async () => {
+    setSaving(true); setMsg(null)
+    try {
+      const next = await api.put('/settings/production', cfg)
+      setCfg(next)
+      setMsg({ ok: true, text: 'Salvo. Vale imediatamente para os próximos vídeos — sem reiniciar.' })
+    } catch (e) {
+      setMsg({ ok: false, text: e.message })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const field = (k, v) => setCfg((c) => ({ ...c, [k]: v }))
+
+  if (!cfg) {
+    return (
+      <SectionCard title="Produção">
+        <div className="skeleton h-40 rounded-card" />
+      </SectionCard>
+    )
+  }
+
+  const inputStyle = {
+    background: 'var(--bg-base, rgba(0,0,0,0.25))',
+    border: '1px solid var(--border)',
+    color: 'var(--text-primary)',
+  }
+
+  return (
+    <SectionCard title="Produção" sub="Padrões de narração e publicação — editáveis sem reiniciar o sistema.">
+      {/* Voz e idioma padrão */}
+      <div className="grid sm:grid-cols-2 gap-4 mb-5">
+        <div>
+          <p className="font-medium text-sm mb-1">Voz padrão da narração</p>
+          <select
+            value={cfg.default_tts_voice}
+            onChange={(e) => field('default_tts_voice', e.target.value)}
+            className="w-full rounded-card px-3 py-2 text-sm"
+            style={inputStyle}
+          >
+            {VOICES.map((v) => <option key={v} value={v}>{v}</option>)}
+            {!VOICES.includes(cfg.default_tts_voice) && <option value={cfg.default_tts_voice}>{cfg.default_tts_voice}</option>}
+          </select>
+          <p className="text-xs text-text-muted mt-1">Vozes neurais grátis (edge-tts). Canais com voz própria continuam usando a deles.</p>
+        </div>
+        <div>
+          <p className="font-medium text-sm mb-1">Idioma padrão</p>
+          <select
+            value={cfg.default_language}
+            onChange={(e) => field('default_language', e.target.value)}
+            className="w-full rounded-card px-3 py-2 text-sm"
+            style={inputStyle}
+          >
+            {['pt-BR', 'en-US', 'es-ES'].map((l) => <option key={l} value={l}>{l}</option>)}
+            {!['pt-BR', 'en-US', 'es-ES'].includes(cfg.default_language) && <option value={cfg.default_language}>{cfg.default_language}</option>}
+          </select>
+          <p className="text-xs text-text-muted mt-1">Usado quando o vídeo/canal não define idioma próprio.</p>
+        </div>
+        <div>
+          <p className="font-medium text-sm mb-1">Ritmo da narração</p>
+          <select
+            value={cfg.tts_rate}
+            onChange={(e) => field('tts_rate', e.target.value)}
+            className="w-full rounded-card px-3 py-2 text-sm"
+            style={inputStyle}
+          >
+            {['-5%', '+0%', '+5%', '+8%', '+12%', '+15%', '+20%'].map((r) => <option key={r} value={r}>{r}</option>)}
+          </select>
+          <p className="text-xs text-text-muted mt-1">+8% soa natural em pt-BR; acelere para conteúdos dinâmicos (ex.: esportes).</p>
+        </div>
+        <div>
+          <p className="font-medium text-sm mb-1">Privacidade padrão ao publicar</p>
+          <select
+            value={cfg.default_privacy}
+            onChange={(e) => field('default_privacy', e.target.value)}
+            className="w-full rounded-card px-3 py-2 text-sm"
+            style={inputStyle}
+          >
+            <option value="private">Privado (seguro)</option>
+            <option value="unlisted">Não listado</option>
+            <option value="public">Público (alcança o público)</option>
+          </select>
+          <p className="text-xs text-text-muted mt-1">Aplicada quando o job não escolhe uma privacidade própria.</p>
+        </div>
+      </div>
+
+      {/* Toggles de automação */}
+      <div className="space-y-4">
+        <div className="flex items-start gap-3">
+          <Toggle on={cfg.auto_publish} onChange={(v) => field('auto_publish', v)} />
+          <div className="flex-1">
+            <p className="font-medium text-sm">Publicação automática (modo hands-off)</p>
+            <p className="text-xs text-text-muted">
+              Vídeos de canais (agendados) são gerados e publicados <strong>sem passar pela sua aprovação</strong>.
+              Desligado = todo vídeo para na fila de Aprovações. Recomendo ligar só quando o canal já estiver afinado.
+            </p>
+          </div>
+        </div>
+        <div className="flex items-start gap-3">
+          <Toggle on={cfg.trending_enabled} onChange={(v) => field('trending_enabled', v)} />
+          <div className="flex-1">
+            <p className="font-medium text-sm">Momento em alta (trending)</p>
+            <p className="text-xs text-text-muted">
+              Detecta assuntos em alta e gera vídeos sobre eles automaticamente (respeitando aprovação e quota).
+            </p>
+          </div>
+        </div>
+        <div className="flex items-center gap-3">
+          <p className="font-medium text-sm flex-1">Máximo de trending por dia (por canal)</p>
+          <input
+            type="number" min="1" max="50"
+            value={cfg.max_trending_per_day}
+            onChange={(e) => field('max_trending_per_day', Number(e.target.value))}
+            className="w-24 rounded-card px-3 py-2 text-sm text-center"
+            style={inputStyle}
+          />
+        </div>
+      </div>
+
+      <div className="flex items-center gap-3 mt-5">
+        <button
+          type="button"
+          onClick={save}
+          disabled={saving}
+          className="rounded-card px-4 py-2 text-sm font-semibold disabled:opacity-50"
+          style={{ background: 'var(--accent)', color: '#04110b' }}
+        >
+          {saving ? 'Salvando…' : 'Salvar'}
+        </button>
+        {msg && (
+          <span className="text-xs" style={{ color: msg.ok ? 'var(--success)' : 'var(--error)' }}>
+            {msg.text}
+          </span>
+        )}
+      </div>
+    </SectionCard>
+  )
+}
+
 function FixErrorsCard() {
   const [busy, setBusy] = useState(false)
   const [result, setResult] = useState(null)
@@ -254,7 +407,7 @@ export default function Settings() {
 
   return (
     <div className="space-y-6 max-w-3xl fade-in">
-      <PageHeader title="Configurações" sub="Sistema, monetização e chaves de API." />
+      <PageHeader title="Configurações" sub="Sistema, produção, monetização e chaves de API." />
 
       <SectionCard title="Status dos serviços">
         {!health ? (
@@ -277,6 +430,8 @@ export default function Settings() {
       </SectionCard>
 
       <FixErrorsCard />
+
+      <ProductionCard />
 
       <MonetizationCard />
 

@@ -23,11 +23,41 @@ def overview(db: Session = Depends(get_db)):
     recent = db.execute(select(VideoJob).order_by(VideoJob.created_at.desc()).limit(8)).scalars().all()
     total_views = db.execute(select(func.coalesce(func.sum(VideoAnalytics.views), 0))).scalar() or 0
     accounts = db.execute(select(func.count()).select_from(PlatformAccount)).scalar() or 0
+
+    # Command Center: contas realmente operacionais (ativas + com credenciais
+    # OAuth), agrupadas por plataforma.
+    connected_rows = db.execute(
+        select(PlatformAccount.platform, func.count())
+        .where(PlatformAccount.status == "active")
+        .where(PlatformAccount.credentials_encrypted.isnot(None))
+        .group_by(PlatformAccount.platform)
+    ).all()
+    accounts_connected = {p: n for p, n in connected_rows}
+
+    # Falhas recentes — o centro de comando precisa mostrar o que quebrou sem
+    # o operador abrir a fila.
+    from backend.models import JobStatus
+    error_jobs = db.execute(
+        select(VideoJob)
+        .where(VideoJob.status == JobStatus.ERROR)
+        .order_by(VideoJob.updated_at.desc())
+        .limit(3)
+    ).scalars().all()
+    recent_errors = [{
+        "id": j.id,
+        "title": j.title,
+        "current_agent": j.current_agent,
+        "error_message": j.error_message,
+        "updated_at": j.updated_at.isoformat() if j.updated_at else None,
+    } for j in error_jobs]
+
     return {
         "status_counts": {(k.value if hasattr(k, "value") else k): v for k, v in status_counts.items()},
         "recent_jobs": [j.to_dict_slim() for j in recent],
         "total_views": int(total_views),
         "accounts": accounts,
+        "accounts_connected": accounts_connected,
+        "recent_errors": recent_errors,
         "active_jobs": sum(v for k, v in status_counts.items()
                            if (k.value if hasattr(k, "value") else k) in ("queued", "processing", "publishing")),
     }

@@ -94,6 +94,9 @@ _ROUTER_MODULES = [
     "backend.routers.settings",
     "backend.routers.drive_library",
     "backend.routers.system",
+    "backend.routers.copilot",
+    "backend.routers.automation",
+    "backend.routers.media_library",
 ]
 
 
@@ -312,6 +315,12 @@ async def _on_startup() -> None:
         logger.warning("ensure_columns/indexes falhou: %s", exc)
     _recover_orphan_jobs()
     _redispatch_queued_jobs()
+    try:
+        from backend.agents.automation_engine import ensure_default_rules
+
+        ensure_default_rules()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("seed de regras de automação falhou: %s", exc)
     events.set_main_loop(asyncio.get_running_loop())
     # Best-effort live-event relay; no-op if Redis is down.
     asyncio.create_task(events.redis_listener())

@@ -936,9 +936,9 @@ def _job_ride_trends() -> None:
     from backend.models import PlatformAccount, ThemeQueue, VideoJob
 
     db = SessionLocal()
-    from backend.config import settings
+    from backend import runtime_settings
 
-    if not settings.trending_enabled:
+    if not runtime_settings.effective_trending_enabled():
         return  # global kill-switch — halt all trending auto-publishing instantly
     try:
         now = datetime.utcnow()
@@ -971,7 +971,7 @@ def _job_ride_trends() -> None:
                 # Daily cap: never auto-publish more than max_trending_per_day per channel.
                 made_today = sum(1 for j in trending_recent
                                  if j.created_at and (now - j.created_at) < _td(hours=24))
-                if made_today >= settings.max_trending_per_day:
+                if made_today >= runtime_settings.effective_max_trending():
                     continue
                 recent_titles = [j.title for j in recent_jobs if j.title]
                 pend = db.execute(

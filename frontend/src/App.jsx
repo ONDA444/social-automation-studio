@@ -24,6 +24,11 @@ const Channels = lazy(() => import('./pages/Channels.jsx'))
 const Schedule = lazy(() => import('./pages/Schedule.jsx'))
 const Analytics = lazy(() => import('./pages/Analytics.jsx'))
 const Settings = lazy(() => import('./pages/Settings.jsx'))
+const Copilot = lazy(() => import('./pages/Copilot.jsx'))
+const System = lazy(() => import('./pages/System.jsx'))
+const Rules = lazy(() => import('./pages/Rules.jsx'))
+const Media = lazy(() => import('./pages/Media.jsx'))
+const Trends = lazy(() => import('./pages/Trends.jsx'))
 
 function RouteFallback() {
   return (
@@ -100,6 +105,11 @@ function AppLayout({ ws, theme, toggleTheme, mobileNavOpen, setMobileNavOpen }) 
                   <Route path="/channels" element={<Channels />} />
                   <Route path="/schedule" element={<Schedule />} />
                   <Route path="/analytics" element={<Analytics />} />
+                  <Route path="/copilot" element={<Copilot />} />
+                  <Route path="/system" element={<System />} />
+                  <Route path="/rules" element={<Rules />} />
+                  <Route path="/media" element={<Media />} />
+                  <Route path="/trends" element={<Trends />} />
                   <Route path="/settings" element={<Settings />} />
                   <Route path="*" element={<Navigate to="/" replace />} />
                 </Routes>

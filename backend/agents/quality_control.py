@@ -150,7 +150,37 @@ class QualityControlAgent(BaseAgent):
                 warnings.append(f"short {s.get('num')} não é 1080x1920")
 
         status = "qc_warning" if warnings else "qc_passed"
-        return {"status": status, "warnings": warnings, "meta": meta}
+        return {"status": status, "warnings": warnings, "meta": meta,
+                "score": _quality_score(status, warnings)}
+
+
+# Peso de cada categoria de warning no score de qualidade (0–100, determinístico).
+# Casado pelo prefixo da mensagem gerada acima — warnings novos sem peso custam 10.
+_WARNING_WEIGHTS = [
+    ("resolução fora do padrão", 15),
+    ("muito fora do plano", 15),
+    ("fora de 80-120% do plano", 8),
+    ("áudio baixo", 20),
+    ("frames pretos", 8),
+    ("não foi possível verificar frames", 5),
+    ("bitrate baixo", 10),
+    ("thumbnail ausente", 15),
+    ("thumbnail com baixa variação", 10),
+    ("ausente ou corrompido", 12),
+    ("não é 1080x1920", 8),
+]
+
+
+def _quality_score(status: str, warnings: list[str]) -> int:
+    """Score 0-100 derivado SOMENTE das checagens reais acima: 100 sem warnings;
+    cada warning desconta seu peso. qc_failed_* (defeito fatal) zera."""
+    if status.startswith("qc_failed"):
+        return 0
+    total = 100
+    for w in warnings:
+        weight = next((wt for prefix, wt in _WARNING_WEIGHTS if w.startswith(prefix)), 10)
+        total -= weight
+    return max(5, total)
 
     # ---- ffprobe helpers ----
     @staticmethod

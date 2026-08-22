@@ -308,6 +308,55 @@ _LANG_NAMES = {
 def _lang_name(code: str) -> str:
     return _LANG_NAMES.get((code or "pt").lower().split("-")[0], code or "português do Brasil")
 
+
+# Estratégia de roteiro por estágio de maturidade do canal (PlatformAccount.channel_stage).
+# É o substituto do "cold start": enquanto performance_insights ainda não tem dados
+# reais suficientes, estas regras de mecânica de plataforma guiam o roteiro.
+_STAGE_GUIDANCE = {
+    "new": (
+        "=== ESTÁGIO DO CANAL: NOVO (sem autoridade ainda) ===\n"
+        "Este canal está começando — o algoritmo não o conhece. Aplique:\n"
+        "- GANCHO DIRETO nos primeiros 2 segundos: promessa concreta do que o "
+        "espectador ganha, sem apresentação do canal (ninguém conhece ainda).\n"
+        "- SEO DE DESCOBERTA: o título e a narração devem conter as palavras que "
+        "alguém PESQUISARIA sobre este tema — busca é a porta de entrada de canal novo.\n"
+        "- CTA DE CRESCIMENTO: termine pedindo inscrição/seguir com um MOTIVO "
+        "('inscreva-se para a parte 2' / 'todo dia tem um caso assim'), não um 'se inscreva' vazio.\n"
+        "- DURAÇÃO ENXUTA: prefira o piso da faixa de duração — retenção alta em "
+        "vídeo menor vale mais para canal novo do que vídeo longo com queda no meio.\n"
+        "- ZERO referências internas ('como vocês viram no vídeo anterior') — cada "
+        "vídeo precisa funcionar para quem nunca viu o canal.\n"
+        "=== FIM ESTÁGIO ===\n"
+    ),
+    "growing": (
+        "=== ESTÁGIO DO CANAL: EM CRESCIMENTO ===\n"
+        "O canal já tem alguma tração. Equilibre descoberta e fidelização:\n"
+        "- Gancho forte nos primeiros 3 segundos, mas pode assumir MÍNIMA "
+        "familiaridade com o nicho (não com o canal).\n"
+        "- CTA duplo: inscrição para quem chegou novo + pergunta nos comentários "
+        "para gerar engajamento (comentários pesam no algoritmo).\n"
+        "- Quando o tema permitir, termine com um gancho para o PRÓXIMO vídeo "
+        "relacionado (sessão mais longa = canal promovido).\n"
+        "=== FIM ESTÁGIO ===\n"
+    ),
+    "established": (
+        "=== ESTÁGIO DO CANAL: ESTABELECIDO ===\n"
+        "O canal já tem audiência própria. Priorize comunidade e profundidade:\n"
+        "- Pode aprofundar mais o tema e usar duração no topo da faixa — a base "
+        "de inscritos sustenta vídeos mais densos.\n"
+        "- Referências a vídeos/quadros anteriores são bem-vindas (recompensam o "
+        "inscrito fiel e criam identidade).\n"
+        "- CTA leve: a base já segue o canal; foque em comentário/compartilhamento.\n"
+        "=== FIM ESTÁGIO ===\n"
+    ),
+}
+
+
+def _stage_prompt_block(stage: str | None) -> str:
+    # Estágio desconhecido/vazio cai no guidance "growing" — nunca silencia o bloco.
+    return _STAGE_GUIDANCE.get(stage) or _STAGE_GUIDANCE["growing"]
+
+
 # Kept for backward-compat imports from other modules; logic is now in SYSTEM (v2.1).
 RETENTION_RULES = ""
 
@@ -409,7 +458,8 @@ class ScriptwriterAgent(BaseAgent):
         video_format: str = "long",
         **_,
     ) -> dict:
-        language = language or settings.default_language
+        from backend import runtime_settings
+        language = language or runtime_settings.effective_language()
         theme = topic or title
         if content_type in (None, "", "auto"):
             content_type = self._detect_content_type(theme)
@@ -624,6 +674,13 @@ class ScriptwriterAgent(BaseAgent):
         # analytics). Empty until enough measured videos exist. See performance.py.
         perf_block = self.ctx_get("performance_insights") or ""
 
+        # Cold-start strategy: a NEW channel has no measured history, so
+        # perf_block stays empty and the script would get NO guidance at all.
+        # The channel's declared stage (new|growing|established) fills that gap
+        # with proven platform mechanics instead — discovery SEO + subscribe CTA
+        # for new channels, community/depth for established ones.
+        stage_block = _stage_prompt_block(self.ctx_get("channel_stage"))
+
         is_narrated = content_type != "quote_viral"
         schema_extra = (
             '  "has_narration": true,\n'
@@ -645,7 +702,7 @@ Modo: {mode}
 content_type: {content_type}
 video_format: {video_format}
 
-{guide}{style_hint}{coach_block}{perf_block}{facts_block}{story_block}
+{guide}{style_hint}{coach_block}{perf_block}{stage_block}{facts_block}{story_block}
 {length_block}
 
 Responda com JSON neste formato EXATO:

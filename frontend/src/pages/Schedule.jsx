@@ -424,7 +424,7 @@ export default function Schedule() {
                     </p>
                   </div>
                   <span className="badge shrink-0"
-                    style={{ background: 'var(--accent-dim)', color: 'var(--accent)', border: '1px solid rgba(31,138,91,0.22)' }}>
+                    style={{ background: 'var(--accent-dim)', color: 'var(--accent)', border: '1px solid var(--border-glow)' }}>
                     {driveCfg.video_source_mode === 'ai' ? 'IA' : driveCfg.video_source_mode === 'drive' ? 'Drive' : 'Misto'}
                   </span>
                 </div>

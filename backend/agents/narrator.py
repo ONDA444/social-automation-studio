@@ -21,6 +21,7 @@ import edge_tts
 import httpx
 
 from backend.agents.base_agent import BaseAgent
+from backend import runtime_settings
 from backend.config import settings
 
 LMNT_BYTES_URL = "https://api.lmnt.com/v1/ai/speech/bytes"
@@ -60,10 +61,10 @@ class NarratorAgent(BaseAgent):
     ) -> dict:
         script = script or self.ctx_get("script") or {}
         content_type = script.get("content_type", content_type)
-        language = language or self.ctx_get("language") or settings.default_language
+        language = language or self.ctx_get("language") or runtime_settings.effective_language()
         # Honour the channel's configured voice: explicit param > ctx > language default.
         voice = voice or self.ctx_get("voice") or self._default_voice_for(language)
-        rate = RATE_BY_CONTENT.get(content_type, settings.tts_rate or "+8%")
+        rate = RATE_BY_CONTENT.get(content_type, runtime_settings.effective_tts_rate())
         self._language = language
         # Voice-integrity tracking — which provider actually spoke, and whether we had to
         # fall back to a path that DROPS the requested voice/gender (gTTS / clone-failed).
@@ -136,12 +137,12 @@ class NarratorAgent(BaseAgent):
         # operator can set e.g. a female default without touching code. Other languages
         # use a sensible matched voice (the configured default may be pt-only).
         if root == "pt":
-            return settings.default_tts_voice or "pt-BR-AntonioNeural"
+            return runtime_settings.effective_voice()
         table = {
             "en": "en-US-GuyNeural", "es": "es-ES-AlvaroNeural",
             "fr": "fr-FR-HenriNeural", "de": "de-DE-ConradNeural", "it": "it-IT-DiegoNeural",
         }
-        return table.get(root, settings.default_tts_voice)
+        return table.get(root, runtime_settings.effective_voice())
 
     async def _synthesize(self, text: str, voice: str, rate: str, audio_path: Path):
         """Provider chain: LMNT cloned voice -> edge-tts fallback.
@@ -150,7 +151,7 @@ class NarratorAgent(BaseAgent):
         channels. English/other-language channels go straight to a language-matched
         edge-tts voice — otherwise the pt clone would speak English with a pt accent.
         """
-        lang = (getattr(self, "_language", None) or settings.default_language or "pt-BR").lower()
+        lang = (getattr(self, "_language", None) or runtime_settings.effective_language()).lower()
         explicit_clone = bool(voice) and voice.startswith("v_")
 
         # FREE per-channel preset voice (an edge-tts voice NAME, e.g. pt-BR-FabioNeural)

@@ -262,6 +262,7 @@ def create_jobs_batch(payload: JobBatchCreate, db: Session = Depends(get_db)):
 def list_jobs(
     status: str | None = Query(None),
     account_id: int | None = Query(None),
+    q: str | None = Query(None, max_length=200),
     limit: int = Query(100, le=500),
     db: Session = Depends(get_db),
 ):
@@ -273,6 +274,16 @@ def list_jobs(
     if account_id is not None:
         stmt = stmt.where(VideoJob.account_id == account_id)
         count_stmt = count_stmt.where(VideoJob.account_id == account_id)
+    if q and q.strip():
+        # Busca server-side: sem ela, o filtro de texto da Fila só enxergava os
+        # jobs já carregados na página (silent truncation). ILIKE no SQLite é
+        # case-insensitive para ASCII — suficiente para títulos/tipos.
+        like = f"%{q.strip()}%"
+        cond = (VideoJob.title.ilike(like)
+                | VideoJob.topic.ilike(like)
+                | VideoJob.content_type.ilike(like))
+        stmt = stmt.where(cond)
+        count_stmt = count_stmt.where(cond)
     jobs = db.execute(stmt).scalars().all()
     # `total` ignores `limit` so the frontend can tell "showing 200 of N" and
     # offer to load more instead of silently truncating the list.
@@ -379,6 +390,12 @@ def approve_job(job_id: int, db: Session = Depends(get_db)):
             dispatch_error = str(exc)
         if dispatched:
             note = None
+            try:
+                from backend.agents.automation_engine import evaluate
+
+                evaluate("job_approved", job_id)
+            except Exception:  # noqa: BLE001 — automação nunca bloqueia a aprovação
+                logger.debug("automação job_approved (job %s) ignorada", job_id)
         elif dispatch_error:
             note = dispatch_error
             job.error_message = dispatch_error

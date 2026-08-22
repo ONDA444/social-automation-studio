@@ -5,6 +5,7 @@ import { useWs, useDashboardStatus } from '../App.jsx'
 import VideoCard from '../components/VideoCard.jsx'
 import AgentLog from '../components/AgentLog.jsx'
 import AddJobModal from '../components/AddJobModal.jsx'
+import CommandCenter from '../components/CommandCenter.jsx'
 import { PageHeader, SectionCard, StatTile, EmptyState } from '../components/ui.jsx'
 import { fmtNum } from '../lib'
 
@@ -68,12 +69,15 @@ export default function Dashboard() {
       )}
 
       {/* Stat tiles */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 stagger">
         {stats.map((s) => (
           <StatTile key={s.label} label={s.label} value={s.value} format={s.format}
             accent={s.accent} icon={s.icon} onClick={() => nav(s.to)} />
         ))}
       </div>
+
+      {/* Command Center — status ao vivo do sistema */}
+      <CommandCenter />
 
       {/* Recent videos + live agent */}
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
@@ -84,7 +88,7 @@ export default function Dashboard() {
                   hint='Clique em "+ Novo vídeo" para gerar o primeiro.'
                   action={<button className="btn btn-primary text-sm" onClick={() => setModal(true)}>+ Novo vídeo</button>} />
               : (
-                <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                <div className="grid grid-cols-2 md:grid-cols-3 gap-3 stagger">
                   {(data.recent_jobs || []).map((j) => (
                     <VideoCard key={j.id} job={j} onClick={() => nav('/queue')} />
                   ))}

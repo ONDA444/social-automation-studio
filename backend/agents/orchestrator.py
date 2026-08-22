@@ -49,6 +49,16 @@ def _emit_job(job_id: int, **fields) -> None:
     publish_event({"type": "job_update", "job_id": job_id, **fields})
 
 
+def _fire_automation(trigger: str, job_id: int) -> None:
+    """Dispara as regras de automação (§27) sem nunca atrasar/derrubar o pipeline."""
+    try:
+        from backend.agents.automation_engine import evaluate
+
+        evaluate(trigger, job_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("automação %s (job %s) ignorada: %s", trigger, job_id, exc)
+
+
 def _channel_config_from_account(acct) -> dict:
     """Map a PlatformAccount → the scriptwriter's CHANNEL CONFIG shape.
 
@@ -100,7 +110,8 @@ async def run_pipeline(job_id: int) -> dict:
                 require_approval = True
                 logger.info("Trending job %s stale (%.1fh) -> approval, not auto-publish.", job_id, age_h)
         voice = None
-        language = settings.default_language
+        from backend import runtime_settings
+        language = runtime_settings.effective_language()
         music_style = "balanced"  # calm | balanced | energetic (per-channel music vibe)
         if job.account_id:
             acct = db.get(PlatformAccount, job.account_id)
@@ -119,6 +130,9 @@ async def run_pipeline(job_id: int) -> dict:
         ctx["language"] = language  # narrator/agents read the channel language from here
         ctx["voice"] = voice        # channel's configured voice, available to all agents
         ctx["music_style"] = music_style  # editing_director adapts the music vibe per channel
+        # Estágio do canal (new|growing|established) — o roteirista adapta a
+        # estratégia do roteiro (canal novo: SEO de descoberta + CTA de inscrição).
+        ctx["channel_stage"] = (getattr(acct, "channel_stage", None) if job.account_id else None) or "growing"
         ctx["target_platforms"] = job.target_platforms or ["youtube", "tiktok", "instagram"]
         ctx["format"] = getattr(job, "video_format", "long") or "long"  # long(16:9) | short(9:16)
         if job.style_dna:
@@ -323,12 +337,14 @@ async def run_pipeline(job_id: int) -> dict:
             # is ONLY for the scheduler's automation — a manually created video
             # (require_approval) always stops at the gate so the user can choose to
             # post or not. Without a channel, or with AUTO_PUBLISH off, the gate stays.
-            if settings.auto_publish and job.account_id is not None and not require_approval:
+            from backend import runtime_settings
+            if runtime_settings.effective_auto_publish() and job.account_id is not None and not require_approval:
                 if job.scheduled_at is None:
                     job.scheduled_at = datetime.utcnow()
                 upd(status=JobStatus.APPROVED, progress=100, agent=None, approval_status="approved")
                 _emit_job(job_id, status="approved", qc=qc, compliance=comp,
                           voice_fallback_used=voice_fallback_used)
+                _fire_automation("job_approved", job_id)
                 # "schedule" mode: upload to YouTube NOW as scheduled (publishAt = the
                 # future slot) instead of waiting for _job_publish_due — that's what
                 # makes it show as "Agendado" and go public exactly at the slot.
@@ -362,12 +378,14 @@ async def run_pipeline(job_id: int) -> dict:
 
             upd(status=JobStatus.AWAITING_APPROVAL, progress=100, agent=None, approval_status="pending")
             _emit_job(job_id, status="awaiting_approval", qc=qc, compliance=comp)
+            _fire_automation("job_awaiting_approval", job_id)
             return {"status": "awaiting_approval", "qc": qc, "compliance": comp}
 
         except Exception as exc:  # noqa: BLE001
             logger.exception("run_pipeline falhou para job %s", job_id)
             upd(status=JobStatus.ERROR, agent=None, error_message=str(exc)[:500])
             _emit_job(job_id, status="error", error=str(exc)[:500])
+            _fire_automation("job_error", job_id)
             return {"status": "error", "error": str(exc)}
     finally:
         db.close()
