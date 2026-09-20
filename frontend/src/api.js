@@ -5,8 +5,14 @@
 // (HTML, not JSON), so every page stalls on its skeleton loader. Fall back to
 // the Railway backend by absolute URL there (CORS already allows *.vercel.app).
 // Override either case with VITE_API_URL.
-const RAILWAY_BACKEND = 'https://backend-production-d314e.up.railway.app'
-const _envBase = (import.meta.env.VITE_API_URL || '').trim()
+const RAILWAY_BACKEND = 'https://web-production-1476cf.up.railway.app'
+// Dead backend domains (expired Railway trials — edge returns 404 "Application
+// not found" for every route). A Vercel build that baked one of these into
+// VITE_API_URL would otherwise keep pointing at a corpse forever; ignore it so
+// the live fallback above wins until someone sets a correct VITE_API_URL.
+const _DEAD_HOSTS = ['backend-production-d314e.up.railway.app', 'web-production-3cbfc.up.railway.app']
+const _rawEnvBase = (import.meta.env.VITE_API_URL || '').trim()
+const _envBase = _DEAD_HOSTS.some((h) => _rawEnvBase.includes(h)) ? '' : _rawEnvBase
 const _onVercel = typeof location !== 'undefined' && location.hostname.endsWith('.vercel.app')
 export const API_BASE = _envBase || (_onVercel ? RAILWAY_BACKEND : '/api')
 const BASE = API_BASE
