@@ -1,0 +1,1 @@
+function a(t,{width:n=560,height:e=680}={}){const o=window.open("","onda-oauth",`width=${n},height=${e}`);if(o&&t){const i=setInterval(()=>{o.closed&&(clearInterval(i),t())},700)}return o}function c(t,n){t&&!t.closed?t.location=n:window.location.href=n}export{c as n,a as o};

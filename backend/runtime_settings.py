@@ -27,6 +27,17 @@ _DEFAULTS = {
     "monetization_enabled": lambda: "1" if (settings.monetization_cta or "").strip() else "0",
     "localize_languages": lambda: settings.localize_languages or "",
     "localize_enabled": lambda: "1" if (settings.localize_languages or "").strip() else "0",
+    # --- Produção (§31): padrões de narração/publicação editáveis em tempo real.
+    # Antes viviam só no .env; agora o dashboard pode ajustar sem redeploy. O
+    # pipeline lê os effective_* abaixo, que caem no valor do .env quando nada
+    # foi salvo ainda — comportamento idêntico para instalações existentes.
+    "default_tts_voice": lambda: settings.default_tts_voice or "pt-BR-AntonioNeural",
+    "default_language": lambda: settings.default_language or "pt-BR",
+    "tts_rate": lambda: settings.tts_rate or "+8%",
+    "default_privacy": lambda: settings.default_privacy or "private",
+    "auto_publish": lambda: "1" if settings.auto_publish else "0",
+    "trending_enabled": lambda: "1" if settings.trending_enabled else "0",
+    "max_trending_per_day": lambda: str(settings.max_trending_per_day or 4),
 }
 
 _CACHE: dict[str, str] = {}
@@ -128,3 +139,263 @@ def effective_localize_langs() -> list[str]:
     if get("localize_enabled") != "1":
         return []
     return [x.strip() for x in (get("localize_languages") or "").split(",") if x.strip()]
+
+
+# --- Produção: effective values consumidos pelo pipeline (§31) --------------
+
+def effective_voice() -> str:
+    return (get("default_tts_voice") or "pt-BR-AntonioNeural").strip()
+
+
+def effective_language() -> str:
+    return (get("default_language") or "pt-BR").strip()
+
+
+def effective_tts_rate() -> str:
+    return (get("tts_rate") or "+8%").strip()
+
+
+def effective_privacy() -> str:
+    value = (get("default_privacy") or "private").strip().lower()
+    return value if value in ("public", "unlisted", "private") else "private"
+
+
+def effective_auto_publish() -> bool:
+    return get("auto_publish") == "1"
+
+
+def effective_trending_enabled() -> bool:
+    return get("trending_enabled") == "1"
+
+
+def effective_max_trending() -> int:
+    try:
+        return max(1, int(get("max_trending_per_day") or "4"))
+    except ValueError:
+        return 4
+
+
+def get_production_config() -> dict:
+    """Snapshot completo dos knobs de produção para o dashboard."""
+    return {
+        "default_tts_voice": effective_voice(),
+        "default_language": effective_language(),
+        "tts_rate": effective_tts_rate(),
+        "default_privacy": effective_privacy(),
+        "auto_publish": effective_auto_publish(),
+        "trending_enabled": effective_trending_enabled(),
+        "max_trending_per_day": effective_max_trending(),
+    }
+
+
+_PRIVACY_VALUES = {"public", "unlisted", "private"}
+
+
+def update_production_config(payload: dict) -> dict:
+    """Persist knobs de produção vindos do dashboard, com validação.
+
+    Valores inválidos (privacidade fora da lista, tts_rate sem '%', limite de
+    trending < 1) são rejeitados com ValueError em vez de corromper o pipeline.
+    """
+    to_store: dict[str, str] = {}
+    if "default_tts_voice" in payload:
+        to_store["default_tts_voice"] = str(payload["default_tts_voice"] or "").strip()
+    if "default_language" in payload:
+        lang = str(payload["default_language"] or "").strip()
+        if not lang:
+            raise ValueError("default_language não pode ser vazio")
+        to_store["default_language"] = lang
+    if "tts_rate" in payload:
+        rate = str(payload["tts_rate"] or "").strip()
+        if not rate.endswith("%"):
+            raise ValueError("tts_rate deve terminar em '%' (ex.: +8%, -5%, +0%)")
+        to_store["tts_rate"] = rate
+    if "default_privacy" in payload:
+        privacy = str(payload["default_privacy"] or "").strip().lower()
+        if privacy not in _PRIVACY_VALUES:
+            raise ValueError(f"default_privacy inválido: {privacy!r}")
+        to_store["default_privacy"] = privacy
+    if "auto_publish" in payload:
+        to_store["auto_publish"] = "1" if payload["auto_publish"] else "0"
+    if "trending_enabled" in payload:
+        to_store["trending_enabled"] = "1" if payload["trending_enabled"] else "0"
+    if "max_trending_per_day" in payload:
+        n = int(payload["max_trending_per_day"])
+        if n < 1 or n > 50:
+            raise ValueError("max_trending_per_day deve ficar entre 1 e 50")
+        to_store["max_trending_per_day"] = str(n)
+    if to_store:
+        db = SessionLocal()
+        try:
+            for key, value in to_store.items():
+                row = db.get(AppSetting, key)
+                if row is None:
+                    db.add(AppSetting(key=key, value=value))
+                else:
+                    row.value = value
+            db.commit()
+        finally:
+            db.close()
+        _invalidate()
+    return get_production_config()
+
+
+# --- Chaves de API editáveis pelo Config (auto-serviço, sem .env/restart) ----
+#
+# Cada chave allowlistada pode ser salva pelo dashboard: persiste em
+# app_settings (linha `apikey_<ENV>`) e é aplicada no singleton `settings` na
+# hora, então todos os agentes passam a usar na próxima chamada — sem editar
+# .env e sem reiniciar. Salvar vazio apaga o override e volta ao .env.
+# O navegador nunca recebe valores, só status (configurada/ausente + origem).
+
+_API_KEYS = (
+    # (ENV, atributo no settings, testável via API)
+    ("GROQ_API_KEY", "groq_api_key", True),
+    ("GEMINI_API_KEY", "gemini_api_key", True),
+    ("OPENROUTER_API_KEY", "openrouter_api_key", True),
+    ("POLLINATIONS_TOKEN", "pollinations_token", False),
+    ("HUGGINGFACE_TOKEN", "huggingface_token", True),
+    ("PEXELS_API_KEY", "pexels_api_key", True),
+    ("PIXABAY_API_KEY", "pixabay_api_key", True),
+    ("LMNT_API_KEY", "lmnt_api_key", False),
+    ("LMNT_VOICE", "lmnt_voice", False),
+    ("GOOGLE_CLIENT_ID", "google_client_id", False),
+    ("GOOGLE_CLIENT_SECRET", "google_client_secret", False),
+    ("TIKTOK_CLIENT_KEY", "tiktok_client_key", False),
+    ("TIKTOK_CLIENT_SECRET", "tiktok_client_secret", False),
+    ("META_APP_ID", "meta_app_id", False),
+    ("META_APP_SECRET", "meta_app_secret", False),
+)
+_API_KEY_ATTRS = {env: attr for env, attr, _ in _API_KEYS}
+_API_KEY_TESTABLE = {env for env, _, t in _API_KEYS if t}
+
+# Snapshot dos valores vindos do .env no boot — a base para a qual um override
+# apagado retorna. Capturado no import, antes de qualquer override aplicado.
+_ENV_BASELINE = {attr: str(getattr(settings, attr, "") or "") for _, attr, _ in _API_KEYS}
+
+
+def _api_row(env: str) -> str:
+    return f"apikey_{env}"
+
+
+def effective_api_key(env: str) -> str:
+    """Valor vigente da chave: override do Config ou base do .env."""
+    rows = _load_raw()
+    stored = (rows.get(_api_row(env)) or "").strip()
+    if stored:
+        return stored
+    attr = _API_KEY_ATTRS.get(env)
+    if attr:
+        return _ENV_BASELINE.get(attr, "")
+    return ""
+
+
+def get_api_key_status() -> dict:
+    """Status por chave, SEM valores — seguro para o navegador."""
+    rows = _load_raw()
+    out: dict[str, dict] = {}
+    for env, attr, testable in _API_KEYS:
+        stored = (rows.get(_api_row(env)) or "").strip()
+        base = (_ENV_BASELINE.get(attr, "") or "").strip()
+        if stored:
+            out[env] = {"configured": True, "source": "painel", "testable": testable}
+        elif base:
+            out[env] = {"configured": True, "source": "servidor", "testable": testable}
+        else:
+            out[env] = {"configured": False, "source": "ausente", "testable": testable}
+    return out
+
+
+def _write_api_rows(to_store: dict[str, str], to_delete: list[str]) -> None:
+    db = SessionLocal()
+    try:
+        for key, value in to_store.items():
+            row = db.get(AppSetting, key)
+            if row is None:
+                db.add(AppSetting(key=key, value=value))
+            else:
+                row.value = value
+        for key in to_delete:
+            row = db.get(AppSetting, key)
+            if row is not None:
+                db.delete(row)
+        db.commit()
+    finally:
+        db.close()
+
+
+def set_api_key(env: str, value: str | None) -> dict:
+    """Salva (ou, com valor vazio, apaga) o override de uma chave. Vale na hora."""
+    if env not in _API_KEY_ATTRS:
+        raise ValueError(f"chave não gerenciável: {env!r}")
+    cleaned = (value or "").strip()
+    if cleaned:
+        _write_api_rows({_api_row(env): cleaned}, [])
+    else:
+        _write_api_rows({}, [_api_row(env)])
+    _invalidate()
+    apply_api_key_overrides()
+    return get_api_key_status()
+
+
+def apply_api_key_overrides() -> None:
+    """Aplica os overrides salvos no singleton `settings`. Nunca levanta."""
+    try:
+        rows = _load_raw()
+        for env, attr in _API_KEY_ATTRS.items():
+            try:
+                stored = (rows.get(_api_row(env)) or "").strip()
+                setattr(settings, attr, stored or _ENV_BASELINE.get(attr, ""))
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("override de %s ignorado: %s", env, exc)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("apply_api_key_overrides ignorado: %s", exc)
+
+
+# --- Teste barato de chave (validação real, sem gastar geração) --------------
+
+_API_KEY_TESTS = {
+    "GROQ_API_KEY": ("https://api.groq.com/openai/v1/models", "bearer"),
+    "GEMINI_API_KEY": ("https://generativelanguage.googleapis.com/v1beta/models", "query"),
+    "OPENROUTER_API_KEY": ("https://openrouter.ai/api/v1/models", "bearer"),
+    "HUGGINGFACE_TOKEN": ("https://huggingface.co/api/whoami", "bearer"),
+    "PEXELS_API_KEY": ("https://api.pexels.com/v1/search?query=teste&per_page=1", "pexels"),
+    "PIXABAY_API_KEY": ("https://pixabay.com/api/?q=teste&per_page=3", "pixabay"),
+}
+
+
+def check_api_key(env: str) -> dict:
+    """Valida a chave vigente contra a API do provedor. Nunca expõe a chave."""
+    if env not in _API_KEY_ATTRS:
+        raise ValueError(f"chave não gerenciável: {env!r}")
+    if env not in _API_KEY_TESTS:
+        return {"ok": False, "detail": "teste automático indisponível p/ esta chave (confira no site do provedor)"}
+    key = effective_api_key(env)
+    if not key:
+        return {"ok": False, "detail": "chave ausente — salve uma antes de testar"}
+    import urllib.request
+
+    url, mode = _API_KEY_TESTS[env]
+    try:
+        req = urllib.request.Request(url, method="GET")
+        if mode == "bearer":
+            req.add_header("Authorization", f"Bearer {key}")
+        elif mode == "pexels":
+            req.add_header("Authorization", key)
+        elif mode == "query":
+            url = f"{url}?key={key}"
+            req = urllib.request.Request(url, method="GET")
+        elif mode == "pixabay":
+            url = f"{url}&key={key}"
+            req = urllib.request.Request(url, method="GET")
+        with urllib.request.urlopen(req, timeout=15) as res:
+            if res.status == 200:
+                return {"ok": True, "detail": "chave válida"}
+            return {"ok": False, "detail": f"resposta inesperada (HTTP {res.status})"}
+    except Exception as exc:  # noqa: BLE001
+        msg = str(exc)
+        if "401" in msg or "403" in msg:
+            return {"ok": False, "detail": "chave rejeitada pelo provedor (401/403) — confira e salve de novo"}
+        if "400" in msg:
+            return {"ok": False, "detail": "chave rejeitada pelo provedor (400) — confira e salve de novo"}
+        return {"ok": False, "detail": f"falha ao validar: {msg[:120]}"}

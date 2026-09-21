@@ -10,6 +10,9 @@ const KEYS = [
   { env: 'PEXELS_API_KEY', label: 'Pexels (stock footage)', tier: 'grátis', url: 'https://www.pexels.com/api' },
   { env: 'GOOGLE_CLIENT_ID', label: 'YouTube OAuth', tier: 'grátis', url: 'https://console.cloud.google.com' },
   { env: 'TIKTOK_CLIENT_KEY', label: 'TikTok Content Posting (aprovação 3-5 dias)', tier: 'aprovação', url: 'https://developers.tiktok.com' },
+  { env: 'OPENROUTER_API_KEY', label: 'OpenRouter (fallback LLM)', tier: 'grátis', url: 'https://openrouter.ai/keys' },
+  { env: 'PIXABAY_API_KEY', label: 'Pixabay (stock footage)', tier: 'grátis', url: 'https://pixabay.com/api/docs' },
+  { env: 'LMNT_API_KEY', label: 'LMNT (voz clonada)', tier: 'conta', url: 'https://app.lmnt.com' },
   { env: 'META_APP_ID', label: 'Instagram / Meta Graph', tier: 'grátis', url: 'https://developers.facebook.com' },
 ]
 
@@ -31,6 +34,136 @@ function Toggle({ on, onChange }) {
         style={{ width: 20, height: 20, left: on ? 20 : 2 }}
       />
     </button>
+  )
+}
+
+function ApiKeysCard() {
+  const [status, setStatus] = useState(null)
+  const [inputs, setInputs] = useState({})
+  const [busy, setBusy] = useState({})
+  const [msgs, setMsgs] = useState({})
+  const [loadErr, setLoadErr] = useState(null)
+
+  useEffect(() => {
+    api.get('/settings/api-keys')
+      .then((r) => setStatus(r.keys || {}))
+      .catch((e) => setLoadErr(e.message))
+  }, [])
+
+  const setInput = (env, v) => setInputs((p) => ({ ...p, [env]: v }))
+  const setMsg = (env, m) => setMsgs((p) => ({ ...p, [env]: m }))
+  const setBusyKey = (env, v) => setBusy((p) => ({ ...p, [env]: v }))
+
+  const save = async (env) => {
+    const value = (inputs[env] || '').trim()
+    if (!value) { setMsg(env, { ok: false, text: 'Cole a chave antes de salvar.' }); return }
+    setBusyKey(env, 'save'); setMsg(env, null)
+    try {
+      const r = await api.put('/settings/api-keys', { key: env, value })
+      setStatus(r.keys || {})
+      setInput(env, '')
+      setMsg(env, { ok: true, text: 'Salva e já valendo — sem restart.' })
+    } catch (e) {
+      setMsg(env, { ok: false, text: e.message })
+    } finally {
+      setBusyKey(env, null)
+    }
+  }
+
+  const clear = async (env) => {
+    setBusyKey(env, 'clear'); setMsg(env, null)
+    try {
+      const r = await api.put('/settings/api-keys', { key: env, value: '' })
+      setStatus(r.keys || {})
+      setInput(env, '')
+      setMsg(env, { ok: true, text: 'Override apagado — voltou ao .env do servidor.' })
+    } catch (e) {
+      setMsg(env, { ok: false, text: e.message })
+    } finally {
+      setBusyKey(env, null)
+    }
+  }
+
+  const test = async (env) => {
+    setBusyKey(env, 'test'); setMsg(env, null)
+    try {
+      const r = await api.post('/settings/api-keys/test', { key: env })
+      setMsg(env, r.ok ? { ok: true, text: r.detail } : { ok: false, text: r.detail })
+    } catch (e) {
+      setMsg(env, { ok: false, text: e.message })
+    } finally {
+      setBusyKey(env, null)
+    }
+  }
+
+  const pill = (env) => {
+    const st = status && status[env]
+    if (!st || !st.configured) {
+      return <span className="badge text-[10px] shrink-0" style={{ background: 'rgba(255,255,255,0.06)', color: 'var(--text-muted)' }}>ausente</span>
+    }
+    const painel = st.source === 'painel'
+    return (
+      <span className="badge text-[10px] shrink-0" title={painel ? 'Salva por aqui, vale na hora' : 'Vinda do .env do servidor'}
+        style={{ background: painel ? 'rgba(0,214,143,.15)' : 'rgba(124,106,255,.15)', color: painel ? 'var(--success)' : 'var(--accent)' }}>
+        {painel ? 'no painel' : 'no servidor'}
+      </span>
+    )
+  }
+
+  return (
+    <SectionCard title="Chaves de API">
+      <p className="text-[11px] text-text-muted text-right mb-3">🔐 Valores nunca voltam ao navegador</p>
+      <p className="text-xs text-text-muted mb-4">
+        Clica em <em>obter ↗</em>, copia a chave no site do provedor, cola abaixo e salva — vale na hora, sem mexer no <code className="font-mono">.env</code> nem reiniciar.
+        Apagar volta ao <code className="font-mono">.env</code> do servidor. Sem chaves, o sistema usa fallbacks offline.
+      </p>
+      {loadErr && <p className="text-xs mb-3" style={{ color: 'var(--error)' }}>Não deu pra ler o status: {loadErr}</p>}
+      <div className="space-y-3">
+        {KEYS.map((k) => {
+          const st = status && status[k.env]
+          const b = busy[k.env]
+          const m = msgs[k.env]
+          return (
+            <div key={k.env} className="py-2 border-b last:border-0" style={{ borderColor: 'rgba(255,255,255,0.05)' }}>
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
+                <code className="font-mono text-[12px] text-accent w-full sm:w-48 sm:shrink-0 break-all">{k.env}</code>
+                <span className="flex-1 min-w-0">{k.label}</span>
+                {pill(k.env)}
+                <span className="badge text-[10px]" style={{ background: k.tier === 'grátis' ? 'rgba(0,214,143,.15)' : 'rgba(255,182,39,.15)', color: k.tier === 'grátis' ? 'var(--success)' : 'var(--warning)' }}>{k.tier}</span>
+                <a href={k.url} target="_blank" rel="noreferrer" className="text-text-muted hover:text-accent text-xs shrink-0">obter ↗</a>
+              </div>
+              <div className="flex flex-wrap items-center gap-2 mt-2">
+                <input
+                  type="password"
+                  value={inputs[k.env] || ''}
+                  onChange={(e) => setInput(k.env, e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') save(k.env) }}
+                  placeholder="colar nova chave…"
+                  autoComplete="off"
+                  className="input flex-1 min-w-[180px] font-mono text-xs"
+                />
+                <button onClick={() => save(k.env)} disabled={b} className="btn-primary text-xs px-3 py-1.5">
+                  {b === 'save' ? 'Salvando…' : 'Salvar'}
+                </button>
+                {st && st.configured && st.source === 'painel' && (
+                  <button onClick={() => clear(k.env)} disabled={b} className="btn-ghost text-xs px-3 py-1.5">
+                    {b === 'clear' ? 'Apagando…' : 'Apagar'}
+                  </button>
+                )}
+                {st && st.testable && (
+                  <button onClick={() => test(k.env)} disabled={b} className="btn-ghost text-xs px-3 py-1.5">
+                    {b === 'test' ? 'Testando…' : 'Testar'}
+                  </button>
+                )}
+              </div>
+              {m && (
+                <p className="text-xs mt-1.5" style={{ color: m.ok ? 'var(--success)' : 'var(--error)' }}>{m.text}</p>
+              )}
+            </div>
+          )
+        })}
+      </div>
+    </SectionCard>
   )
 }
 
@@ -160,6 +293,159 @@ function MonetizationCard() {
   )
 }
 
+function ProductionCard() {
+  const VOICES = [
+    'pt-BR-AntonioNeural', 'pt-BR-FranciscaNeural', 'pt-BR-ThalitaMultilingualNeural',
+    'en-US-GuyNeural', 'en-US-JennyNeural', 'es-ES-AlvaroNeural', 'es-ES-ElviraNeural',
+  ]
+  const [cfg, setCfg] = useState(null)
+  const [saving, setSaving] = useState(false)
+  const [msg, setMsg] = useState(null)
+
+  useEffect(() => {
+    api.get('/settings/production').then(setCfg).catch((e) => setMsg({ ok: false, text: e.message }))
+  }, [])
+
+  const save = async () => {
+    setSaving(true); setMsg(null)
+    try {
+      const next = await api.put('/settings/production', cfg)
+      setCfg(next)
+      setMsg({ ok: true, text: 'Salvo. Vale imediatamente para os próximos vídeos — sem reiniciar.' })
+    } catch (e) {
+      setMsg({ ok: false, text: e.message })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const field = (k, v) => setCfg((c) => ({ ...c, [k]: v }))
+
+  if (!cfg) {
+    return (
+      <SectionCard title="Produção">
+        <div className="skeleton h-40 rounded-card" />
+      </SectionCard>
+    )
+  }
+
+  const inputStyle = {
+    background: 'var(--bg-base, rgba(0,0,0,0.25))',
+    border: '1px solid var(--border)',
+    color: 'var(--text-primary)',
+  }
+
+  return (
+    <SectionCard title="Produção" sub="Padrões de narração e publicação — editáveis sem reiniciar o sistema.">
+      {/* Voz e idioma padrão */}
+      <div className="grid sm:grid-cols-2 gap-4 mb-5">
+        <div>
+          <p className="font-medium text-sm mb-1">Voz padrão da narração</p>
+          <select
+            value={cfg.default_tts_voice}
+            onChange={(e) => field('default_tts_voice', e.target.value)}
+            className="w-full rounded-card px-3 py-2 text-sm"
+            style={inputStyle}
+          >
+            {VOICES.map((v) => <option key={v} value={v}>{v}</option>)}
+            {!VOICES.includes(cfg.default_tts_voice) && <option value={cfg.default_tts_voice}>{cfg.default_tts_voice}</option>}
+          </select>
+          <p className="text-xs text-text-muted mt-1">Vozes neurais grátis (edge-tts). Canais com voz própria continuam usando a deles.</p>
+        </div>
+        <div>
+          <p className="font-medium text-sm mb-1">Idioma padrão</p>
+          <select
+            value={cfg.default_language}
+            onChange={(e) => field('default_language', e.target.value)}
+            className="w-full rounded-card px-3 py-2 text-sm"
+            style={inputStyle}
+          >
+            {['pt-BR', 'en-US', 'es-ES'].map((l) => <option key={l} value={l}>{l}</option>)}
+            {!['pt-BR', 'en-US', 'es-ES'].includes(cfg.default_language) && <option value={cfg.default_language}>{cfg.default_language}</option>}
+          </select>
+          <p className="text-xs text-text-muted mt-1">Usado quando o vídeo/canal não define idioma próprio.</p>
+        </div>
+        <div>
+          <p className="font-medium text-sm mb-1">Ritmo da narração</p>
+          <select
+            value={cfg.tts_rate}
+            onChange={(e) => field('tts_rate', e.target.value)}
+            className="w-full rounded-card px-3 py-2 text-sm"
+            style={inputStyle}
+          >
+            {['-5%', '+0%', '+5%', '+8%', '+12%', '+15%', '+20%'].map((r) => <option key={r} value={r}>{r}</option>)}
+          </select>
+          <p className="text-xs text-text-muted mt-1">+8% soa natural em pt-BR; acelere para conteúdos dinâmicos (ex.: esportes).</p>
+        </div>
+        <div>
+          <p className="font-medium text-sm mb-1">Privacidade padrão ao publicar</p>
+          <select
+            value={cfg.default_privacy}
+            onChange={(e) => field('default_privacy', e.target.value)}
+            className="w-full rounded-card px-3 py-2 text-sm"
+            style={inputStyle}
+          >
+            <option value="private">Privado (seguro)</option>
+            <option value="unlisted">Não listado</option>
+            <option value="public">Público (alcança o público)</option>
+          </select>
+          <p className="text-xs text-text-muted mt-1">Aplicada quando o job não escolhe uma privacidade própria.</p>
+        </div>
+      </div>
+
+      {/* Toggles de automação */}
+      <div className="space-y-4">
+        <div className="flex items-start gap-3">
+          <Toggle on={cfg.auto_publish} onChange={(v) => field('auto_publish', v)} />
+          <div className="flex-1">
+            <p className="font-medium text-sm">Publicação automática (modo hands-off)</p>
+            <p className="text-xs text-text-muted">
+              Vídeos de canais (agendados) são gerados e publicados <strong>sem passar pela sua aprovação</strong>.
+              Desligado = todo vídeo para na fila de Aprovações. Recomendo ligar só quando o canal já estiver afinado.
+            </p>
+          </div>
+        </div>
+        <div className="flex items-start gap-3">
+          <Toggle on={cfg.trending_enabled} onChange={(v) => field('trending_enabled', v)} />
+          <div className="flex-1">
+            <p className="font-medium text-sm">Momento em alta (trending)</p>
+            <p className="text-xs text-text-muted">
+              Detecta assuntos em alta e gera vídeos sobre eles automaticamente (respeitando aprovação e quota).
+            </p>
+          </div>
+        </div>
+        <div className="flex items-center gap-3">
+          <p className="font-medium text-sm flex-1">Máximo de trending por dia (por canal)</p>
+          <input
+            type="number" min="1" max="50"
+            value={cfg.max_trending_per_day}
+            onChange={(e) => field('max_trending_per_day', Number(e.target.value))}
+            className="w-24 rounded-card px-3 py-2 text-sm text-center"
+            style={inputStyle}
+          />
+        </div>
+      </div>
+
+      <div className="flex items-center gap-3 mt-5">
+        <button
+          type="button"
+          onClick={save}
+          disabled={saving}
+          className="rounded-card px-4 py-2 text-sm font-semibold disabled:opacity-50"
+          style={{ background: 'var(--accent)', color: '#04110b' }}
+        >
+          {saving ? 'Salvando…' : 'Salvar'}
+        </button>
+        {msg && (
+          <span className="text-xs" style={{ color: msg.ok ? 'var(--success)' : 'var(--error)' }}>
+            {msg.text}
+          </span>
+        )}
+      </div>
+    </SectionCard>
+  )
+}
+
 function FixErrorsCard() {
   const [busy, setBusy] = useState(false)
   const [result, setResult] = useState(null)
@@ -254,7 +540,7 @@ export default function Settings() {
 
   return (
     <div className="space-y-6 max-w-3xl fade-in">
-      <PageHeader title="Configurações" sub="Sistema, monetização e chaves de API." />
+      <PageHeader title="Configurações" sub="Sistema, produção, monetização e chaves de API." />
 
       <SectionCard title="Status dos serviços">
         {!health ? (
@@ -278,25 +564,11 @@ export default function Settings() {
 
       <FixErrorsCard />
 
+      <ProductionCard />
+
       <MonetizationCard />
 
-      <SectionCard title="Chaves de API">
-        <p className="text-[11px] text-text-muted text-right mb-3">🔐 Chaves salvas somente no servidor</p>
-        <p className="text-xs text-text-muted mb-4">
-          As chaves são lidas do arquivo <code className="font-mono">.env</code> no servidor (nunca expostas ao navegador).
-          Edite o <code className="font-mono">.env</code> e reinicie o backend. Sem chaves, o sistema usa fallbacks offline (roteiro template + imagens placeholder).
-        </p>
-        <div className="space-y-2">
-          {KEYS.map((k) => (
-            <div key={k.env} className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm py-2 border-b last:border-0" style={{ borderColor: 'rgba(255,255,255,0.05)' }}>
-              <code className="font-mono text-[12px] text-accent w-full sm:w-48 sm:shrink-0 break-all">{k.env}</code>
-              <span className="flex-1 min-w-0">{k.label}</span>
-              <span className="badge text-[10px]" style={{ background: k.tier === 'grátis' ? 'rgba(0,214,143,.15)' : 'rgba(255,182,39,.15)', color: k.tier === 'grátis' ? 'var(--success)' : 'var(--warning)' }}>{k.tier}</span>
-              <a href={k.url} target="_blank" rel="noreferrer" className="text-text-muted hover:text-accent text-xs shrink-0">obter ↗</a>
-            </div>
-          ))}
-        </div>
-      </SectionCard>
+      <ApiKeysCard />
     </div>
   )
 }
