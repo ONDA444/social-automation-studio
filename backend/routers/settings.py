@@ -5,7 +5,7 @@ of every YouTube description, and the languages each video is localized into.
 Persisted in app_settings (see backend.runtime_settings)."""
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from backend import runtime_settings
@@ -56,5 +56,40 @@ def put_production(cfg: ProductionConfig) -> dict:
     try:
         return runtime_settings.update_production_config(payload)
     except ValueError as exc:
-        from fastapi import HTTPException
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+# --- Chaves de API (auto-serviço: salva pelo Config, vale na hora) -----------
+
+class ApiKeySave(BaseModel):
+    key: str
+    value: str | None = None
+
+
+class ApiKeyTest(BaseModel):
+    key: str
+
+
+@router.get("/api-keys")
+def list_api_keys() -> dict:
+    """Status das chaves (configurada/ausente + origem). Nunca expõe valores."""
+    return {"keys": runtime_settings.get_api_key_status()}
+
+
+@router.put("/api-keys")
+def save_api_key(payload: ApiKeySave) -> dict:
+    """Salva o override de uma chave (vazio = volta ao .env). Vale na hora."""
+    try:
+        keys = runtime_settings.set_api_key(payload.key.strip().upper(), payload.value)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"keys": keys}
+
+
+@router.post("/api-keys/test")
+def test_api_key(payload: ApiKeyTest) -> dict:
+    """Valida a chave vigente contra o provedor. Nunca expõe a chave."""
+    try:
+        return runtime_settings.check_api_key(payload.key.strip().upper())
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc

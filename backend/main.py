@@ -321,6 +321,12 @@ async def _on_startup() -> None:
         ensure_default_rules()
     except Exception as exc:  # noqa: BLE001
         logger.warning("seed de regras de automação falhou: %s", exc)
+    try:
+        from backend import runtime_settings as _runtime_settings
+
+        _runtime_settings.apply_api_key_overrides()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("overrides de chaves de API falharam (ignorados): %s", exc)
     events.set_main_loop(asyncio.get_running_loop())
     # Best-effort live-event relay; no-op if Redis is down.
     asyncio.create_task(events.redis_listener())
