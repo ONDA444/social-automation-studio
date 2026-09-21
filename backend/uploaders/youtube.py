@@ -20,9 +20,16 @@ logger = logging.getLogger("studio.youtube")
 
 SCOPES = [
     "https://www.googleapis.com/auth/youtube.upload",
-    "https://www.googleapis.com/auth/youtube",
+    "https://www.googleapis.com/auth/youtube.readonly",
     "https://www.googleapis.com/auth/yt-analytics.readonly",
 ]
+# NOTA: o scope restrito `youtube` (acesso total) foi removido de propósito —
+# app não verificado em produção + scope restrito = Google barra o consent com
+# "Acesso bloqueado" 400. Com só sensíveis, aparece o aviso "app não
+# verificado" mas o usuário avança. O que precisava do total (legendas,
+# playlists, localização, branding) já era best-effort e continua degradando
+# com graça (log + segue o publish). vídeos.insert + thumbnails.set (o publish
+# em si) e as leituras funcionam com upload/readonly.
 
 
 # YouTube's snippet.tags has a hard ~500-char limit across ALL tags combined
@@ -238,7 +245,8 @@ def _fetch_channel(creds: dict) -> dict:
 # ---------------------------------------------------------------- playlists
 # Grouping uploads into a series/topic playlist is the cheapest session-time win
 # (a returning binge-viewer is worth 5-10x). All best-effort: a playlist failure
-# must NEVER affect the publish. Scope `youtube` already covers these (no re-consent).
+# must NEVER affect the publish. Precisa do scope total (não pedido no consent
+# atual) — sem ele, loga e segue sem playlist.
 #
 # In-memory, per-process cache of title -> playlist_id, keyed by refresh_token
 # (stable per connected channel, no extra API call needed to derive a key).
@@ -356,7 +364,7 @@ def set_localizations(creds: dict, video_id: str, default_language: str,
 # ---------------------------------------------------------------- channel branding (optimizer)
 # The writable subset of brandingSettings.channel. We NEVER send title (read-only —
 # channels.update returns channelTitleUpdateForbidden if it changes) or image fields
-# (read-only output). Scope `youtube` already covers these — no re-consent.
+# (read-only output). Precisa do scope total (não pedido no consent atual).
 _BRANDING_WRITABLE = ("keywords", "description", "country", "defaultLanguage",
                       "unsubscribedTrailer")
 
@@ -741,7 +749,8 @@ def upload_captions(credentials: dict, video_id: str, srt_path: str,
                     service_pair: tuple | None = None) -> dict:
     """Attach an SRT as a real YouTube caption track — search-indexable transcript +
     closed captions + free auto-translation (the cheapest international-reach lever for
-    a faceless channel). Uses the broad 'youtube' scope already in SCOPES (no re-consent).
+    a faceless channel). Precisa do scope `youtube.force-ssl` (não pedido no consent
+    atual) — roda e falha em silêncio quando sem permissão, sem re-consent.
     Strictly best-effort: a failure here must NEVER affect the video publish."""
     err = _missing_libs()
     if err:
