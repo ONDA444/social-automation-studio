@@ -58,11 +58,14 @@ class ApiKeySettingsTests(unittest.TestCase):
         with patch.object(runtime_settings, "_write_api_rows") as w:
             with patch.object(runtime_settings, "apply_api_key_overrides") as ap:
                 runtime_settings.set_api_key("GROQ_API_KEY", "  gsk_nova  ")
-                w.assert_called_once_with({"apikey_GROQ_API_KEY": "gsk_nova"}, [])
+                w.assert_called_once_with(
+                    {"apikey_GROQ_API_KEY": "gsk_nova",
+                     "apikey_GROQ_API_KEY_hint": "gsk_nov… (8 caracteres)"}, [])
                 ap.assert_called_once_with()
             with patch.object(runtime_settings, "apply_api_key_overrides"):
                 runtime_settings.set_api_key("GROQ_API_KEY", "   ")
-                w.assert_called_with({}, ["apikey_GROQ_API_KEY"])
+                w.assert_called_with(
+                    {}, ["apikey_GROQ_API_KEY", "apikey_GROQ_API_KEY_hint"])
 
     def test_apply_overrides_mutates_singleton_and_restores(self) -> None:
         runtime_settings._CACHE = {"apikey_GROQ_API_KEY": "gsk_painel"}
@@ -84,6 +87,20 @@ class ApiKeySettingsTests(unittest.TestCase):
             res = runtime_settings.check_api_key("PIXABAY_API_KEY")
         self.assertFalse(res["ok"])
         self.assertIn("ausente", res["detail"])
+
+    def test_check_maps_401_vs_403(self) -> None:
+        runtime_settings._CACHE = {"apikey_GROQ_API_KEY": "gsk_x"}
+        import httpx as _httpx
+
+        for code, needle in ((401, "rejeitada"), (403, "origem"), (200, "válida")):
+            resp = _httpx.Response(code, request=_httpx.Request("GET", "https://x"))
+            cli = unittest.mock.MagicMock()
+            cli.__enter__.return_value = cli
+            cli.get.return_value = resp
+            with patch.object(_httpx, "Client", return_value=cli):
+                res = runtime_settings.check_api_key("GROQ_API_KEY")
+            self.assertIn(needle, res["detail"])
+            self.assertEqual(res["ok"], code == 200)
 
 
 if __name__ == "__main__":
