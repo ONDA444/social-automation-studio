@@ -298,7 +298,8 @@ def get_api_key_status() -> dict:
         stored = (rows.get(_api_row(env)) or "").strip()
         base = (_ENV_BASELINE.get(attr, "") or "").strip()
         if stored:
-            out[env] = {"configured": True, "source": "painel", "testable": testable}
+            out[env] = {"configured": True, "source": "painel", "testable": testable,
+                        "hint": (rows.get(f"{_api_row(env)}_hint") or "").strip()}
         elif base:
             out[env] = {"configured": True, "source": "servidor", "testable": testable}
         else:
@@ -328,11 +329,12 @@ def set_api_key(env: str, value: str | None) -> dict:
     """Salva (ou, com valor vazio, apaga) o override de uma chave. Vale na hora."""
     if env not in _API_KEY_ATTRS:
         raise ValueError(f"chave não gerenciável: {env!r}")
-    cleaned = (value or "").strip()
+    cleaned = (value or "").strip().strip("'\"").strip()
     if cleaned:
-        _write_api_rows({_api_row(env): cleaned}, [])
+        hint = f"{cleaned[:7]}… ({len(cleaned)} caracteres)"
+        _write_api_rows({_api_row(env): cleaned, f"{_api_row(env)}_hint": hint}, [])
     else:
-        _write_api_rows({}, [_api_row(env)])
+        _write_api_rows({}, [_api_row(env), f"{_api_row(env)}_hint"])
     _invalidate()
     apply_api_key_overrides()
     return get_api_key_status()
@@ -373,29 +375,32 @@ def check_api_key(env: str) -> dict:
     key = effective_api_key(env)
     if not key:
         return {"ok": False, "detail": "chave ausente — salve uma antes de testar"}
-    import urllib.request
+    import httpx
 
     url, mode = _API_KEY_TESTS[env]
+    headers: dict[str, str] = {}
     try:
-        req = urllib.request.Request(url, method="GET")
         if mode == "bearer":
-            req.add_header("Authorization", f"Bearer {key}")
+            headers["Authorization"] = f"Bearer {key}"
         elif mode == "pexels":
-            req.add_header("Authorization", key)
+            headers["Authorization"] = key
         elif mode == "query":
             url = f"{url}?key={key}"
-            req = urllib.request.Request(url, method="GET")
         elif mode == "pixabay":
             url = f"{url}&key={key}"
-            req = urllib.request.Request(url, method="GET")
-        with urllib.request.urlopen(req, timeout=15) as res:
-            if res.status == 200:
-                return {"ok": True, "detail": "chave válida"}
-            return {"ok": False, "detail": f"resposta inesperada (HTTP {res.status})"}
+        # httpx de propósito (não urllib): os WAFs de Groq/Pexels barram o
+        # User-Agent "Python-urllib" com 403, o que gerava falso "chave
+        # rejeitada". O pipeline real também usa httpx, então o teste reflete
+        # o comportamento de verdade.
+        with httpx.Client(timeout=15) as client:
+            res = client.get(url, headers=headers)
+        if res.status_code == 200:
+            return {"ok": True, "detail": "chave válida"}
+        if res.status_code == 401:
+            return {"ok": False, "detail": "chave rejeitada pelo provedor (401) — confira e salve de novo"}
+        if res.status_code == 403:
+            return {"ok": False, "detail": "provedor barrou a origem da chamada (403, anti-bot) — a chave pode estar certa; vale gerar um vídeo curto p/ confirmar"}
+        return {"ok": False, "detail": f"resposta inesperada (HTTP {res.status_code})"}
     except Exception as exc:  # noqa: BLE001
         msg = str(exc)
-        if "401" in msg or "403" in msg:
-            return {"ok": False, "detail": "chave rejeitada pelo provedor (401/403) — confira e salve de novo"}
-        if "400" in msg:
-            return {"ok": False, "detail": "chave rejeitada pelo provedor (400) — confira e salve de novo"}
         return {"ok": False, "detail": f"falha ao validar: {msg[:120]}"}

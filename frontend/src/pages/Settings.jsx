@@ -129,6 +129,9 @@ function ApiKeysCard() {
                 <code className="font-mono text-[12px] text-accent w-full sm:w-48 sm:shrink-0 break-all">{k.env}</code>
                 <span className="flex-1 min-w-0">{k.label}</span>
                 {pill(k.env)}
+                {st && st.hint && (
+                  <span className="text-[11px] font-mono" style={{ color: 'var(--text-dim)' }}>salva: {st.hint}</span>
+                )}
                 <span className="badge text-[10px]" style={{ background: k.tier === 'grátis' ? 'rgba(0,214,143,.15)' : 'rgba(255,182,39,.15)', color: k.tier === 'grátis' ? 'var(--success)' : 'var(--warning)' }}>{k.tier}</span>
                 <a href={k.url} target="_blank" rel="noreferrer" className="text-text-muted hover:text-accent text-xs shrink-0">obter ↗</a>
               </div>
