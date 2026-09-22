@@ -82,5 +82,32 @@ class SpecialistTests(unittest.TestCase):
         self.assertEqual(out["verdict"], "approved")
 
 
+class SeoReviewTests(unittest.TestCase):
+    def _seo(self) -> dict:
+        return {"youtube": {
+            "title": "1 ajuste dobra seu FPS",
+            "description": "Aumente o FPS com este ajuste simples.",
+            "tags": ["fps", "pc fraco"],
+        }}
+
+    def test_notes_and_score_stored(self) -> None:
+        agent = _agent()
+        verdict = {"score": 62, "notes": ["descrição sem keyword no início", "só 2 tags"]}
+        with patch.object(spec.llm, "complete_json", AsyncMock(return_value=verdict)):
+            out = asyncio.run(agent.review_seo(seo=self._seo()))
+        self.assertEqual(out["score"], 62)
+        self.assertEqual(len(out["notes"]), 2)
+        self.assertEqual(agent.context["seo_review"]["score"], 62)
+
+    def test_no_llm_returns_clean_sheet(self) -> None:
+        from backend import llm as _llm
+
+        agent = _agent()
+        with patch.object(spec.llm, "complete_json",
+                          AsyncMock(side_effect=_llm.LLMUnavailable("sem cota"))):
+            out = asyncio.run(agent.review_seo(seo=self._seo()))
+        self.assertEqual(out, {"score": 100, "notes": []})
+
+
 if __name__ == "__main__":
     unittest.main()

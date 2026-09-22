@@ -1312,6 +1312,25 @@ def _finalize_ready_video_job(
                 job.main_video_path = local_path
                 if curation_format == "short":
                     job.shorts_paths = [local_path]
+        # Reedita o vídeo do Drive (reframe + grade + bumper + loudnorm) para
+        # republicação transformada — proteção reused-content/Content ID.
+        # Mesmas regras da curadoria: fora para faixas de música, best-effort
+        # (falha publica o original), nunca bloqueia o publish.
+        if job.content_type != "music":
+            from backend.agents.drive_remodel import apply_remodel
+
+            remodel_format = job.video_format or video_format
+            remodeled_path = apply_remodel(
+                job_id=job.id,
+                local_path=local_path,
+                brand_text=(getattr(acct, "display_name", "") or "ONDA"),
+                enabled=bool(settings.remodel_enabled),
+            )
+            if remodeled_path != local_path:
+                local_path = remodeled_path
+                job.main_video_path = local_path
+                if remodel_format == "short":
+                    job.shorts_paths = [local_path]
         stage = "preparar o video do Drive"
         meta = dict(ready.metadata_json or {})
         meta["analysis"] = {

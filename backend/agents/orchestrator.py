@@ -312,6 +312,18 @@ async def run_pipeline(job_id: int) -> dict:
 
             upd(progress=92, agent="compliance_agent")
             comp = await ComplianceAgent(job_id, ctx).execute()
+            # Segundo passe do especialista (SEO/descrição/tags): só notas, que
+            # entram como sugestões do compliance para aparecerem no Aprovações.
+            try:
+                seo_notes = await YouTubeSpecialistAgent(job_id, ctx).review_seo(seo=seo)
+                for note in (seo_notes.get("notes") or []):
+                    if note not in comp.get("suggestions", []):
+                        comp.setdefault("suggestions", []).append(f"SEO: {note}")
+                comp["seo_review"] = {k: seo_notes.get(k) for k in ("score", "notes")}
+                comp["risk_score"] = max(0, 100 - 40 * len(comp.get("blocks", []))
+                                         - 10 * len(comp.get("suggestions", [])))
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("seo review skipped (job %s): %s", job_id, exc)
             job.compliance_status = comp["status"]
             db.commit()
             if comp["status"] == "blocked":

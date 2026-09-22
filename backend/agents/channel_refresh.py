@@ -112,6 +112,18 @@ def refresh_job(db, channel: Channel, job: VideoJob) -> dict:
         logger.info("refresh_no_change job_id=%s channel_id=%s", job.id, channel.id)
         return {"job_id": job.id, "action": "no_change_applied"}
 
+    from backend.agents.drive_remodel import apply_remodel
+    from backend.config import settings as _settings
+
+    remodeled = apply_remodel(
+        job_id=job.id,
+        local_path=new_path,
+        brand_text=(getattr(channel, "name", "") or "ONDA"),
+        enabled=bool(_settings.remodel_enabled),
+    )
+    if remodeled != new_path:
+        new_path = remodeled
+
     job.main_video_path = new_path
     if job.video_format == "short":
         job.shorts_paths = [new_path]

@@ -157,6 +157,11 @@ class Settings(BaseSettings):
     # never blocks a publish. On by default; set READY_VIDEO_CURATION_ENABLED=0 to
     # roll back instantly without a code revert.
     ready_video_curation_enabled: bool = True
+    # Reedita todo vídeo do Drive antes de publicar (reframe + grade + bumper
+    # + loudnorm) para republicação transformada em vez de re-upload puro
+    # (proteção reused-content/Content ID). Best-effort como a curadoria:
+    # qualquer falha publica o original. Kill-switch imediato sem revert.
+    remodel_enabled: bool = True
     # Visibility for auto-published videos when the job itself doesn't specify one.
     # "private" is the safe default; set DEFAULT_PRIVACY=public to post publicly so
     # the videos actually reach the audience. (public|unlisted|private)
@@ -202,7 +207,7 @@ class Settings(BaseSettings):
     def _derive_redirect_uris(self) -> "Settings":
         """Auto-fill localhost redirect URIs using APP_BASE_URL when set.
         Falls back to RAILWAY_PUBLIC_DOMAIN so Railway deployments need no manual config."""
-        base = self.app_base_url.rstrip("/")
+        base = self.app_base_url.strip().rstrip("/")
         if not base:
             railway_domain = os.getenv("RAILWAY_PUBLIC_DOMAIN", "").strip()
             if railway_domain:

@@ -143,6 +143,49 @@ class YouTubeSpecialistAgent(BaseAgent):
         self._store(script, packaging, review)
         return {**review, "script": script, "packaging": packaging}
 
+    _SEO_SYSTEM = """Você é o ESPECIALISTA DE SEO DO YOUTUBE — 10 anos ranqueando vídeos.
+    Audite descrição, tags e hashtags do YouTube contra estas regras (não reescreva,
+    apenas aponte). Responda SEMPRE em JSON válido:
+    {"score": <0-100>, "notes": ["..."]}
+
+    DESCRIÇÃO:
+    - As 2 primeiras linhas precisam conter a keyword e o gancho (é o que aparece
+      na busca) — sem isso, nota despenca.
+    - Capítulos com timestamps ajudam retenção/descoberta; CTA de inscrição no fim.
+    - Deve refletir o título e os fatos (sem promessa que o vídeo não cumpre).
+
+    TAGS/HASHTAGS:
+    - 12-20 tags; a 1ª = keyword exata do título; sem genéricas soltas ("viral",
+      "video") sozinhas; sem tag acima de 30 chars.
+    - Hashtags da descrição: 3-5, nicho + alcance; a 1ª deve ser a keyword.
+
+    Seja exigente: cada problema concreto vira 1 note curto e direto."""
+
+    async def review_seo(self, seo: dict | None = None, **_) -> dict:
+        """Audita descrição/tags/hashtags (só notas — nunca reescreve SEO final)."""
+        seo = seo or self.ctx_get("seo") or {}
+        yt = seo.get("youtube", {}) if isinstance(seo, dict) else {}
+        facts = (self.ctx_get("research") or {}).get("facts", "")
+        title = yt.get("title") or (self.ctx_get("script") or {}).get("title", "")
+        out: dict = {"score": 100, "notes": []}
+        try:
+            verdict = await llm.complete_json(
+                f"""TÍTULO: "{title}"
+    DESCRIÇÃO (início): "{(yt.get('description') or '')[:800]}"
+    TAGS: {yt.get('tags') or []}
+    FATOS: {facts[:400]}""",
+                system=self._SEO_SYSTEM, max_tokens=800,
+            )
+        except llm.LLMUnavailable:
+            return out
+        try:
+            out["score"] = max(0, min(100, int(verdict.get("score", 100))))
+        except (TypeError, ValueError):
+            pass
+        out["notes"] = [str(n) for n in (verdict.get("notes") or [])][:5]
+        self.ctx_set("seo_review", out)
+        return out
+
     def _store(self, script: dict, packaging: dict, review: dict) -> None:
         self.ctx_set("script", script)
         self.ctx_set("packaging", packaging)
