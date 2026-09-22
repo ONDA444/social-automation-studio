@@ -37,6 +37,7 @@ from backend.agents.editing_director import EditingDirectorAgent
 from backend.agents.music_curator import MusicCuratorAgent
 from backend.agents.caption_agent import CaptionAgent
 from backend.agents.video_editor import VideoEditorAgent
+from backend.agents.youtube_specialist import YouTubeSpecialistAgent
 from backend.agents.shorts_factory import ShortsFactoryAgent
 from backend.agents.seo_agent import SEOAgent
 from backend.agents.quality_control import QualityControlAgent
@@ -223,6 +224,22 @@ async def run_pipeline(job_id: int) -> dict:
                 script=script, target_platforms=ctx.get("target_platforms"))
             job.script = script
             job.content_type = script.get("content_type", job.content_type)
+
+            # Especialista de YouTube: audita roteiro+gancho+títulos+thumb com
+            # régua de CTR/retenção e aplica no máximo 1 passe de correção.
+            # Nunca trava o pipeline (sem LLM = aprova em silêncio).
+            upd(progress=37, agent="youtube_specialist")
+            try:
+                review = await YouTubeSpecialistAgent(job_id, ctx).execute(script=script)
+                if isinstance(review, dict):
+                    if review.get("script"):
+                        script = review["script"]
+                    if review.get("packaging"):
+                        ctx["packaging"] = review["packaging"]
+                    job.script = script
+                    job.content_type = script.get("content_type", job.content_type)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("youtube_specialist skipped (job %s): %s", job_id, exc)
 
             # Remix style-match: if the reference video has NO voice-over, the remix
             # is music-driven too (no narration) — follow the reference's style.
