@@ -79,6 +79,7 @@ def ensure_columns() -> None:
         ("video_jobs", "video_format", "VARCHAR(20) DEFAULT 'long'"),
         ("theme_queue", "video_format", "VARCHAR(20) DEFAULT 'long'"),
         ("platform_accounts", "music_style", "VARCHAR(20) DEFAULT 'balanced'"),
+        ("platform_accounts", "channel_stage", "VARCHAR(20) DEFAULT 'growing'"),
         ("platform_accounts", "video_source_mode", "VARCHAR(20) DEFAULT 'ai'"),
         ("platform_accounts", "drive_folder_id", "VARCHAR(160)"),
         ("platform_accounts", "drive_folder_url", "TEXT"),
