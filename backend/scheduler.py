@@ -936,9 +936,9 @@ def _job_ride_trends() -> None:
     from backend.models import PlatformAccount, ThemeQueue, VideoJob
 
     db = SessionLocal()
-    from backend.config import settings
+    from backend import runtime_settings
 
-    if not settings.trending_enabled:
+    if not runtime_settings.effective_trending_enabled():
         return  # global kill-switch — halt all trending auto-publishing instantly
     try:
         now = datetime.utcnow()
@@ -971,7 +971,7 @@ def _job_ride_trends() -> None:
                 # Daily cap: never auto-publish more than max_trending_per_day per channel.
                 made_today = sum(1 for j in trending_recent
                                  if j.created_at and (now - j.created_at) < _td(hours=24))
-                if made_today >= settings.max_trending_per_day:
+                if made_today >= runtime_settings.effective_max_trending():
                     continue
                 recent_titles = [j.title for j in recent_jobs if j.title]
                 pend = db.execute(
@@ -1311,6 +1311,25 @@ def _finalize_ready_video_job(
                 local_path = curated_path
                 job.main_video_path = local_path
                 if curation_format == "short":
+                    job.shorts_paths = [local_path]
+        # Reedita o vídeo do Drive (reframe + grade + bumper + loudnorm) para
+        # republicação transformada — proteção reused-content/Content ID.
+        # Mesmas regras da curadoria: fora para faixas de música, best-effort
+        # (falha publica o original), nunca bloqueia o publish.
+        if job.content_type != "music":
+            from backend.agents.drive_remodel import apply_remodel
+
+            remodel_format = job.video_format or video_format
+            remodeled_path = apply_remodel(
+                job_id=job.id,
+                local_path=local_path,
+                brand_text=(getattr(acct, "display_name", "") or "ONDA"),
+                enabled=bool(settings.remodel_enabled),
+            )
+            if remodeled_path != local_path:
+                local_path = remodeled_path
+                job.main_video_path = local_path
+                if remodel_format == "short":
                     job.shorts_paths = [local_path]
         stage = "preparar o video do Drive"
         meta = dict(ready.metadata_json or {})

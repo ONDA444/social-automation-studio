@@ -100,12 +100,12 @@ class ComplianceAgent(BaseAgent):
                 flags.append("ai_disclosure_required")
                 suggestions.append("YouTube: conteúdo com IA (narração/imagens) — marque 'conteúdo alterado' no YouTube Studio após publicar")
             if drive_source:
-                curated = os.path.basename(
-                    (main_video or {}).get("main_video_path") or "").startswith("curated_")
-                if not curated:
-                    blocks.append("YouTube: vídeo do Drive SEM curadoria (re-upload puro, sem comentário próprio) — padrão que o YouTube desmonetiza como 'conteúdo reutilizado'. Regenere com a curadoria ligada ou revise manualmente")
+                base = os.path.basename((main_video or {}).get("main_video_path") or "")
+                transformed = base.startswith(("curated_", "remodeled_"))
+                if not transformed:
+                    blocks.append("YouTube: vídeo do Drive SEM curadoria nem remodelagem (re-upload puro, sem comentário próprio) — padrão que o YouTube desmonetiza como 'conteúdo reutilizado'. Regenere com a curadoria ligada ou revise manualmente")
                 else:
-                    suggestions.append("YouTube: vídeo do Drive com curadoria — confira se o comentário próprio está audível (proteção reused content)")
+                    suggestions.append("YouTube: vídeo do Drive transformado (curadoria/remodel) — confira se o comentário próprio está audível (proteção reused content)")
 
         if "tiktok" in platforms:
             tk = seo.get("tiktok", {})
