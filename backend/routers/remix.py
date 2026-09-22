@@ -46,6 +46,8 @@ def _validate_remix_create(db: Session, payload: RemixCreate) -> None:
     invalid = [p for p in payload.target_platforms if p not in VALID_PLATFORMS]
     if invalid:
         raise HTTPException(400, f"target_platforms inválido: {invalid}")
+    if not payload.target_platforms:
+        raise HTTPException(400, "selecione ao menos uma plataforma — sem destino o remix rende inteiro e falha na publicação")
 
 
 @router.post("/create")

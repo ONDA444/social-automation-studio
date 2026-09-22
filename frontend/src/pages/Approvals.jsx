@@ -2,14 +2,21 @@ import { useEffect, useState } from 'react'
 import { api } from '../api'
 import { useWs } from '../App.jsx'
 import ApprovalCard from '../components/ApprovalCard.jsx'
-import { PageHeader, EmptyState } from '../components/ui.jsx'
+import { PageHeader, EmptyState, useLatestRequest } from '../components/ui.jsx'
 
 export default function Approvals() {
   const [jobs, setJobs] = useState([])
   const [loading, setLoading] = useState(true)
   const { count } = useWs()
+  const loadReq = useLatestRequest()
 
-  const load = () => api.get('/jobs/approvals').then((d) => { setJobs(d.jobs || []); setLoading(false) }).catch(() => setLoading(false))
+  // Rajadas de eventos geram GETs sobrepostos; só a resposta mais recente vale.
+  const load = () => {
+    const id = loadReq.start()
+    return api.get('/jobs/approvals')
+      .then((d) => { if (!loadReq.isCurrent(id)) return; setJobs(d.jobs || []); setLoading(false) })
+      .catch(() => { if (loadReq.isCurrent(id)) setLoading(false) })
+  }
   useEffect(() => { load() }, [])
   useEffect(() => { const t = setTimeout(load, 1000); return () => clearTimeout(t) }, [count])
 

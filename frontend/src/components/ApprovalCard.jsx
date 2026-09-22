@@ -67,10 +67,12 @@ export default function ApprovalCard({ job, onDone }) {
     catch (e) { toast.error(e.message) } finally { setBusy(false) }
   }
   const saveSeo = async () => {
+    if (busy) return
+    setBusy(true)
     try {
       await api.patch(`/jobs/${job.id}/seo`, { seo_metadata: seo })
       setEditing(false)
-    } catch (e) { toast.error(e.message) }
+    } catch (e) { toast.error(e.message) } finally { setBusy(false) }
   }
   const remove = async () => {
     if (!await confirmDialog('Excluir este job e seus arquivos? Esta ação não pode ser desfeita.', { confirmLabel: 'Excluir', danger: true })) return
@@ -185,7 +187,7 @@ export default function ApprovalCard({ job, onDone }) {
                     <input className="input" value={(ig.hashtags || []).join(', ')} onChange={(e) => setSeo({ ...seo, instagram: { ...ig, hashtags: e.target.value.split(',').map((t) => t.trim()).filter(Boolean) } })} placeholder="Hashtags Instagram (vírgula)" />
                   </>
                 )}
-                <div className="flex gap-2"><button className="btn-primary text-xs" onClick={saveSeo}>Salvar SEO</button><button className="btn-ghost text-xs" onClick={() => setEditing(false)}>Cancelar</button></div>
+                <div className="flex gap-2"><button className="btn-primary text-xs" disabled={busy} onClick={saveSeo}>Salvar SEO</button><button className="btn-ghost text-xs" disabled={busy} onClick={() => setEditing(false)}>Cancelar</button></div>
               </div>
             ) : (
               <div className="text-sm text-text-muted space-y-1">

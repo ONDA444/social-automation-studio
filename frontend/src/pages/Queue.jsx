@@ -9,7 +9,7 @@ import { PLATFORM_META, fmtDate } from '../lib'
 
 const CHANNEL_EDITABLE = new Set(['queued', 'awaiting_approval', 'approved', 'error', 'tiktok_pending_approval'])
 
-function Row({ job, accounts, selected, onToggleSelect, onChannelChange, onRetry, onRepublish, onDelete }) {
+function Row({ job, accounts, selected, onToggleSelect, onChannelChange, onRetry, onRepublish, onDelete, busy }) {
   const [showPlayer, setShowPlayer] = useState(false)
   // Jobs em produção já abrem com a linha do tempo visível — é exatamente quando
   // o operador quer acompanhar etapa a etapa, sem ter que clicar no ⏱.
@@ -67,7 +67,7 @@ function Row({ job, accounts, selected, onToggleSelect, onChannelChange, onRetry
         <select
           className="input text-xs py-1.5 px-2 w-full sm:w-36 shrink-0 order-last sm:order-none"
           value={job.account_id ?? ''}
-          disabled={!canEditChannel}
+          disabled={!canEditChannel || busy}
           title={canEditChannel ? 'Trocar canal' : 'Canal não editável neste status'}
           onChange={(e) => onChannelChange(job.id, e.target.value)}>
           <option value="">— sem canal —</option>
@@ -91,12 +91,12 @@ function Row({ job, accounts, selected, onToggleSelect, onChannelChange, onRetry
             </button>
           )}
           {canRepublish && (
-            <button className="btn-ghost btn-sm" onClick={() => onRepublish(job.id)} title="Republicar">⤴</button>
+            <button className="btn-ghost btn-sm" disabled={busy} onClick={() => onRepublish(job.id)} title="Republicar">⤴</button>
           )}
           {(job.status === 'error' || job.status === 'tiktok_pending_approval') && (
-            <button className="btn-ghost btn-sm" onClick={() => onRetry(job.id)} title="Tentar novamente">↻</button>
+            <button className="btn-ghost btn-sm" disabled={busy} onClick={() => onRetry(job.id)} title="Tentar novamente">↻</button>
           )}
-          <button className="btn-ghost btn-sm" onClick={() => onDelete(job.id)} title="Excluir">🗑</button>
+          <button className="btn-ghost btn-sm" disabled={busy} onClick={() => onDelete(job.id)} title="Excluir">🗑</button>
         </div>
       </div>
 
@@ -148,6 +148,9 @@ export default function Queue() {
   const [loadError, setLoadError] = useState(false)
   const { accounts, error: accountsError, refresh: refreshAccounts } = useAccounts()
   const [selected, setSelected] = useState(() => new Set())
+  // Linha ocupada por ação (retry/republish/delete/troca de canal): desabilita
+  // os botões dela para impedir duplo clique = duplo dispatch no backend.
+  const [busyId, setBusyId] = useState(null)
   const [modal, setModal]       = useState(false)
   const [statusFilter, setStatusFilter] = useState('all')
   const [sourceFilter, setSourceFilter] = useState('all')
@@ -196,14 +199,20 @@ export default function Queue() {
   }, [jobs])
 
   const retry = async (id) => {
+    if (busyId) return
+    setBusyId(id)
     try { await api.post(`/jobs/${id}/retry`); load() }
     catch (err) { toast.error(err.message) }
+    finally { setBusyId(null) }
   }
 
   const del = async (id) => {
     if (!await confirmDialog('Remover job?', { confirmLabel: 'Remover', danger: true })) return
+    if (busyId) return
+    setBusyId(id)
     try { await api.del(`/jobs/${id}`); load() }
     catch (err) { toast.error(err.message) }
+    finally { setBusyId(null) }
   }
 
   const importCsv = async (e) => {
@@ -215,11 +224,16 @@ export default function Queue() {
   }
 
   const changeChannel = async (id, val) => {
+    if (busyId) return
+    setBusyId(id)
     try { await api.patch(`/jobs/${id}`, { account_id: val ? Number(val) : null }); load() }
     catch (err) { toast.error(err.message) }
+    finally { setBusyId(null) }
   }
 
   const republish = async (id) => {
+    if (busyId) return
+    setBusyId(id)
     try {
       const r = await api.post(`/jobs/${id}/publish`)
       const parts = []
@@ -228,6 +242,7 @@ export default function Queue() {
       toast.success(parts.length ? parts.join('\n') : 'Republicação iniciada.')
       load()
     } catch (err) { toast.error(err.message) }
+    finally { setBusyId(null) }
   }
 
   // Seleção múltipla
@@ -368,6 +383,7 @@ export default function Queue() {
               job={j}
               accounts={accounts}
               selected={selected.has(j.id)}
+              busy={busyId === j.id}
               onToggleSelect={toggleSelect}
               onChannelChange={changeChannel}
               onRetry={retry}

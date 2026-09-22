@@ -20,7 +20,7 @@ from datetime import datetime
 from backend.config import settings
 from backend.database import SessionLocal
 from backend.events import publish_event
-from backend.models import JobStatus, PlatformAccount, VideoJob
+from backend.models import JobStatus, PlatformAccount, ScheduleConfig, VideoJob
 
 from backend.agents.research import ResearchAgent
 from backend.agents.scriptwriter import ScriptwriterAgent
@@ -85,6 +85,28 @@ def _channel_config_from_account(acct) -> dict:
     if avoid:
         cfg["guardrails"] = {"forbidden_topics": avoid}
     return cfg
+
+
+def _schedule_shorts_formats(db, account_id: int | None) -> list[int] | None:
+    """Formatos de Shorts do canal, ou None se o operador desligou a geração.
+
+    Lê ScheduleConfig (a mesma tela onde vive o toggle "Gerar Shorts
+    automaticamente"). Sem linha de config ou sem conta: comportamento atual
+    (gera tudo). Nunca levanta — em dúvida, gera.
+    """
+    try:
+        if account_id is None:
+            return []
+        cfg = db.query(ScheduleConfig).filter(
+            ScheduleConfig.account_id == account_id).first()
+        if cfg is None:
+            return []
+        if cfg.auto_shorts is False:
+            return None
+        wanted = [int(x) for x in (cfg.shorts_formats or [])]
+        return wanted or []
+    except Exception:  # noqa: BLE001
+        return []
 
 
 async def run_pipeline(job_id: int) -> dict:
@@ -239,14 +261,23 @@ async def run_pipeline(job_id: int) -> dict:
                                   "length": main.get("duration"), "from_start": True}]
                 job.shorts_paths = [main_path] if main_path else []
             else:
-                await ShortsFactoryAgent(job_id, ctx).execute()
-                job.shorts_paths = [s["path"] for s in ctx.get("shorts", [])]
+                shorts_wanted = _schedule_shorts_formats(db, job.account_id)
+                if shorts_wanted is None:
+                    # Operador desligou "Gerar Shorts automaticamente" no canal:
+                    # pula factory + hook + strategist (sem LLM à toa) e segue.
+                    logger.info("Shorts desligados no canal (job %s) — pulando factory.", job.id)
+                    ctx["shorts"] = []
+                    job.shorts_paths = []
+                else:
+                    await ShortsFactoryAgent(job_id, ctx).execute(formats=shorts_wanted)
+                    job.shorts_paths = [s["path"] for s in ctx.get("shorts", [])]
 
-            # Shorts specialists — hook overlay + per-platform publish package.
-            upd(progress=83, agent="shorts_hook")
-            await ShortsHookAgent(job_id, ctx).execute()
-            upd(progress=84, agent="shorts_strategist")
-            await ShortsStrategistAgent(job_id, ctx).execute()
+            if ctx.get("shorts"):
+                # Shorts specialists — hook overlay + per-platform publish package.
+                upd(progress=83, agent="shorts_hook")
+                await ShortsHookAgent(job_id, ctx).execute()
+                upd(progress=84, agent="shorts_strategist")
+                await ShortsStrategistAgent(job_id, ctx).execute()
             upd(progress=86, agent="seo_agent")
 
             seo = await SEOAgent(job_id, ctx).execute(language=language)

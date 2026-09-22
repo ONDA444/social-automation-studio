@@ -156,7 +156,11 @@ export default function ChannelCard({ channel, account, onChange }) {
       <div className="flex items-start gap-3">
         <div
           className="w-10 h-10 rounded-btn flex items-center justify-center font-black data shrink-0"
-          style={{ color: theme.accent_color, background: 'var(--accent-dim)', border: '1px solid var(--border-glass)' }}
+          style={{
+            color: m?.color || theme.accent_color,
+            background: 'var(--accent-dim)',
+            border: '1px solid var(--border-glass)',
+          }}
         >
           {m ? m.icon : 'CH'}
         </div>
@@ -176,7 +180,7 @@ export default function ChannelCard({ channel, account, onChange }) {
           </div>
 
           <div className="mt-3 rounded-btn px-3 py-2" style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border-glass)' }}>
-            <div className="grid grid-cols-3 items-center gap-3">
+            <div className="grid grid-cols-2 sm:grid-cols-3 items-center gap-3">
               <div>
                 <p className="text-[10px] font-semibold uppercase" style={{ color: 'var(--text-dim)', letterSpacing: '.06em' }}>Longos/dia</p>
                 <p className="data text-sm font-bold">{channel.daily_limit_long}</p>
@@ -185,7 +189,7 @@ export default function ChannelCard({ channel, account, onChange }) {
                 <p className="text-[10px] font-semibold uppercase" style={{ color: 'var(--text-dim)', letterSpacing: '.06em' }}>Shorts/dia</p>
                 <p className="data text-sm font-bold">{channel.daily_limit_short}</p>
               </div>
-              <div className="min-w-0">
+              <div className="min-w-0 col-span-2 sm:col-span-1">
                 <p className="text-[10px] font-semibold uppercase" style={{ color: 'var(--text-dim)', letterSpacing: '.06em' }}>Janela</p>
                 <p className="data text-sm font-bold truncate">{channel.posting_window_start}-{channel.posting_window_end}</p>
               </div>
@@ -197,7 +201,7 @@ export default function ChannelCard({ channel, account, onChange }) {
               {togglingActive ? 'Aguarde...' : (channel.active ? 'Pausar' : 'Ativar')}
             </button>
             <button className="btn-ghost btn-sm" onClick={() => setExpanded((v) => !v)}>
-              {expanded ? 'Fechar detalhes' : 'Detalhes'}
+              {expanded ? 'Fechar ajustes' : 'Ajustes'}
             </button>
           </div>
         </div>
@@ -281,7 +285,7 @@ export default function ChannelCard({ channel, account, onChange }) {
             <div className="flex flex-col sm:flex-row gap-2">
               <input className="input flex-1" placeholder="Linha de exemplo do overlay/intro"
                 value={previewLine} onChange={(e) => setPreviewLine(e.target.value)} />
-              <select className="input sm:w-32" value={previewFormat} onChange={(e) => setPreviewFormat(e.target.value)}>
+              <select className="input sm:w-32" value={previewFormat} onChange={(e) => setPreviewFormat(e.target.value)} aria-label="Formato do preview">
                 <option value="short">Short</option>
                 <option value="long">Longo</option>
               </select>
@@ -298,7 +302,7 @@ export default function ChannelCard({ channel, account, onChange }) {
           <div className="space-y-2 pt-4" style={{ borderTop: '1px solid var(--border-glass)' }}>
             <div className="flex items-center justify-between gap-2">
               <p className="text-xs font-semibold uppercase" style={{ color: 'var(--text-muted)', letterSpacing: '.06em' }}>Agenda do dia</p>
-              <input type="date" className="input w-auto text-xs py-1" value={agendaDate}
+              <input type="date" className="input w-auto text-xs py-1" value={agendaDate} aria-label="Data da agenda"
                 onChange={(e) => setAgendaDate(e.target.value)} />
             </div>
             <div className="flex flex-wrap gap-2">

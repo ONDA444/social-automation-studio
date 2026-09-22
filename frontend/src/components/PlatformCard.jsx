@@ -173,7 +173,7 @@ export default function PlatformCard({ account, onChange, onChanged, onDone }) {
   }
 
   return (
-    <div className="card card-hover p-3 sm:p-3.5" style={{ borderColor: blocked ? 'rgba(217,154,61,0.46)' : 'var(--border-glass)' }}>
+    <div className="card card-hover p-3 sm:p-3.5" style={{ borderColor: blocked ? 'color-mix(in srgb, var(--warning) 46%, transparent)' : 'var(--border-glass)' }}>
       <div className="flex items-start gap-3">
         <div
           className="w-10 h-10 rounded-btn flex items-center justify-center font-black data shrink-0"
@@ -202,7 +202,7 @@ export default function PlatformCard({ account, onChange, onChanged, onDone }) {
             <div
               className="mt-2 rounded-btn px-3 py-1.5 flex items-center gap-2"
               style={{
-                background: account.copyright_strikes >= 2 ? 'rgba(194,65,58,0.14)' : 'var(--accent-dim)',
+                background: account.copyright_strikes >= 2 ? 'color-mix(in srgb, var(--error) 14%, transparent)' : 'var(--accent-dim)',
                 border: `1px solid ${account.copyright_strikes >= 2 ? 'var(--error)' : 'var(--warning)'}`,
               }}
               title="Advertências de copyright registradas manualmente pelo operador (sem API confiável do YouTube para isso)."

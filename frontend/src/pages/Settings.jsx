@@ -26,7 +26,8 @@ function Toggle({ on, onChange }) {
       className="relative shrink-0 rounded-full transition-colors"
       style={{
         width: 42, height: 24,
-        background: on ? 'var(--success)' : 'rgba(255,255,255,0.14)',
+        background: on ? 'var(--success)' : 'var(--bg-elevated)',
+        border: '1px solid var(--border)',
       }}
     >
       <span
@@ -124,7 +125,7 @@ function ApiKeysCard() {
           const b = busy[k.env]
           const m = msgs[k.env]
           return (
-            <div key={k.env} className="py-2 border-b last:border-0" style={{ borderColor: 'rgba(255,255,255,0.05)' }}>
+            <div key={k.env} className="py-2 border-b last:border-0" style={{ borderColor: 'var(--border)' }}>
               <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
                 <code className="font-mono text-[12px] text-accent w-full sm:w-48 sm:shrink-0 break-all">{k.env}</code>
                 <span className="flex-1 min-w-0">{k.label}</span>
@@ -182,11 +183,13 @@ function MonetizationCard() {
   const save = async () => {
     if (!cfg) return
     setSaving(true); setMsg(null)
+    const prev = { ...cfg }
     try {
       const next = await api.put('/settings/monetization', cfg)
       setCfg(next)
       setMsg({ ok: true, text: 'Salvo. Vale para os próximos vídeos gerados.' })
     } catch (e) {
+      setCfg(prev)
       setMsg({ ok: false, text: e.message })
     } finally {
       setSaving(false)
@@ -263,7 +266,7 @@ function MonetizationCard() {
         const invalid = codes.filter((c) => !/^[a-zA-Z]{2,3}$/.test(c));
         if (invalid.length > 0) {
           return (
-            <p className="text-xs mt-1" style={{ color: '#e0a30f' }}>
+            <p className="text-xs mt-1" style={{ color: 'var(--warning)' }}>
               Código{invalid.length > 1 ? 's' : ''} suspeito{invalid.length > 1 ? 's' : ''}: {invalid.join(', ')}.
               Use códigos ISO de 2-3 letras (ex.: en, es, hi), não o nome do idioma.
             </p>
@@ -311,11 +314,13 @@ function ProductionCard() {
 
   const save = async () => {
     setSaving(true); setMsg(null)
+    const prev = { ...cfg }
     try {
       const next = await api.put('/settings/production', cfg)
       setCfg(next)
       setMsg({ ok: true, text: 'Salvo. Vale imediatamente para os próximos vídeos — sem reiniciar.' })
     } catch (e) {
+      setCfg(prev)
       setMsg({ ok: false, text: e.message })
     } finally {
       setSaving(false)
@@ -555,7 +560,7 @@ export default function Settings() {
         ) : (
           <div className="space-y-1">
             {Object.entries(health.checks).map(([k, v]) => (
-              <div key={k} className="flex items-center gap-3 py-2.5 border-b last:border-0" style={{ borderColor: 'rgba(255,255,255,0.05)' }}>
+              <div key={k} className="flex items-center gap-3 py-2.5 border-b last:border-0" style={{ borderColor: 'var(--border)' }}>
                 <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: dot(v.status), boxShadow: v.status === 'green' ? '0 0 6px rgba(0,245,160,0.6)' : 'none' }} />
                 <span className="font-medium text-sm capitalize flex-1">{k}</span>
                 <span className="text-xs text-text-muted">{v.detail}</span>

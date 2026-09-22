@@ -19,7 +19,7 @@ const ACTION_ICON = {
   collect_analytics: '📊',
 }
 
-function RuleCard({ rule, onToggle, onDelete }) {
+function RuleCard({ rule, busy, onToggle, onDelete }) {
   return (
     <div className="rounded-card p-4 flex items-center gap-3 flex-wrap fade-in"
       style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', opacity: rule.enabled ? 1 : 0.6 }}>
@@ -40,7 +40,8 @@ function RuleCard({ rule, onToggle, onDelete }) {
         </p>
       </div>
       <button
-        className="badge text-[10px] cursor-pointer"
+        className="badge text-[10px] cursor-pointer disabled:opacity-50"
+        disabled={busy}
         onClick={() => onToggle(rule)}
         title={rule.enabled ? 'Desativar regra' : 'Ativar regra'}
         style={rule.enabled
@@ -63,6 +64,8 @@ export default function Rules() {
   const [action, setAction] = useState('notify')
   const [maxAttempts, setMaxAttempts] = useState(2)
   const [saving, setSaving] = useState(false)
+  // Regra em voo (toggle): evita duplo clique ler o mesmo `enabled` stale.
+  const [busyId, setBusyId] = useState(null)
   const toast = useToast()
   const confirmDialog = useConfirm()
 
@@ -73,8 +76,17 @@ export default function Rules() {
   useEffect(() => { load() }, [load])
 
   const toggle = async (rule) => {
-    try { await api.patch(`/automation/rules/${rule.id}`, { enabled: !rule.enabled }); load() }
-    catch (e) { toast.error(e.message) }
+    if (busyId) return
+    setBusyId(rule.id)
+    // Otimista com revert: a UI responde na hora, mas volta se falhar.
+    const prev = rule.enabled
+    setData((d) => ({ ...d, rules: (d.rules || []).map((r) => r.id === rule.id ? { ...r, enabled: !prev } : r) }))
+    try { await api.patch(`/automation/rules/${rule.id}`, { enabled: !prev }); load() }
+    catch (e) {
+      toast.error(e.message)
+      setData((d) => ({ ...d, rules: (d.rules || []).map((r) => r.id === rule.id ? { ...r, enabled: prev } : r) }))
+    }
+    finally { setBusyId(null) }
   }
 
   const remove = async (rule) => {
@@ -118,7 +130,7 @@ export default function Rules() {
       ) : (
         <SectionCard title="Regras ativas" sub={`${rules.filter((r) => r.enabled).length} de ${rules.length} ligadas`}>
           <div className="space-y-2">
-            {rules.map((r) => <RuleCard key={r.id} rule={r} onToggle={toggle} onDelete={remove} />)}
+            {rules.map((r) => <RuleCard key={r.id} rule={r} busy={busyId === r.id} onToggle={toggle} onDelete={remove} />)}
           </div>
         </SectionCard>
       )}

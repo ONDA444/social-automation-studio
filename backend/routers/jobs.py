@@ -134,6 +134,8 @@ def _validate(payload: JobCreate) -> None:
         raise HTTPException(400, f"mode inválido: {payload.mode}")
     if payload.format not in VIDEO_FORMATS:
         raise HTTPException(400, f"format inválido: {payload.format}")
+    if not payload.target_platforms:
+        raise HTTPException(400, "selecione ao menos uma plataforma — sem destino o vídeo rende inteiro e falha na publicação")
 
 
 def _require_account(db: Session, account_id: int | None) -> None:
@@ -222,6 +224,8 @@ def create_jobs_batch(payload: JobBatchCreate, db: Session = Depends(get_db)):
         raise HTTPException(400, f"content_type inválido: {payload.content_type}")
     if payload.format not in VIDEO_FORMATS:
         raise HTTPException(400, f"format inválido: {payload.format}")
+    if not payload.target_platforms:
+        raise HTTPException(400, "selecione ao menos uma plataforma — sem destino os vídeos rendem inteiros e falham na publicação")
     _require_account(db, payload.account_id)
 
     themes = [t.strip() for t in payload.themes if t and t.strip()][:200]
