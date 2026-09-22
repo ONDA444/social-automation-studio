@@ -202,7 +202,7 @@ class Settings(BaseSettings):
     def _derive_redirect_uris(self) -> "Settings":
         """Auto-fill localhost redirect URIs using APP_BASE_URL when set.
         Falls back to RAILWAY_PUBLIC_DOMAIN so Railway deployments need no manual config."""
-        base = self.app_base_url.rstrip("/")
+        base = self.app_base_url.strip().rstrip("/")
         if not base:
             railway_domain = os.getenv("RAILWAY_PUBLIC_DOMAIN", "").strip()
             if railway_domain:
