@@ -20,7 +20,7 @@ from datetime import datetime
 from backend.config import settings
 from backend.database import SessionLocal
 from backend.events import publish_event
-from backend.models import JobStatus, PlatformAccount, VideoJob
+from backend.models import JobStatus, PlatformAccount, ScheduleConfig, VideoJob
 
 from backend.agents.research import ResearchAgent
 from backend.agents.scriptwriter import ScriptwriterAgent
@@ -47,6 +47,16 @@ logger = logging.getLogger("studio.orchestrator")
 
 def _emit_job(job_id: int, **fields) -> None:
     publish_event({"type": "job_update", "job_id": job_id, **fields})
+
+
+def _fire_automation(trigger: str, job_id: int) -> None:
+    """Dispara as regras de automação (§27) sem nunca atrasar/derrubar o pipeline."""
+    try:
+        from backend.agents.automation_engine import evaluate
+
+        evaluate(trigger, job_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("automação %s (job %s) ignorada: %s", trigger, job_id, exc)
 
 
 def _channel_config_from_account(acct) -> dict:
@@ -77,6 +87,28 @@ def _channel_config_from_account(acct) -> dict:
     return cfg
 
 
+def _schedule_shorts_formats(db, account_id: int | None) -> list[int] | None:
+    """Formatos de Shorts do canal, ou None se o operador desligou a geração.
+
+    Lê ScheduleConfig (a mesma tela onde vive o toggle "Gerar Shorts
+    automaticamente"). Sem linha de config ou sem conta: comportamento atual
+    (gera tudo). Nunca levanta — em dúvida, gera.
+    """
+    try:
+        if account_id is None:
+            return []
+        cfg = db.query(ScheduleConfig).filter(
+            ScheduleConfig.account_id == account_id).first()
+        if cfg is None:
+            return []
+        if cfg.auto_shorts is False:
+            return None
+        wanted = [int(x) for x in (cfg.shorts_formats or [])]
+        return wanted or []
+    except Exception:  # noqa: BLE001
+        return []
+
+
 async def run_pipeline(job_id: int) -> dict:
     """Execute the pipeline for a job. Safe to call from Celery or in-process."""
     db = SessionLocal()
@@ -100,7 +132,8 @@ async def run_pipeline(job_id: int) -> dict:
                 require_approval = True
                 logger.info("Trending job %s stale (%.1fh) -> approval, not auto-publish.", job_id, age_h)
         voice = None
-        language = settings.default_language
+        from backend import runtime_settings
+        language = runtime_settings.effective_language()
         music_style = "balanced"  # calm | balanced | energetic (per-channel music vibe)
         if job.account_id:
             acct = db.get(PlatformAccount, job.account_id)
@@ -119,6 +152,9 @@ async def run_pipeline(job_id: int) -> dict:
         ctx["language"] = language  # narrator/agents read the channel language from here
         ctx["voice"] = voice        # channel's configured voice, available to all agents
         ctx["music_style"] = music_style  # editing_director adapts the music vibe per channel
+        # Estágio do canal (new|growing|established) — o roteirista adapta a
+        # estratégia do roteiro (canal novo: SEO de descoberta + CTA de inscrição).
+        ctx["channel_stage"] = (getattr(acct, "channel_stage", None) if job.account_id else None) or "growing"
         ctx["target_platforms"] = job.target_platforms or ["youtube", "tiktok", "instagram"]
         ctx["format"] = getattr(job, "video_format", "long") or "long"  # long(16:9) | short(9:16)
         if job.style_dna:
@@ -225,14 +261,23 @@ async def run_pipeline(job_id: int) -> dict:
                                   "length": main.get("duration"), "from_start": True}]
                 job.shorts_paths = [main_path] if main_path else []
             else:
-                await ShortsFactoryAgent(job_id, ctx).execute()
-                job.shorts_paths = [s["path"] for s in ctx.get("shorts", [])]
+                shorts_wanted = _schedule_shorts_formats(db, job.account_id)
+                if shorts_wanted is None:
+                    # Operador desligou "Gerar Shorts automaticamente" no canal:
+                    # pula factory + hook + strategist (sem LLM à toa) e segue.
+                    logger.info("Shorts desligados no canal (job %s) — pulando factory.", job.id)
+                    ctx["shorts"] = []
+                    job.shorts_paths = []
+                else:
+                    await ShortsFactoryAgent(job_id, ctx).execute(formats=shorts_wanted)
+                    job.shorts_paths = [s["path"] for s in ctx.get("shorts", [])]
 
-            # Shorts specialists — hook overlay + per-platform publish package.
-            upd(progress=83, agent="shorts_hook")
-            await ShortsHookAgent(job_id, ctx).execute()
-            upd(progress=84, agent="shorts_strategist")
-            await ShortsStrategistAgent(job_id, ctx).execute()
+            if ctx.get("shorts"):
+                # Shorts specialists — hook overlay + per-platform publish package.
+                upd(progress=83, agent="shorts_hook")
+                await ShortsHookAgent(job_id, ctx).execute()
+                upd(progress=84, agent="shorts_strategist")
+                await ShortsStrategistAgent(job_id, ctx).execute()
             upd(progress=86, agent="seo_agent")
 
             seo = await SEOAgent(job_id, ctx).execute(language=language)
@@ -323,12 +368,14 @@ async def run_pipeline(job_id: int) -> dict:
             # is ONLY for the scheduler's automation — a manually created video
             # (require_approval) always stops at the gate so the user can choose to
             # post or not. Without a channel, or with AUTO_PUBLISH off, the gate stays.
-            if settings.auto_publish and job.account_id is not None and not require_approval:
+            from backend import runtime_settings
+            if runtime_settings.effective_auto_publish() and job.account_id is not None and not require_approval:
                 if job.scheduled_at is None:
                     job.scheduled_at = datetime.utcnow()
                 upd(status=JobStatus.APPROVED, progress=100, agent=None, approval_status="approved")
                 _emit_job(job_id, status="approved", qc=qc, compliance=comp,
                           voice_fallback_used=voice_fallback_used)
+                _fire_automation("job_approved", job_id)
                 # "schedule" mode: upload to YouTube NOW as scheduled (publishAt = the
                 # future slot) instead of waiting for _job_publish_due — that's what
                 # makes it show as "Agendado" and go public exactly at the slot.
@@ -362,12 +409,14 @@ async def run_pipeline(job_id: int) -> dict:
 
             upd(status=JobStatus.AWAITING_APPROVAL, progress=100, agent=None, approval_status="pending")
             _emit_job(job_id, status="awaiting_approval", qc=qc, compliance=comp)
+            _fire_automation("job_awaiting_approval", job_id)
             return {"status": "awaiting_approval", "qc": qc, "compliance": comp}
 
         except Exception as exc:  # noqa: BLE001
             logger.exception("run_pipeline falhou para job %s", job_id)
             upd(status=JobStatus.ERROR, agent=None, error_message=str(exc)[:500])
             _emit_job(job_id, status="error", error=str(exc)[:500])
+            _fire_automation("job_error", job_id)
             return {"status": "error", "error": str(exc)}
     finally:
         db.close()

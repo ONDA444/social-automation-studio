@@ -3,13 +3,17 @@ import { api, mediaUrl } from '../api'
 import { useWs } from '../App.jsx'
 import { useAccounts } from '../AccountsContext.jsx'
 import AddJobModal from '../components/AddJobModal.jsx'
+import PipelineTimeline from '../components/PipelineTimeline.jsx'
 import { PageHeader, EmptyState, ErrorBanner, StatusBadge, useToast, useConfirm } from '../components/ui.jsx'
 import { PLATFORM_META, fmtDate } from '../lib'
 
 const CHANNEL_EDITABLE = new Set(['queued', 'awaiting_approval', 'approved', 'error', 'tiktok_pending_approval'])
 
-function Row({ job, accounts, selected, onToggleSelect, onChannelChange, onRetry, onRepublish, onDelete }) {
+function Row({ job, accounts, selected, onToggleSelect, onChannelChange, onRetry, onRepublish, onDelete, busy }) {
   const [showPlayer, setShowPlayer] = useState(false)
+  // Jobs em produção já abrem com a linha do tempo visível — é exatamente quando
+  // o operador quer acompanhar etapa a etapa, sem ter que clicar no ⏱.
+  const [showTimeline, setShowTimeline] = useState(job.status === 'processing')
   const [showFullError, setShowFullError] = useState(false)
   const canEditChannel = CHANNEL_EDITABLE.has(job.status)
   const canRepublish   = job.status === 'approved' || job.status === 'error' || job.status === 'tiktok_pending_approval'
@@ -63,7 +67,7 @@ function Row({ job, accounts, selected, onToggleSelect, onChannelChange, onRetry
         <select
           className="input text-xs py-1.5 px-2 w-full sm:w-36 shrink-0 order-last sm:order-none"
           value={job.account_id ?? ''}
-          disabled={!canEditChannel}
+          disabled={!canEditChannel || busy}
           title={canEditChannel ? 'Trocar canal' : 'Canal não editável neste status'}
           onChange={(e) => onChannelChange(job.id, e.target.value)}>
           <option value="">— sem canal —</option>
@@ -73,18 +77,26 @@ function Row({ job, accounts, selected, onToggleSelect, onChannelChange, onRetry
         </select>
 
         <div className="flex items-center gap-1 shrink-0">
+          <button
+            className="btn-ghost btn-sm"
+            onClick={() => setShowTimeline((v) => !v)}
+            title={showTimeline ? 'Ocultar etapas do pipeline' : 'Ver etapas do pipeline'}
+            aria-expanded={showTimeline}
+          >
+            ⏱
+          </button>
           {job.main_video_path && (
             <button className="btn-ghost btn-sm" onClick={() => setShowPlayer((v) => !v)} title={showPlayer ? 'Ocultar player' : 'Ver vídeo'}>
               {showPlayer ? 'Ocultar' : '▶ Ver'}
             </button>
           )}
           {canRepublish && (
-            <button className="btn-ghost btn-sm" onClick={() => onRepublish(job.id)} title="Republicar">⤴</button>
+            <button className="btn-ghost btn-sm" disabled={busy} onClick={() => onRepublish(job.id)} title="Republicar">⤴</button>
           )}
           {(job.status === 'error' || job.status === 'tiktok_pending_approval') && (
-            <button className="btn-ghost btn-sm" onClick={() => onRetry(job.id)} title="Tentar novamente">↻</button>
+            <button className="btn-ghost btn-sm" disabled={busy} onClick={() => onRetry(job.id)} title="Tentar novamente">↻</button>
           )}
-          <button className="btn-ghost btn-sm" onClick={() => onDelete(job.id)} title="Excluir">🗑</button>
+          <button className="btn-ghost btn-sm" disabled={busy} onClick={() => onDelete(job.id)} title="Excluir">🗑</button>
         </div>
       </div>
 
@@ -117,6 +129,8 @@ function Row({ job, accounts, selected, onToggleSelect, onChannelChange, onRetry
         </div>
       )}
 
+      {showTimeline && <PipelineTimeline job={job} />}
+
       {showPlayer && job.main_video_path && (
         <div className="mt-3 rounded-xl overflow-hidden bg-black flex justify-center" style={{ maxHeight: '60vh' }}>
           <video src={mediaUrl(job.main_video_path)} controls style={{ maxHeight: '60vh', width: 'auto', maxWidth: '100%' }} />
@@ -134,6 +148,9 @@ export default function Queue() {
   const [loadError, setLoadError] = useState(false)
   const { accounts, error: accountsError, refresh: refreshAccounts } = useAccounts()
   const [selected, setSelected] = useState(() => new Set())
+  // Linha ocupada por ação (retry/republish/delete/troca de canal): desabilita
+  // os botões dela para impedir duplo clique = duplo dispatch no backend.
+  const [busyId, setBusyId] = useState(null)
   const [modal, setModal]       = useState(false)
   const [statusFilter, setStatusFilter] = useState('all')
   const [sourceFilter, setSourceFilter] = useState('all')
@@ -146,13 +163,28 @@ export default function Queue() {
   // On failure, keep whatever jobs were last loaded (don't overwrite good data
   // with an empty list) but flag it so the UI can warn instead of showing a
   // plain "fila vazia" as if there simply were no jobs.
-  const load = () => api.get(`/jobs?limit=${pageSize}`)
-    .then((d) => { setJobs(d.jobs || []); setTotal(d.total ?? (d.jobs || []).length); setLoadError(false) })
-    .catch(() => setLoadError(true))
-    .finally(() => setLoaded(true))
+  // Filtros de status e texto vão SERVER-SIDE: antes o filtro só enxergava os
+  // jobs já carregados na página (total > pageSize escondia resultados). O
+  // debounce evita um GET a cada tecla digitada.
+  const [debouncedQuery, setDebouncedQuery] = useState('')
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedQuery(query.trim()), 350)
+    return () => clearTimeout(t)
+  }, [query])
 
-  // Também recarrega quando pageSize cresce (botão "Carregar mais" abaixo).
-  useEffect(() => { load() }, [pageSize])
+  const load = () => {
+    const params = new URLSearchParams({ limit: String(pageSize) })
+    if (statusFilter !== 'all') params.set('status', statusFilter)
+    if (debouncedQuery) params.set('q', debouncedQuery)
+    return api.get(`/jobs?${params}`)
+      .then((d) => { setJobs(d.jobs || []); setTotal(d.total ?? (d.jobs || []).length); setLoadError(false) })
+      .catch(() => setLoadError(true))
+      .finally(() => setLoaded(true))
+  }
+
+  // Também recarrega quando pageSize cresce (botão "Carregar mais" abaixo) ou
+  // quando os filtros server-side mudam.
+  useEffect(() => { load() }, [pageSize, statusFilter, debouncedQuery])
   useEffect(() => { const t = setTimeout(load, 800); return () => clearTimeout(t) }, [count])
   const loadMore = () => setPageSize((n) => Math.min(n + 200, 500))
   const hasMore = jobs.length < total && pageSize < 500
@@ -167,14 +199,20 @@ export default function Queue() {
   }, [jobs])
 
   const retry = async (id) => {
+    if (busyId) return
+    setBusyId(id)
     try { await api.post(`/jobs/${id}/retry`); load() }
     catch (err) { toast.error(err.message) }
+    finally { setBusyId(null) }
   }
 
   const del = async (id) => {
     if (!await confirmDialog('Remover job?', { confirmLabel: 'Remover', danger: true })) return
+    if (busyId) return
+    setBusyId(id)
     try { await api.del(`/jobs/${id}`); load() }
     catch (err) { toast.error(err.message) }
+    finally { setBusyId(null) }
   }
 
   const importCsv = async (e) => {
@@ -186,11 +224,16 @@ export default function Queue() {
   }
 
   const changeChannel = async (id, val) => {
+    if (busyId) return
+    setBusyId(id)
     try { await api.patch(`/jobs/${id}`, { account_id: val ? Number(val) : null }); load() }
     catch (err) { toast.error(err.message) }
+    finally { setBusyId(null) }
   }
 
   const republish = async (id) => {
+    if (busyId) return
+    setBusyId(id)
     try {
       const r = await api.post(`/jobs/${id}/publish`)
       const parts = []
@@ -199,6 +242,7 @@ export default function Queue() {
       toast.success(parts.length ? parts.join('\n') : 'Republicação iniciada.')
       load()
     } catch (err) { toast.error(err.message) }
+    finally { setBusyId(null) }
   }
 
   // Seleção múltipla
@@ -210,13 +254,11 @@ export default function Queue() {
     })
   }
   const errCount = jobs.filter((j) => j.status === 'error').length
+  // Status e texto já vieram filtrados do servidor; só a fonte (Drive/IA)
+  // continua client-side — é um recorte visual raro, não vale round-trip.
   const filteredJobs = jobs.filter((j) => {
     const source = j.video_context?.source === 'drive_ready_video' ? 'drive' : 'ai'
-    const matchesStatus = statusFilter === 'all' || j.status === statusFilter
-    const matchesSource = sourceFilter === 'all' || sourceFilter === source
-    const q = query.trim().toLowerCase()
-    const matchesQuery = !q || [j.title, j.content_type, j.topic].filter(Boolean).join(' ').toLowerCase().includes(q)
-    return matchesStatus && matchesSource && matchesQuery
+    return sourceFilter === 'all' || sourceFilter === source
   })
 
   // "Select all" must operate on filteredJobs (what the user actually sees), not the
@@ -309,7 +351,7 @@ export default function Queue() {
 
       {hasMore && (
         <div className="flex items-center gap-2 flex-wrap text-xs text-text-muted">
-          <span>Mostrando {jobs.length} de {total} jobs mais recentes — os filtros acima só enxergam os já carregados.</span>
+          <span>Mostrando {jobs.length} de {total} jobs{debouncedQuery || statusFilter !== 'all' ? ' (filtro aplicado no servidor)' : ' mais recentes'}.</span>
           <button className="btn-ghost text-xs" onClick={loadMore}>Carregar mais</button>
         </div>
       )}
@@ -341,6 +383,7 @@ export default function Queue() {
               job={j}
               accounts={accounts}
               selected={selected.has(j.id)}
+              busy={busyId === j.id}
               onToggleSelect={toggleSelect}
               onChannelChange={changeChannel}
               onRetry={retry}

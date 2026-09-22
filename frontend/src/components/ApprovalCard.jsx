@@ -3,6 +3,33 @@ import { api, mediaUrl } from '../api'
 import { PLATFORM_META, fmtDate } from '../lib'
 import { useToast, useConfirm } from './ui.jsx'
 
+// Cor semafórica compartilhada pelos dois scores.
+function scoreColor(v) {
+  if (v == null) return 'var(--text-dim)'
+  if (v >= 85) return 'var(--success)'
+  if (v >= 60) return 'var(--warning)'
+  return 'var(--error)'
+}
+
+// Barra de score 0–100. `null` (job antigo, anterior ao score) mostra "—" em
+// vez de inventar um número.
+function ScoreBar({ label, value }) {
+  const color = scoreColor(value)
+  return (
+    <div className="min-w-[130px] flex-1">
+      <div className="flex items-center justify-between text-[10px] font-semibold uppercase" style={{ color: 'var(--text-muted)', letterSpacing: '.06em' }}>
+        <span>{label}</span>
+        <span className="font-mono" style={{ color }}>{value == null ? '—' : value}</span>
+      </div>
+      <div className="h-1.5 rounded-full mt-1 overflow-hidden" style={{ background: 'var(--bg-elevated)' }}>
+        {value != null && (
+          <div className="h-full rounded-full transition-all duration-700" style={{ width: `${value}%`, background: color }} />
+        )}
+      </div>
+    </div>
+  )
+}
+
 export default function ApprovalCard({ job, onDone }) {
   const [showPlayer, setShowPlayer] = useState(false)
   const [editing, setEditing] = useState(false)
@@ -33,11 +60,19 @@ export default function ApprovalCard({ job, onDone }) {
       onDone?.()
     } catch (e) { toast.error(e.message) } finally { setBusy(false) }
   }
+  const regenerate = async () => {
+    if (!await confirmDialog('Regenerar este vídeo do zero? O pipeline inteiro será reexecutado.', { confirmLabel: 'Regenerar' })) return
+    setBusy(true)
+    try { await api.post(`/jobs/${job.id}/retry`); toast.info('Regeneração iniciada — acompanhe na Fila.'); onDone?.() }
+    catch (e) { toast.error(e.message) } finally { setBusy(false) }
+  }
   const saveSeo = async () => {
+    if (busy) return
+    setBusy(true)
     try {
       await api.patch(`/jobs/${job.id}/seo`, { seo_metadata: seo })
       setEditing(false)
-    } catch (e) { toast.error(e.message) }
+    } catch (e) { toast.error(e.message) } finally { setBusy(false) }
   }
   const remove = async () => {
     if (!await confirmDialog('Excluir este job e seus arquivos? Esta ação não pode ser desfeita.', { confirmLabel: 'Excluir', danger: true })) return
@@ -97,15 +132,44 @@ export default function ApprovalCard({ job, onDone }) {
             </div>
 
             <p className="text-[10px] uppercase tracking-wider text-text-muted mt-2 mb-1">Validação</p>
-            <div className="flex gap-2 mb-3">
-              <span className="badge text-[10px]" style={{ background: qc.status === 'qc_passed' ? 'rgba(0,214,143,.15)' : 'rgba(255,182,39,.15)', color: qc.status === 'qc_passed' ? 'var(--success)' : 'var(--warning)' }}>QC: {qc.status || job.qc_status || '—'}</span>
-              <span className="badge text-[10px]" style={{ background: compliance.status === 'approved' ? 'rgba(0,214,143,.15)' : 'rgba(255,71,87,.15)', color: compliance.status === 'approved' ? 'var(--success)' : 'var(--error)' }}>Compliance: {compliance.status || job.compliance_status || '—'}</span>
+
+            {/* Scores reais do pipeline: qualidade (QC técnico) e risco (compliance) */}
+            <div className="flex gap-4 mb-2">
+              <ScoreBar label="Qualidade" value={qc.score ?? (qc.status === 'qc_passed' ? 100 : null)} />
+              <ScoreBar label="Risco" value={compliance.risk_score ?? (compliance.status === 'approved' && !(compliance.suggestions || []).length ? 100 : null)} />
             </div>
 
-            {(qc.warnings?.length > 0 || compliance.blocks?.length > 0) && (
+            <div className="flex gap-2 mb-3 flex-wrap">
+              <span className="badge text-[10px]" style={{ background: qc.status === 'qc_passed' ? 'rgba(0,214,143,.15)' : 'rgba(255,182,39,.15)', color: qc.status === 'qc_passed' ? 'var(--success)' : 'var(--warning)' }}>QC: {qc.status || job.qc_status || '—'}</span>
+              <span className="badge text-[10px]" style={{ background: compliance.status === 'approved' ? 'rgba(0,214,143,.15)' : 'rgba(255,71,87,.15)', color: compliance.status === 'approved' ? 'var(--success)' : 'var(--error)' }}>Compliance: {compliance.status || job.compliance_status || '—'}</span>
+              {/* Metadados técnicos reais medidos pelo ffprobe */}
+              {qc.meta?.width > 0 && (
+                <span className="badge text-[10px]" style={{ background: 'var(--bg-elevated)', color: 'var(--text-muted)', border: '1px solid var(--border)' }}>
+                  {qc.meta.width}×{qc.meta.height}
+                </span>
+              )}
+              {qc.meta?.duration > 0 && (
+                <span className="badge text-[10px]" style={{ background: 'var(--bg-elevated)', color: 'var(--text-muted)', border: '1px solid var(--border)' }}>
+                  {Math.round(qc.meta.duration)}s
+                </span>
+              )}
+              {qc.meta?.bitrate > 0 && (
+                <span className="badge text-[10px]" style={{ background: 'var(--bg-elevated)', color: 'var(--text-muted)', border: '1px solid var(--border)' }}>
+                  {(qc.meta.bitrate / 1e6).toFixed(1)} Mbps
+                </span>
+              )}
+              {qc.meta && qc.meta.has_audio === false && (
+                <span className="badge text-[10px]" style={{ background: 'rgba(255,71,87,.12)', color: 'var(--error)', border: '1px solid rgba(255,71,87,.25)' }}>
+                  sem áudio
+                </span>
+              )}
+            </div>
+
+            {(qc.warnings?.length > 0 || compliance.blocks?.length > 0 || compliance.suggestions?.length > 0) && (
               <ul className="text-[11px] text-warning mb-3 list-disc list-inside space-y-0.5">
                 {(compliance.blocks || []).map((b, i) => <li key={'b' + i} className="text-error">{b}</li>)}
                 {(qc.warnings || []).map((w, i) => <li key={'w' + i}>{w}</li>)}
+                {(compliance.suggestions || []).map((s, i) => <li key={'s' + i} style={{ color: 'var(--text-muted)' }}>{s}</li>)}
               </ul>
             )}
 
@@ -123,7 +187,7 @@ export default function ApprovalCard({ job, onDone }) {
                     <input className="input" value={(ig.hashtags || []).join(', ')} onChange={(e) => setSeo({ ...seo, instagram: { ...ig, hashtags: e.target.value.split(',').map((t) => t.trim()).filter(Boolean) } })} placeholder="Hashtags Instagram (vírgula)" />
                   </>
                 )}
-                <div className="flex gap-2"><button className="btn-primary text-xs" onClick={saveSeo}>Salvar SEO</button><button className="btn-ghost text-xs" onClick={() => setEditing(false)}>Cancelar</button></div>
+                <div className="flex gap-2"><button className="btn-primary text-xs" disabled={busy} onClick={saveSeo}>Salvar SEO</button><button className="btn-ghost text-xs" disabled={busy} onClick={() => setEditing(false)}>Cancelar</button></div>
               </div>
             ) : (
               <div className="text-sm text-text-muted space-y-1">
@@ -154,6 +218,7 @@ export default function ApprovalCard({ job, onDone }) {
               <button disabled={busy} className="btn-success text-xs px-4 sm:px-6 min-h-[36px] flex-1 sm:flex-none" onClick={() => act('approve')}>✓ Aprovar</button>
               <button disabled={busy} className="btn-danger text-xs px-4 sm:px-6 min-h-[36px] flex-1 sm:flex-none" onClick={() => act('reject')}>✗ Rejeitar</button>
               {!editing && <button className="btn-ghost text-xs min-h-[36px]" onClick={() => setEditing(true)}>✏ Editar SEO</button>}
+              <button disabled={busy} className="btn-ghost text-xs min-h-[36px]" onClick={regenerate} title="Reexecuta o pipeline inteiro (roteiro, narração, edição…)">↻ Regenerar</button>
               <button disabled={busy} className="btn-ghost text-xs text-error min-h-[36px]" onClick={remove}>🗑 Excluir</button>
             </div>
           </div>

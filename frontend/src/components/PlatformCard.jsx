@@ -35,6 +35,8 @@ export default function PlatformCard({ account, onChange, onChanged, onDone }) {
   const [savingVoice, setSavingVoice] = useState(false)
   const [music, setMusic] = useState(account.music_style || 'balanced')
   const [savingMusic, setSavingMusic] = useState(false)
+  const [stage, setStage] = useState(account.channel_stage || 'growing')
+  const [savingStage, setSavingStage] = useState(false)
   const [ride, setRide] = useState(account.ride_trends || false)
   const [savingRide, setSavingRide] = useState(false)
   const [toggling, setToggling] = useState(false)
@@ -56,10 +58,11 @@ export default function PlatformCard({ account, onChange, onChanged, onDone }) {
     setLang(account.content_language || 'pt-BR')
     setVoice(account.preferred_voice?.startsWith('v_') ? '' : (account.preferred_voice || ''))
     setMusic(account.music_style || 'balanced')
+    setStage(account.channel_stage || 'growing')
     setRide(account.ride_trends || false)
     setStrikes(account.copyright_strikes || 0)
     setNotes(account.copyright_notes || '')
-  }, [account.content_language, account.preferred_voice, account.music_style, account.ride_trends,
+  }, [account.content_language, account.preferred_voice, account.music_style, account.channel_stage, account.ride_trends,
       account.copyright_strikes, account.copyright_notes])
 
   const m = PLATFORM_META[account.platform] || { label: account.platform, color: 'var(--accent)', icon: 'CH' }
@@ -134,6 +137,13 @@ export default function PlatformCard({ account, onChange, onChanged, onDone }) {
     finally { setSavingMusic(false) }
   }
 
+  const changeStage = async (stage) => {
+    setStage(stage); setSavingStage(true)
+    try { await api.patch(`/accounts/${account.id}`, { channel_stage: stage }); refresh?.() }
+    catch (e) { toast.error('Falha ao salvar estágio: ' + e.message); setStage(account.channel_stage || 'growing') }
+    finally { setSavingStage(false) }
+  }
+
   const changeRide = async (on) => {
     setRide(on); setSavingRide(true)
     try { await api.patch(`/accounts/${account.id}`, { ride_trends: on }); refresh?.() }
@@ -163,7 +173,7 @@ export default function PlatformCard({ account, onChange, onChanged, onDone }) {
   }
 
   return (
-    <div className="card card-hover p-3 sm:p-3.5" style={{ borderColor: blocked ? 'rgba(217,154,61,0.46)' : 'var(--border-glass)' }}>
+    <div className="card card-hover p-3 sm:p-3.5" style={{ borderColor: blocked ? 'color-mix(in srgb, var(--warning) 46%, transparent)' : 'var(--border-glass)' }}>
       <div className="flex items-start gap-3">
         <div
           className="w-10 h-10 rounded-btn flex items-center justify-center font-black data shrink-0"
@@ -192,7 +202,7 @@ export default function PlatformCard({ account, onChange, onChanged, onDone }) {
             <div
               className="mt-2 rounded-btn px-3 py-1.5 flex items-center gap-2"
               style={{
-                background: account.copyright_strikes >= 2 ? 'rgba(194,65,58,0.14)' : 'var(--accent-dim)',
+                background: account.copyright_strikes >= 2 ? 'color-mix(in srgb, var(--error) 14%, transparent)' : 'var(--accent-dim)',
                 border: `1px solid ${account.copyright_strikes >= 2 ? 'var(--error)' : 'var(--warning)'}`,
               }}
               title="Advertências de copyright registradas manualmente pelo operador (sem API confiável do YouTube para isso)."
@@ -289,6 +299,18 @@ export default function PlatformCard({ account, onChange, onChanged, onDone }) {
                 <option value="energetic">Highlight - batida forte</option>
                 <option value="balanced">Equilibrado</option>
                 <option value="calm">Calmo - fundo suave</option>
+              </select>
+            </label>
+
+            <label className="space-y-1">
+              <span className="text-xs font-semibold" style={{ color: 'var(--text-muted)' }}>
+                Estágio do canal {savingStage && '(salvando)'}
+              </span>
+              <select className="input" value={stage} disabled={savingStage} onChange={(e) => changeStage(e.target.value)}
+                title="Canal novo: roteiros com SEO de descoberta e CTA de inscrição. Estabelecido: mais profundidade e comunidade.">
+                <option value="new">Novo — foco em descoberta</option>
+                <option value="growing">Em crescimento</option>
+                <option value="established">Estabelecido</option>
               </select>
             </label>
 

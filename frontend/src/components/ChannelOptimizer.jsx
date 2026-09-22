@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { api } from '../api'
-import { Modal } from './ui.jsx'
+import { Modal, useToast } from './ui.jsx'
 
 const ACTION_META = {
   auto: { label: 'será aplicado', color: 'var(--success)', bg: 'rgba(0,245,160,0.14)' },
@@ -24,17 +24,25 @@ export default function ChannelOptimizer({ account, onClose, onApplied }) {
   const [result, setResult] = useState(null)
   const [doneItems, setDoneItems] = useState(new Set())
   const [copied, setCopied] = useState(null)
+  const toast = useToast()
+  // Guarda contra troca rápida de conta: respostas de outra conta são descartadas.
+  const acctRef = useRef(account.id)
+  acctRef.current = account.id
 
   const analyze = async () => {
+    const mine = account.id
     setErr(null); setPlan(null); setResult(null)
     try {
       const p = await api.post(`/accounts/${account.id}/optimize/analyze`)
+      if (acctRef.current !== mine) return
       setPlan(p)
-    } catch (e) { setErr(friendlyError(e.message)) }
+    } catch (e) { if (acctRef.current === mine) setErr(friendlyError(e.message)) }
   }
   useEffect(() => {
     analyze()
+    const mine = account.id
     api.get(`/accounts/${account.id}/optimize`).then((s) => {
+      if (acctRef.current !== mine) return
       setDoneItems(new Set(s?.checklist_done || []))
     }).catch(() => {})
   }, [account.id])
@@ -57,10 +65,12 @@ export default function ChannelOptimizer({ account, onClose, onApplied }) {
   }
 
   const toggleDone = async (id, done) => {
+    const prev = new Set(doneItems)
     const next = new Set(doneItems)
     done ? next.add(id) : next.delete(id)
     setDoneItems(next)
-    try { await api.post(`/accounts/${account.id}/optimize/checklist`, { item_id: id, done }) } catch { /* */ }
+    try { await api.post(`/accounts/${account.id}/optimize/checklist`, { item_id: id, done }) }
+    catch { setDoneItems(prev); toast.error('Falha ao salvar checklist — tente de novo.') }
   }
 
   const copy = (text, id) => {

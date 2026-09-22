@@ -34,6 +34,7 @@ export default function AddJobModal({ open, onClose, onCreated }) {
 
   const submit = async () => {
     if (themes.length === 0) return alert('Informe ao menos um título/tema')
+    if (form.target_platforms.length === 0) return alert('Selecione ao menos uma plataforma — sem destino o vídeo não publica')
     setBusy(true)
     try {
       const account_id = form.account_id ? Number(form.account_id) : null
